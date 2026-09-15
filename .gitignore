@@ -1,0 +1,16 @@
+# credentials and per-sensor configuration
+.env
+sensor.conf
+collector.conf
+
+# python
+__pycache__/
+*.pyc
+
+# local data
+*.db
+*.db-wal
+*.db-shm
+
+# macOS
+.DS_Store

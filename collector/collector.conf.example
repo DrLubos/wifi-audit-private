@@ -1,0 +1,31 @@
+# wifi-sensor collector configuration.
+# Installed by install_collector.sh to /etc/wifi-sensor/collector.conf and
+# read both by the systemd unit (EnvironmentFile) and by collector.py itself.
+# Plain KEY=value lines, no quotes needed. Environment variables take precedence.
+
+# Kismet REST API (the collector only ever talks to the local Kismet).
+KISMET_URL=http://127.0.0.1:2501
+
+# Kismet's own credential file (httpd_username= / httpd_password=, mode 0600,
+# in the sensor user's home). Reused so the password is not stored twice.
+# For development you may set KISMET_USER / KISMET_PASS in the environment instead.
+KISMET_AUTH_FILE=~/.kismet/kismet_httpd.conf
+
+# Local SQLite buffer (store-and-forward). The directory must be writable by
+# the sensor user; the installer creates /var/lib/wifi-sensor.
+DB_PATH=/var/lib/wifi-sensor/buffer.db
+
+# Seconds between polls. Each poll fetches only devices active since the
+# previous poll (plus POLL_OVERLAP seconds) with a fixed, small field list.
+POLL_INTERVAL=30
+POLL_OVERLAP=5
+
+# Observations older than this are deleted once per hour. Device identity,
+# configuration history, probes and alerts are kept.
+RETENTION_DAYS=14
+
+# Per-request timeout towards Kismet, seconds.
+HTTP_TIMEOUT=15
+
+# DEBUG | INFO | WARNING
+LOG_LEVEL=INFO

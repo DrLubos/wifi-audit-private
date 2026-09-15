@@ -1,0 +1,21 @@
+# Copy to sensor.conf next to install_sensor.sh (or point SENSOR_CONF at it).
+# Plain KEY=value lines, sourced by the installer. Environment variables set on
+# the command line take precedence over this file.
+#
+# Do NOT put the web UI credentials here - the installer prompts for them and
+# stores them only in ~/.kismet/kismet_httpd.conf (mode 0600) on the Pi.
+
+# Wireless interface of the dedicated USB capture adapter (see: iw dev).
+CAPTURE_IFACE=wlan1
+
+# Unprivileged user that runs the Kismet server. Default: the user invoking sudo.
+#SENSOR_USER=pi
+
+# Where kismetdb log files are written.
+#KISMET_LOG_DIR=/var/lib/kismet
+
+# Prefix of the kismetdb log file names.
+#KISMET_LOG_TITLE=wifi-sensor
+
+# Kismet web UI / REST API port.
+#KISMET_HTTPD_PORT=2501

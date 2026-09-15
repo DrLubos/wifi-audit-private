@@ -1,0 +1,34 @@
+# wifi-sensor-collector.service - template installed by install_collector.sh,
+# which replaces __SENSOR_USER__ and __INSTALL_DIR__.
+#
+# Polls the local Kismet REST API and appends compact per-device records to a
+# SQLite buffer. Runs unprivileged as the sensor user, never as root.
+[Unit]
+Description=Wi-Fi sensor collector (Kismet -> local SQLite buffer)
+Documentation=file://__INSTALL_DIR__/collector/README.md
+After=network-online.target kismet.service
+Wants=kismet.service
+
+[Service]
+Type=simple
+User=__SENSOR_USER__
+Group=kismet
+EnvironmentFile=-/etc/wifi-sensor/collector.conf
+ExecStart=/usr/bin/python3 __INSTALL_DIR__/collector/collector.py
+Restart=always
+RestartSec=10
+Nice=5
+
+# Hardening: the process needs to read ~/.kismet/kismet_httpd.conf and write
+# only its own buffer directory.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/wifi-sensor
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
