@@ -20,31 +20,38 @@ observation can produce: signal/RSSI stability over time, appearance/disappearan
 timelines, activity patterns, long-run WIDS alerts, and changes over time (e.g. a
 known AP changing encryption/channel/BSSID).
 
-## Current scope (IMPORTANT - respect these boundaries)
+## Current status & scope (IMPORTANT - respect these boundaries)
 
-- **Milestone 1 (now):** Get Kismet running on the Pi and collect real data.
-  NO custom software. Kismet captures, logs to kismetdb, exposes its REST API, and
-  runs its own WIDS alert engine. Data is inspected via Kismet's web UI and kismetdb.
-- **Milestone 2 (next):** A thin **collector** that reads from Kismet, shapes the
-  data into compact time-series records, buffers locally (store-and-forward), and
-  forwards to a server over HTTPS. The collector is "dumb": read -> shape -> send.
-  No detection logic.
-- **Out of scope for now:** anomaly/threat detection, self-learning baselines,
-  any "intelligent agent". Possible future work, not part of the current milestones.
-  Do not build them unless explicitly asked.
+Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
+
+- **Milestone 1 - DONE:** Kismet runs on the Pi, capturing on the USB adapter
+  (`wlan1`), logging kismetdb and running its own WIDS alert engine.
+- **Milestone 2 (collector) - DONE, deployed:** the collector polls Kismet's REST
+  API every 30 s and writes compact time-series records to a local SQLite buffer.
+  It is "dumb": read -> shape -> store. No detection logic.
+- **Current phase: accumulating real data.** The headline detection / contribution
+  has NOT been chosen yet - it will be selected from the accumulated data, not
+  guessed in advance. Let the sensor run and collect before building anything more.
+- **Out of scope until the contribution is chosen:** anomaly/threat detection,
+  self-learning baselines, server upload, dashboard. Do not build these unless
+  explicitly asked.
 - **Never** in the deployed sensor: active attacks, deauth, handshake capture,
   password cracking, GPS, or a Flask web UI. This sensor is passive-only.
 
 ## Hardware
 
 - Raspberry Pi 3B+ (arm64, **1 GB RAM** - memory is tight, avoid heavy builds).
-- One external USB Wi-Fi adapter for capture (chipset TBD - run `lsusb` / `iw list`
-  and confirm it supports monitor mode + injection before relying on it).
-- Built-in Wi-Fi / Ethernet: management and uplink ONLY, never used for capture.
-- The capture interface is selected via a **config file** (never hardcoded). Prefer pinning by the adapter's **MAC** (or a persistent udev name), since adapters get swapped. The install script must verify the configured interface exists, is monitor-capable, and is NOT the SSH uplink; otherwise it must refuse to proceed.
-- Built-in Wi-Fi (`wlan0`, brcmfmac) / Ethernet: management and uplink ONLY, never used for capture. `wlan0` cannot do monitor mode anyway.
-- OS: **Raspberry Pi OS 64-bit Lite** (headless, no desktop environment; currently trixie-based - derive the apt codename dynamically, do not hardcode it).
-- Connection: alias is already created just use `ssh pi` to connect to raspberry.
+- **Capture adapter (in use):** external USB adapter on `wlan1`, driver
+  `rtw88_8821cu` (RTL8821CU), monitor mode confirmed. Selected via the installer's
+  `CAPTURE_IFACE` config (never hardcoded); a replacement must also be USB,
+  monitor-capable, and must not be the SSH uplink - the installer refuses otherwise.
+  Avoid chipsets needing out-of-tree / DKMS drivers (e.g. AIC8800 - no usable
+  mainline monitor driver).
+- Built-in Wi-Fi (`wlan0`, brcmfmac) / Ethernet: management and uplink ONLY, never
+  used for capture. `wlan0` cannot do monitor mode anyway.
+- OS: **Raspberry Pi OS 64-bit Lite** (headless, no desktop; currently trixie-based -
+  derive the apt codename dynamically, do not hardcode it).
+- Connection: reachable as `ssh pi` (alias already configured on the Mac).
 
 ## Kismet install
 
@@ -54,11 +61,14 @@ known AP changing encryption/channel/BSSID).
 - Install so that Kismet runs **suid-root, not as full root**: only the small capture
   helper (e.g. `kismet_cap_linux_wifi`) is privileged; the main server runs as the
   normal user via the `kismet` group. The apt package sets this up; never `sudo kismet`.
-- The packaged `kismet.service` ships with User=root - override it with a systemd drop-in so the server runs as the normal user (`pi`), group `kismet`.
+- The packaged `kismet.service` ships with User=root - override it with a systemd
+  drop-in so the server runs as the normal user (`pi`), group `kismet`.
 - Add the user to the `kismet` group.
 - Let Kismet manage the capture interface via its datasource (`source=wlanX`).
   Do not manually put the interface in monitor mode or fight Kismet over it.
-- I ran `install_sensor.sh` as capture interface I set `wlan1` and kismet credentials are in `.env`.
+- Status: `install_sensor.sh` was run with `CAPTURE_IFACE=wlan1`. Kismet's web/REST
+  credentials live in `~/.kismet/kismet_httpd.conf` on the Pi (and, for local dev
+  only, in a gitignored `.env` on the Mac) - never committed.
 
 ## Data to read from Kismet (targets for the collector, Milestone 2)
 
@@ -66,7 +76,8 @@ Prefer the REST API (poll device snapshots) for the first version; consider the
 Eventbus (push) for alerts later. Fields of interest:
 
 - Identity: BSSID, SSID, manufacturer (OUI), channel/frequency.
-- Encryption: full RSN/AKM suites, MFP capability, WPA2/WPA3/SAE/open.
+- Encryption: `crypt_string` + `crypt_bitfield` (no separate RSN/AKM fields in this
+  Kismet version), MFP capability, open/WPA2/WPA3.
 - **Temporal (the point of this project):** RSSI current + history, first-seen /
   last-seen, packet counts over time.
 - Clients and probe requests (what devices search for, and when).
@@ -84,7 +95,8 @@ Eventbus (push) for alerts later. Fields of interest:
 - Kismet quirks the code depends on: field-filtered responses return `0` (not `null`)
   for missing fields, so `0` is mapped to NULL for all non-counter fields, RSSI included;
   there are no `wpa_version`/RSN fields, only `crypt_string` + `crypt_bitfield`;
-  `ietag_checksum`/`beacon_fingerprint` vary per beacon; `/alerts/alerts.json` is 404.
+  `ietag_checksum`/`beacon_fingerprint` vary per beacon (stored per-observation, not
+  treated as a stable identity); `/alerts/alerts.json` is 404.
 - **Privacy rule:** never collect bystander PII - no `dot11.client.ipdata` (client IPs)
   and no WPS serial/model/manufacturer/device-name fields. Associations and probed
   SSIDs are fine.
@@ -92,7 +104,7 @@ Eventbus (push) for alerts later. Fields of interest:
 ## Operating rules for Claude Code
 
 - Claude Code runs on the developer's **PC (Mac)**, not on the Pi.
-- The Pi is reachable as `ssh pi-sensor` (configured in the PC's `~/.ssh/config`;
+- The Pi is reachable as `ssh pi` (configured in the PC's `~/.ssh/config`;
   IP, user, and key path live there - never in this repo).
 - Claude Code may SSH to the Pi ONLY for **read-only exploration** to gather facts
   for writing scripts: e.g. `lsusb`, `iw list`, `iw dev`, `rfkill list`,
@@ -104,8 +116,8 @@ Eventbus (push) for alerts later. Fields of interest:
 
 ## Repository philosophy
 
-- This repo holds everything implemented on the Pi: the install script now, the
-  collector later, configs, systemd units, docs. It is the developer's own work.
+- This repo holds everything implemented on the Pi: the install script, the
+  collector, configs, systemd units, docs. It is the developer's own work.
 - Any prior/reference code (e.g. the old `wifi-audit-tool` fork) stays **outside**
   this repo and is used only as read-only reference when explicitly requested.
   Do not copy from it, and do not commit it here.
