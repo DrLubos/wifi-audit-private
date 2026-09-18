@@ -19,3 +19,6 @@ CAPTURE_IFACE=wlan1
 
 # Kismet web UI / REST API port.
 #KISMET_HTTPD_PORT=2501
+
+# Where the helper scripts (kismet pre-start, capture watchdog) are installed.
+#INSTALL_DIR=/opt/wifi-sensor

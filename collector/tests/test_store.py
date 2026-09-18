@@ -1,6 +1,7 @@
 """Tests for store.py using an in-memory-like temporary database."""
 
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -110,6 +111,24 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(rows, [("", 1789480391, 1789480571),
                                 ("Example-Net", 1789480400, 1789481150)])
 
+    def test_associations_are_merged(self):
+        self.poll(TS, [AP_RAW])
+        raw = dict(AP_RAW)
+        raw["kismet.device.base.last_time"] += 10
+        self.poll(TS + 30, [raw])
+        rows = self.q("SELECT client_mac, first_seen, last_seen, sent FROM associations "
+                      "ORDER BY client_mac")
+        self.assertEqual(rows, [("02:AA:00:00:00:01", TS, TS + 30, 0),
+                                ("02:AA:00:00:00:02", TS, TS + 30, 0)])
+        # Only one client still listed: the other row is kept, not advanced.
+        raw = dict(raw, clients={"02:AA:00:00:00:02": "x"})
+        raw["kismet.device.base.last_time"] += 10
+        self.poll(TS + 60, [raw])
+        rows = self.q("SELECT client_mac, first_seen, last_seen FROM associations "
+                      "ORDER BY client_mac")
+        self.assertEqual(rows, [("02:AA:00:00:00:01", TS, TS + 30),
+                                ("02:AA:00:00:00:02", TS, TS + 60)])
+
     def test_alerts_deduplicated_by_hash(self):
         a = shape_alert(ALERT_RAW)
         _, n1 = self.poll(TS, [], alerts=[a])
@@ -125,15 +144,49 @@ class StoreTest(unittest.TestCase):
     def test_prune_keeps_identity(self):
         self.poll(TS, [AP_RAW, CLIENT_RAW])
         removed = self.store.prune(TS + 1)
-        self.assertEqual(removed, {"observations": 2, "associations": 2, "polls": 1})
+        self.assertEqual(removed, {"observations": 2, "polls": 1})
         self.assertEqual(self.q("SELECT COUNT(*) FROM devices")[0][0], 2)
+        self.assertEqual(self.q("SELECT COUNT(*) FROM associations")[0][0], 2)
         self.assertEqual(self.q("SELECT COUNT(*) FROM probes")[0][0], 2)
 
     def test_reopen_keeps_schema_version(self):
         path = self.store.db.execute("PRAGMA database_list").fetchone()[2]
         self.store.close()
         self.store = Store(path)
-        self.assertEqual(self.store.get_meta("schema_version"), "1")
+        self.assertEqual(self.store.get_meta("schema_version"), "2")
+
+    def test_migrates_v1_associations(self):
+        path = os.path.join(self.tmp.name, "v1.db")
+        v1 = sqlite3.connect(path)
+        v1.executescript("""
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta VALUES ('schema_version', '1');
+            CREATE TABLE associations (
+              ts INTEGER NOT NULL, ap_key TEXT NOT NULL, client_mac TEXT NOT NULL,
+              PRIMARY KEY (ts, ap_key, client_mac)) WITHOUT ROWID;
+            INSERT INTO associations VALUES (1, 'AP', 'C1'), (2, 'AP', 'C1'), (2, 'AP', 'C2');
+        """)
+        v1.close()
+        store = Store(path)
+        try:
+            self.assertEqual(store.get_meta("schema_version"), "2")
+            cols = [r[1] for r in store.db.execute("PRAGMA table_info(associations)")]
+            self.assertEqual(cols, ["ap_key", "client_mac", "first_seen", "last_seen", "sent"])
+            self.assertEqual(store.db.execute("SELECT COUNT(*) FROM associations").fetchone()[0], 0)
+            # The migrated buffer accepts polls normally.
+            store.write_poll(TS, HEALTH, [shape_device(AP_RAW, TS)], [], 1)
+            self.assertEqual(store.db.execute("SELECT COUNT(*) FROM associations").fetchone()[0], 2)
+        finally:
+            store.close()
+
+    def test_unknown_schema_version_is_refused(self):
+        path = os.path.join(self.tmp.name, "v9.db")
+        v9 = sqlite3.connect(path)
+        v9.executescript("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+                         "INSERT INTO meta VALUES ('schema_version', '9');")
+        v9.close()
+        with self.assertRaises(RuntimeError):
+            Store(path)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,9 @@ collector.py  ->  shape.py (Kismet JSON -> compact record)  ->  store.py (SQLite
 | `kismet_client.py` | Read-only REST client (`requests`, Basic auth) |
 | `shape.py` | Field list requested from Kismet and the raw -> record mapping |
 | `store.py` | Schema and writes of the SQLite buffer |
+| `analyze.py` | Read-only summary of the buffer (totals, RSSI stability, config changes, alerts, probes, growth) |
+| `rssi_stability.py` | Read-only RSSI baseline statistics across all APs (per-AP std dev distribution, day-to-day drift, out-of-baseline rate per threshold) |
+| `inventory_changes.py` | Read-only characterisation of AP inventory churn (baseline vs later, transient vs sustained, impostor candidates for protected SSIDs) |
 | `collector.conf.example` | Runtime configuration template |
 | `tests/` | `python3 -m unittest discover -s collector/tests` (stdlib only) |
 | `../wifi-sensor-collector.service` | systemd unit template |
@@ -57,8 +60,7 @@ INFO poll ok: total=237 active=94 new_obs=61 alerts=0/0 ds=up 210ms
    never duplicates rows.
 4. Write everything in one transaction: `polls`, `devices` (+ config history),
    `observations`, `device_freq_hist`, `associations`, `probes`, `alerts`.
-5. Once per hour, delete `observations`, `associations` and `polls` older than
-   `RETENTION_DAYS`.
+5. Once per hour, delete `observations` and `polls` older than `RETENTION_DAYS`.
 
 A failed poll (Kismet restarting, datasource error) is recorded in `polls`
 with `ok = 0` and the loop continues; the service is never taken down by it.
@@ -72,7 +74,7 @@ with `ok = 0` and the loop continues; the service is never taken down by it.
 | `device_config_history` | AP configuration change | the configuration that was replaced, with the poll time of the change |
 | `observations` | active device per poll | Kismet `last_time`, heard frequency and channel, RSSI last/min/max, cumulative packet and byte counters; AP only: associated client count, `disconnects` (deauth/disassoc seen), QBSS station count and channel utilisation, BSS timestamp (uptime), beacon IE checksum and fingerprint; client only: BSSID |
 | `device_freq_hist` | device × frequency | cumulative packet count per frequency (Kismet `freq_khz_map`) |
-| `associations` | poll × AP × client MAC | client MACs listed in the AP's associated-client map |
+| `associations` | AP × client MAC | first/last poll at which the client MAC was listed in the AP's associated-client map (Kismet gives no per-client times and never drops entries, so `last_seen` is "still listed", not "last frame") |
 | `probes` | client × SSID | first/last time the SSID was probed for (`""` = wildcard) |
 | `alerts` | Kismet alert | header, class, severity, MACs, channel, text, full JSON; deduplicated by Kismet's hash |
 | `meta` | key | schema version, resume point |
@@ -80,6 +82,70 @@ with `ok = 0` and the loop continues; the service is never taken down by it.
 Cumulative counters are stored as Kismet reports them; deltas are derived when
 the data is analysed, which keeps the collector free of state and robust to
 missed polls. `sent` columns exist for the later upload step.
+
+Schema v2 (associations deduplicated) replaced v1, where `associations` held one
+row per poll and made up ~85 % of the buffer (~290 MB/day). A v1 buffer is
+migrated automatically at start: the old table is dropped (not condensed - a
+GROUP BY over millions of rows would stall the collector on the Pi) and recreated.
+The dropped pages go to SQLite's freelist, so the file stops growing but does not
+shrink; to reclaim the space once, with the collector stopped and free disk space
+of at least the DB size (the `sqlite3` CLI is not installed on Pi OS Lite, so use
+Python's built-in module):
+
+```
+sudo systemctl stop wifi-sensor-collector
+sudo -u pi python3 -c "import sqlite3; sqlite3.connect('/var/lib/wifi-sensor/buffer.db').execute('VACUUM')"
+sudo systemctl start wifi-sensor-collector
+```
+
+Future: `sent` on the deduplicated tables resets whenever `last_seen` advances
+(every poll for an active pair) - settle that before building the upload step.
+The deduplicated tables (`associations`, `probes`, `devices`) are never pruned;
+a long-running sensor will eventually need a `last_seen`-based retention for them.
+
+A one-shot overview of what has been collected, opened read-only so the
+collector keeps running (run as the sensor user, which owns the `-shm` file):
+
+```
+python3 /opt/wifi-sensor/collector/analyze.py            # path from collector.conf
+python3 /opt/wifi-sensor/collector/analyze.py --top 12 --hist 5 --utc
+```
+
+`rssi_stability.py` quantifies how stable a fixed AP's RSSI is as seen by the
+fixed sensor, across every AP with enough readings (default: >= 200 readings on
+>= 2 days). It reports the distribution of per-AP standard deviation (plain and
+MAD-robust, by band and by signal strength), the day-to-day drift of each AP's
+mean, and - with a baseline fitted on the first half of each AP's history and
+evaluated on the second half - how often genuine readings exceed
+`|rssi - baseline| > Y dB` for a sweep of thresholds, by how much, and whether
+they come as single samples or runs. It describes the data only; nothing is
+flagged or stored.
+
+```
+python3 /opt/wifi-sensor/collector/rssi_stability.py                 # full report
+python3 /opt/wifi-sensor/collector/rssi_stability.py --no-table --csv ~/rssi_aps.csv
+python3 /opt/wifi-sensor/collector/rssi_stability.py --min-obs 500 --min-days 3 --thresholds 4,6,8,10
+```
+
+`inventory_changes.py` asks whether "a network appeared where it should not" is
+a usable signal. It splits the capture into a baseline window (first 24 h) and
+the rest, reports APs that appeared later or vanished, measures the raw churn
+(new APs per day, transient vs sustained, share of randomised BSSIDs - the
+noise floor of a naive "new AP" alert), and then looks at the targeted signal:
+for each `--protected` SSID prefix every BSSID advertising it (now or earlier,
+via the config history) with OUI, encryption, first/last seen and typical RSSI,
+flagged when the OUI differs from the infrastructure (given with `--infra-oui`
+or inferred), it appeared late, it is much stronger than its peers, uses a
+different encryption, has a randomised BSSID or carried another SSID before;
+plus look-alike SSIDs. A persistence x strength cross-table of all newcomers and
+a candidate list close the report. Characterisation only - nothing is flagged
+live or stored.
+
+```
+python3 /opt/wifi-sensor/collector/inventory_changes.py --protected IK-WIFI,FRI_wifi
+python3 /opt/wifi-sensor/collector/inventory_changes.py --protected IK-WIFI --infra-oui 00:11:22 --csv ~/candidates.csv
+python3 /opt/wifi-sensor/collector/inventory_changes.py --protected IK-WIFI --baseline-hours 48 --close-dbm -55 --list 50
+```
 
 Useful read-only queries on the Pi (`sqlite3 -readonly /var/lib/wifi-sensor/buffer.db`):
 

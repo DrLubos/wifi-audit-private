@@ -1,0 +1,16 @@
+# wifi-sensor-capture-watchdog.timer - installed by install_sensor.sh.
+#
+# First check 4 minutes after boot (the pre-start waits for the adapter and the
+# clock, then Kismet needs ~30 s to come up), then every 2 minutes. With the
+# script's defaults that means: Kismet restarted after ~4 silent minutes,
+# driver reloaded after ~8, USB re-plugged after ~12.
+[Unit]
+Description=Wi-Fi sensor capture watchdog timer
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=2min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

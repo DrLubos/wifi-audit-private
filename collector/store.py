@@ -8,19 +8,29 @@ One transaction per poll. The tables are the sensor's time series:
   observations           one row per active device per poll - RSSI, counters,
                          frequency, AP load; the core time series
   device_freq_hist       per-device frequency histogram (Kismet freq_khz_map)
-  associations           client MACs seen associated to an AP, per poll
+  associations           one row per (AP, client MAC) pair with the first/last
+                         poll at which the AP's associated-client map listed it
   probes                 SSIDs a client probed for, with first/last time
   alerts                 Kismet WIDS alerts, deduplicated by hash
   meta                   schema version, resume point, server identity
+
+Kismet's associated_client_map carries no per-client times and never drops an
+entry while the AP device lives, so associations.last_seen means "the last poll
+at which the AP still listed this client", not "last frame exchanged". Storing
+the pair once (schema v2) instead of per poll (v1) cut the table from ~85 % of
+the buffer to a negligible share.
 
 "sent" columns are for the upload step (later); the prototype only prunes by
 age. No detection lives here - the store only writes what shape.py produced.
 """
 
+import logging
 import os
 import sqlite3
 
-SCHEMA_VERSION = 1
+log = logging.getLogger("collector.store")
+
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -117,10 +127,12 @@ CREATE TABLE IF NOT EXISTS device_freq_hist (
   PRIMARY KEY (key, freq_khz)) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS associations (
-  ts         INTEGER NOT NULL,
   ap_key     TEXT NOT NULL,
   client_mac TEXT NOT NULL,
-  PRIMARY KEY (ts, ap_key, client_mac)) WITHOUT ROWID;
+  first_seen INTEGER NOT NULL,       -- poll ts at which the pair was first listed
+  last_seen  INTEGER NOT NULL,       -- poll ts at which the pair was last listed
+  sent       INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (ap_key, client_mac)) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS probes (
   key        TEXT NOT NULL,          -- client device key
@@ -162,13 +174,35 @@ class Store:
         self.db = sqlite3.connect(path, isolation_level=None, timeout=30)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
-        self.db.executescript(_SCHEMA)
+        # meta first: the version decides whether a migration must run before
+        # the CREATE TABLE IF NOT EXISTS statements are allowed to see old tables.
+        self.db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         v = self.get_meta("schema_version")
-        if v is None:
-            self.set_meta("schema_version", str(SCHEMA_VERSION))
-        elif int(v) != SCHEMA_VERSION:
+        if v == "1":
+            self._migrate_v1_to_v2()
+        elif v is not None and int(v) != SCHEMA_VERSION:
             raise RuntimeError("database schema version %s, collector expects %d"
                                % (v, SCHEMA_VERSION))
+        self.db.executescript(_SCHEMA)
+        if v is None:
+            self.set_meta("schema_version", str(SCHEMA_VERSION))
+
+    def _migrate_v1_to_v2(self):
+        """v1 stored associations per poll (PK ts, ap_key, client_mac) - about
+        85 % of the buffer. v2 stores one row per pair. The old rows are dropped,
+        not condensed: a GROUP BY over millions of rows would stall the collector
+        for minutes at start on the Pi, and the pair history is not worth the
+        collection gap. DROP only moves pages to the freelist; the file shrinks
+        only with a manual VACUUM (see README)."""
+        log.info("migrating buffer schema v1 -> v2: dropping per-poll associations")
+        self.db.execute("BEGIN")
+        try:
+            self.db.execute("DROP TABLE IF EXISTS associations")
+            self.set_meta("schema_version", "2")
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
 
     def close(self):
         self.db.close()
@@ -300,9 +334,16 @@ class Store:
                 "packets = excluded.packets, updated_ts = excluded.updated_ts",
                 [(key, f, n, rec["ts"]) for f, n in rec["freqs"].items()])
         if ap and ap["clients"]:
+            # TODO(upload): sent resets to 0 whenever last_seen advances, which for
+            # a currently associated pair is every poll - settle this before the
+            # upload step or associations will be re-uploaded on every poll.
             self.db.executemany(
-                "INSERT OR IGNORE INTO associations(ts, ap_key, client_mac) VALUES (?, ?, ?)",
-                [(rec["ts"], key, m) for m in ap["clients"]])
+                "INSERT INTO associations(ap_key, client_mac, first_seen, last_seen) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(ap_key, client_mac) DO UPDATE SET "
+                "first_seen = MIN(first_seen, excluded.first_seen), "
+                "last_seen = MAX(last_seen, excluded.last_seen), "
+                "sent = CASE WHEN excluded.last_seen > last_seen THEN 0 ELSE sent END",
+                [(key, m, rec["ts"], rec["ts"]) for m in ap["clients"]])
         if cl.get("probes"):
             self.db.executemany(
                 "INSERT INTO probes(key, ssid, first_time, last_time) VALUES (?, ?, ?, ?) "
@@ -329,11 +370,16 @@ class Store:
 
     def prune(self, before_ts):
         """Delete time-series rows older than before_ts. Device identity,
-        configuration history, probes and alerts are kept."""
+        configuration history, associations, probes and alerts are kept.
+
+        TODO(retention): the deduplicated tables (associations, probes, devices)
+        are never pruned, so distinct pairs accumulate for the life of the sensor.
+        Fine for now; a long-running sensor should eventually prune them by
+        last_seen / last_time as well."""
         counts = {}
         self.db.execute("BEGIN")
         try:
-            for table in ("observations", "associations", "polls"):
+            for table in ("observations", "polls"):
                 cur = self.db.execute("DELETE FROM %s WHERE ts < ?" % table, (before_ts,))
                 counts[table] = cur.rowcount
             self.db.execute("COMMIT")

@@ -69,6 +69,17 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
 - Status: `install_sensor.sh` was run with `CAPTURE_IFACE=wlan1`. Kismet's web/REST
   credentials live in `~/.kismet/kismet_httpd.conf` on the Pi (and, for local dev
   only, in a gitignored `.env` on the Mac) - never committed.
+- **Cold-boot robustness** (added after a power-cut boot left Kismet "running" with
+  0 packets for hours): `sensor/kismet-prestart.sh` runs as `ExecStartPre` of
+  `kismet.service` (waits for the USB adapter and chrony, bounded; rfkill unblock;
+  deletes a stale `${CAPTURE_IFACE}mon`; power save off) and
+  `sensor/capture-watchdog.sh` runs from `wifi-sensor-capture-watchdog.timer` every
+  2 min, checking Kismet's datasource `num_packets` via REST and escalating
+  restart Kismet -> reload driver -> USB re-plug. Both touch only the capture
+  adapter. Root cause of the original failure: the RTL8821CU enumerates as USB
+  storage first and mode-switches ~15 s later, the clock steps by days at boot
+  (no RTC), the first capture helper crashed and the re-open adopted a
+  half-configured monitor VIF. Kismet reports such a source as running/no error.
 
 ## Data to read from Kismet (targets for the collector, Milestone 2)
 

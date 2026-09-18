@@ -7,6 +7,14 @@
 # passively on a dedicated USB Wi-Fi adapter, and runs it as an unprivileged
 # systemd service that starts on boot. Also installs chrony for time sync.
 #
+# Cold-boot robustness (sensor/ directory, installed to INSTALL_DIR/sensor):
+#   kismet-prestart.sh   ExecStartPre of kismet.service: waits for the USB
+#                        adapter and the clock, unblocks the radio, removes a
+#                        stale monitor VIF, disables power saving.
+#   capture-watchdog.sh  systemd timer: checks Kismet's packet counter every
+#                        2 min; restarts Kismet, reloads the driver, re-plugs
+#                        the USB device when no frames arrive.
+#
 # Usage - on the Pi, from your normal user account (never as root directly):
 #
 #   sudo ./install_sensor.sh
@@ -25,6 +33,7 @@
 #   KISMET_HTTPD_PORT  Web UI port.                   Default: 2501
 #   KISMET_HTTPD_USER  Web UI username  - prompted for if unset. Environment
 #   KISMET_HTTPD_PASS  Web UI password    only; keep credentials out of sensor.conf.
+#   INSTALL_DIR        Where the helper scripts go.  Default: /opt/wifi-sensor
 #   SENSOR_CONF        Config file path. Default: <script dir>/sensor.conf
 #
 # Idempotent: every step inspects the current state and only changes what
@@ -42,7 +51,13 @@ export DEBIAN_FRONTEND=noninteractive
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_VARS=(CAPTURE_IFACE SENSOR_USER KISMET_LOG_DIR KISMET_LOG_TITLE
-           KISMET_HTTPD_PORT KISMET_HTTPD_USER KISMET_HTTPD_PASS)
+           KISMET_HTTPD_PORT KISMET_HTTPD_USER KISMET_HTTPD_PASS INSTALL_DIR)
+
+# Helper scripts and unit templates shipped in this repository.
+SENSOR_SRC_DIR="$SCRIPT_DIR/sensor"
+WATCHDOG_UNIT="wifi-sensor-capture-watchdog"
+WATCHDOG_SERVICE_TEMPLATE="$SCRIPT_DIR/$WATCHDOG_UNIT.service"
+WATCHDOG_TIMER_TEMPLATE="$SCRIPT_DIR/$WATCHDOG_UNIT.timer"
 
 # Locations defined by the Kismet / Debian packaging (not sensor-specific).
 KISMET_KEY_URL="https://www.kismetwireless.net/repos/kismet-release.gpg.key"
@@ -415,10 +430,19 @@ EOF
   fi
 }
 
+install_sensor_scripts() {
+  step "Helper scripts -> $INSTALL_DIR/sensor"
+  local f
+  [[ -f $SENSOR_SRC_DIR/kismet-prestart.sh && -f $SENSOR_SRC_DIR/capture-watchdog.sh ]] \
+    || die "helper scripts not found in $SENSOR_SRC_DIR"
+  install -d -m 0755 -o root -g root "$INSTALL_DIR" "$INSTALL_DIR/sensor"
+  for f in "$SENSOR_SRC_DIR"/*.sh; do
+    write_if_changed "$INSTALL_DIR/sensor/$(basename "$f")" 0755 root:root <"$f"
+  done
+}
+
 configure_service() {
   step "systemd: kismet.service"
-  local iw_bin
-  iw_bin=$(command -v iw)
   write_if_changed "$KISMET_UNIT_OVERRIDE" 0644 root:root <<EOF
 # Managed by install_sensor.sh (wifi-sensor).
 # The packaged unit runs Kismet as root. Run the server as the unprivileged
@@ -426,16 +450,17 @@ configure_service() {
 # kismet, file capabilities) is privileged.
 [Unit]
 After=network-online.target chrony.service
-Wants=network-online.target
+Wants=network-online.target chrony.service
 
 [Service]
 User=${SENSOR_USER}
 Group=kismet
 WorkingDirectory=${KISMET_LOG_DIR}
-# Disable power saving on the capture adapter before every (re)start.
-# '+' runs this single command as root, '-' ignores failure when the adapter
-# is absent (Kismet keeps retrying the datasource on its own).
-ExecStartPre=-+${iw_bin} dev ${CAPTURE_IFACE} set power_save off
+# Before every (re)start: wait for the USB adapter and for chrony (both
+# bounded), unblock the radio, remove a stale monitor VIF, power saving off.
+# '+' runs it as root, '-' never lets it block Kismet from starting.
+Environment=CAPTURE_IFACE=${CAPTURE_IFACE}
+ExecStartPre=-+${INSTALL_DIR}/sensor/kismet-prestart.sh
 RestartSec=5
 EOF
   systemctl daemon-reload
@@ -451,6 +476,21 @@ EOF
   else
     log "kismet.service already running with the current configuration"
   fi
+}
+
+install_watchdog() {
+  step "systemd: $WATCHDOG_UNIT.timer"
+  local rendered
+  [[ -f $WATCHDOG_SERVICE_TEMPLATE && -f $WATCHDOG_TIMER_TEMPLATE ]] \
+    || die "watchdog unit templates not found next to $0"
+  rendered=$(sed -e "s|__INSTALL_DIR__|$INSTALL_DIR|g" -e "s|__CAPTURE_IFACE__|$CAPTURE_IFACE|g" \
+                 -e "s|__KISMET_URL__|http://127.0.0.1:$KISMET_HTTPD_PORT|g" \
+                 -e "s|__AUTH_FILE__|$AUTH_FILE|g" "$WATCHDOG_SERVICE_TEMPLATE")
+  write_if_changed "/etc/systemd/system/$WATCHDOG_UNIT.service" 0644 root:root <<<"$rendered"
+  write_if_changed "/etc/systemd/system/$WATCHDOG_UNIT.timer" 0644 root:root <"$WATCHDOG_TIMER_TEMPLATE"
+  systemctl daemon-reload
+  systemctl enable --now "$WATCHDOG_UNIT.timer" >/dev/null 2>&1
+  log "$WATCHDOG_UNIT.timer: $(systemctl is-active "$WATCHDOG_UNIT.timer"), next run $(systemctl show -p NextElapseUSecRealtime --value "$WATCHDOG_UNIT.timer" 2>/dev/null || echo '?')"
 }
 
 verify_kismet() {
@@ -477,7 +517,13 @@ verify_kismet() {
     return
   fi
   log "web UI is up on port $KISMET_HTTPD_PORT"
-  sources=$(curl -fsS -K - "$url/datasource/all_sources.json" <<<"$curl_auth" 2>/dev/null || true)
+  # "running" is not enough - a source can be up with a dead radio. Give the
+  # source up to 30 s to deliver its first frames and report the count.
+  for ((i = 0; i < 15; i++)); do
+    sources=$(curl -fsS -K - "$url/datasource/all_sources.json" <<<"$curl_auth" 2>/dev/null || true)
+    if [[ $(datasource_packets "$sources") -gt 0 ]]; then break; fi
+    sleep 2
+  done
   if [[ -n $sources ]] && command -v python3 >/dev/null; then
     printf '%s' "$sources" | python3 -c '
 import json, sys
@@ -488,14 +534,27 @@ except Exception:
 for s in srcs:
     name = s.get("kismet.datasource.name")
     iface = s.get("kismet.datasource.capture_interface") or s.get("kismet.datasource.interface")
+    pk = s.get("kismet.datasource.num_packets") or 0
     if s.get("kismet.datasource.error"):
         print("  datasource %s (%s): ERROR - %s" % (name, iface, s.get("kismet.datasource.error_reason")))
+    elif s.get("kismet.datasource.running") and pk > 0:
+        print("  datasource %s (%s): running, hopping=%s, %d packets" % (name, iface, s.get("kismet.datasource.hopping"), pk))
     elif s.get("kismet.datasource.running"):
-        print("  datasource %s (%s): running, channel %s" % (name, iface, s.get("kismet.datasource.channel")))
+        print("  datasource %s (%s): running but NO packets yet - the watchdog will restart Kismet if this persists" % (name, iface))
     else:
         print("  datasource %s (%s): not running (yet)" % (name, iface))
 ' || warn "could not read datasource status; check the Datasources panel in the web UI"
   fi
+}
+
+# Sum of kismet.datasource.num_packets in an all_sources.json document (0 on error).
+datasource_packets() {
+  printf '%s' "$1" | python3 -c '
+import json, sys
+try:
+    print(sum(int(s.get("kismet.datasource.num_packets") or 0) for s in json.load(sys.stdin)))
+except Exception:
+    print(0)' 2>/dev/null || echo 0
 }
 
 print_next_steps() {
@@ -511,6 +570,8 @@ print_next_steps() {
   Service    systemctl status kismet
              journalctl -u kismet -f
   Capture    iw dev                      # expect '${CAPTURE_IFACE}mon' with type monitor
+  Watchdog   systemctl list-timers ${WATCHDOG_UNIT}.timer
+             journalctl -b -u kismet -u ${WATCHDOG_UNIT}     # pre-start + watchdog lines included
   Logs       ${KISMET_LOG_DIR}/${KISMET_LOG_TITLE}-*.kismet
              kismetdb_statistics --in <file.kismet>
   Time       chronyc tracking
@@ -542,6 +603,7 @@ main() {
   KISMET_LOG_DIR="${KISMET_LOG_DIR:-/var/lib/kismet}"
   KISMET_LOG_TITLE="${KISMET_LOG_TITLE:-wifi-sensor}"
   KISMET_HTTPD_PORT="${KISMET_HTTPD_PORT:-2501}"
+  INSTALL_DIR="${INSTALL_DIR:-/opt/wifi-sensor}"
 
   CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
   [[ -n $CODENAME ]] || die "cannot determine the Debian codename from /etc/os-release"
@@ -564,7 +626,9 @@ main() {
   prepare_capture_adapter
   configure_network_manager
   configure_kismet
+  install_sensor_scripts
   configure_service
+  install_watchdog
   verify_kismet
   print_next_steps
 }
