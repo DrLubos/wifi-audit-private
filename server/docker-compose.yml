@@ -1,0 +1,91 @@
+# wifi-audit server stack: db (PostgreSQL) + api (FastAPI) + frontend (Caddy + React).
+#
+#   cp .env.example .env            # credentials and the public address, gitignored
+#   docker compose build frontend && docker compose build api
+#   docker compose up -d
+#
+# Only the frontend publishes ports (80/443). The database is reachable solely on
+# the `backend` network; the internet-facing Caddy container is not on it.
+
+name: wifi-audit
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # Sized for a 1 GB box. Plain PostgreSQL, no extensions.
+    command: postgres -c shared_buffers=128MB -c work_mem=8MB -c max_connections=20
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      # Runs once, when the data volume is first initialised. To re-apply the
+      # (idempotent) file later: see README.md.
+      - ./schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - backend
+    logging: *logging
+
+  api:
+    build: ./api
+    restart: unless-stopped
+    environment:
+      # One secret, one place: derived from the values above unless .env sets
+      # DATABASE_URL explicitly (needed if the password contains @ : / %).
+      DATABASE_URL: "${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}}"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - backend
+      - frontend
+    logging: *logging
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    environment:
+      # A domain name = automatic HTTPS (DNS must point here, 80/443 reachable);
+      # ':80' = plain HTTP; 'localhost' = Caddy's internal CA.
+      SITE_ADDRESS: "${SITE_ADDRESS:-:80}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Bind-mounted so a config edit is `docker compose exec frontend caddy reload
+      # --config /etc/caddy/Caddyfile`, not an image rebuild.
+      - ./frontend/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+    networks:
+      - frontend
+    logging: *logging
+
+volumes:
+  db-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  backend:
+  frontend:

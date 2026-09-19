@@ -1,0 +1,26 @@
+# wifi-audit frontend tier: static React app + reverse proxy for the api.
+#
+# SITE_ADDRESS is set by docker-compose.yml from .env: a domain name turns on
+# automatic HTTPS (Let's Encrypt) with an HTTP -> HTTPS redirect; ':80' serves
+# plain HTTP; 'localhost' uses Caddy's internal CA.
+#
+# After editing: docker compose exec frontend caddy reload --config /etc/caddy/Caddyfile
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# The api keeps the /api prefix in its own routes: paths pass through unchanged.
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	# Everything else is the single-page app; unknown paths fall back to index.html.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	# Vite emits content-hashed files under /assets.
+	header /assets/* Cache-Control "public, max-age=31536000, immutable"
+}

@@ -1,0 +1,28 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  --ok: #1a7f37;
+  --bad: #b3261e;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 40rem;
+  margin: 4rem auto;
+  padding: 0 1rem;
+}
+
+.status {
+  font-family: ui-monospace, monospace;
+}
+
+.status.ok {
+  color: var(--ok);
+}
+
+.status.bad {
+  color: var(--bad);
+}
