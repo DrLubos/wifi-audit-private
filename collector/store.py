@@ -254,9 +254,17 @@ class Store:
         return new_obs, new_alerts
 
     def write_failed_poll(self, ts, error, duration_ms):
-        self.db.execute(
-            "INSERT INTO polls(ts, duration_ms, ok, error) VALUES (?, ?, 0, ?)",
-            (ts, duration_ms, error[:500]))
+        """Record a poll that raised before anything could be shaped (explicit
+        transaction, same as write_poll)."""
+        self.db.execute("BEGIN")
+        try:
+            self.db.execute(
+                "INSERT INTO polls(ts, duration_ms, ok, error) VALUES (?, ?, 0, ?)",
+                (ts, duration_ms, error[:500]))
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
 
     # --- devices ----------------------------------------------------------
 

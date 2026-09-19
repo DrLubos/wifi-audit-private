@@ -2,11 +2,12 @@
 #
 # install_collector.sh - install the wifi-sensor collector (Milestone 2, part 1)
 #
-# Copies the collector from this repository to the Pi's install directory,
-# writes its configuration, and runs it as an unprivileged systemd service
-# that starts after Kismet. Requires install_sensor.sh to have been run first
-# (Kismet installed, sensor user in group kismet, credentials in
-# ~/.kismet/kismet_httpd.conf).
+# Copies the collector (collector/) and the one-off analysis scripts (analysis/)
+# from this repository to the Pi's install directory, writes the collector's
+# configuration, and runs the collector as an unprivileged systemd service that
+# starts after Kismet (unit template: systemd/wifi-sensor-collector.service).
+# Requires install_sensor.sh to have been run first (Kismet installed, sensor
+# user in group kismet, credentials in ~/.kismet/kismet_httpd.conf).
 #
 # Usage - on the Pi, from your normal user account:
 #
@@ -17,7 +18,8 @@
 #
 #   SENSOR_USER   Unprivileged user that runs the collector (and Kismet).
 #                 Default: the user who invoked sudo.
-#   INSTALL_DIR   Where the collector code is copied.  Default: /opt/wifi-sensor
+#   INSTALL_DIR   Where the code is copied (collector/ and analysis/ subdirs).
+#                 Default: /opt/wifi-sensor
 #   DATA_DIR      SQLite buffer directory.              Default: /var/lib/wifi-sensor
 #   SENSOR_CONF   Config file path. Default: <script dir>/sensor.conf
 #
@@ -37,11 +39,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_VARS=(SENSOR_USER INSTALL_DIR DATA_DIR)
 
 UNIT_NAME="wifi-sensor-collector.service"
-UNIT_TEMPLATE="$SCRIPT_DIR/$UNIT_NAME"
+UNIT_TEMPLATE="$SCRIPT_DIR/systemd/$UNIT_NAME"
 UNIT_DEST="/etc/systemd/system/$UNIT_NAME"
 ETC_DIR="/etc/wifi-sensor"
 COLLECTOR_CONF="$ETC_DIR/collector.conf"
 SRC_DIR="$SCRIPT_DIR/collector"
+ANALYSIS_SRC_DIR="$SCRIPT_DIR/analysis"
 
 # ------------------------------------------------------------------ helpers --
 ts()   { date '+%H:%M:%S'; }
@@ -100,6 +103,7 @@ load_config() {
 check_prerequisites() {
   step "Prerequisites"
   [[ -d $SRC_DIR && -f $SRC_DIR/collector.py ]] || die "collector sources not found in $SRC_DIR"
+  [[ -d $ANALYSIS_SRC_DIR ]] || die "analysis scripts not found in $ANALYSIS_SRC_DIR"
   [[ -f $UNIT_TEMPLATE ]] || die "unit template not found: $UNIT_TEMPLATE"
   [[ -f /etc/systemd/system/kismet.service || -f /lib/systemd/system/kismet.service \
      || -f /usr/lib/systemd/system/kismet.service ]] \
@@ -129,6 +133,20 @@ install_code() {
   done
   # Byte-compiled files and stale modules from older versions are not wanted.
   rm -rf "$INSTALL_DIR/collector/__pycache__"
+}
+
+install_analysis() {
+  step "Analysis scripts -> $INSTALL_DIR/analysis"
+  # One-off, read-only scripts run by hand against the buffer. They are not part
+  # of the service, so a change here must not restart it: the CHANGED flag is
+  # preserved across this step.
+  local f changed_before=$CHANGED
+  install -d -m 0755 -o root -g root "$INSTALL_DIR/analysis"
+  for f in "$ANALYSIS_SRC_DIR"/*.py "$ANALYSIS_SRC_DIR"/README.md; do
+    [[ -f $f ]] || continue
+    write_if_changed "$INSTALL_DIR/analysis/$(basename "$f")" 0644 root:root <"$f"
+  done
+  CHANGED=$changed_before
 }
 
 install_config() {
@@ -199,6 +217,7 @@ verify() {
   Buffer     $DATA_DIR/buffer.db
              sqlite3 -readonly $DATA_DIR/buffer.db 'SELECT * FROM polls ORDER BY id DESC LIMIT 5'
   Docs       $INSTALL_DIR/collector/README.md
+  Analysis   python3 $INSTALL_DIR/analysis/analyze.py     (see $INSTALL_DIR/analysis/README.md)
   Re-run     sudo $0     (idempotent; copies changed code and restarts the service)
 EOF
 }
@@ -226,6 +245,7 @@ main() {
 
   check_prerequisites
   install_code
+  install_analysis
   install_config
   install_service
   verify

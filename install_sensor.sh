@@ -53,11 +53,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_VARS=(CAPTURE_IFACE SENSOR_USER KISMET_LOG_DIR KISMET_LOG_TITLE
            KISMET_HTTPD_PORT KISMET_HTTPD_USER KISMET_HTTPD_PASS INSTALL_DIR)
 
-# Helper scripts and unit templates shipped in this repository.
+# Helper scripts (sensor/) and unit templates (systemd/) shipped in this repository.
 SENSOR_SRC_DIR="$SCRIPT_DIR/sensor"
 WATCHDOG_UNIT="wifi-sensor-capture-watchdog"
-WATCHDOG_SERVICE_TEMPLATE="$SCRIPT_DIR/$WATCHDOG_UNIT.service"
-WATCHDOG_TIMER_TEMPLATE="$SCRIPT_DIR/$WATCHDOG_UNIT.timer"
+WATCHDOG_SERVICE_TEMPLATE="$SCRIPT_DIR/systemd/$WATCHDOG_UNIT.service"
+WATCHDOG_TIMER_TEMPLATE="$SCRIPT_DIR/systemd/$WATCHDOG_UNIT.timer"
 
 # Locations defined by the Kismet / Debian packaging (not sensor-specific).
 KISMET_KEY_URL="https://www.kismetwireless.net/repos/kismet-release.gpg.key"

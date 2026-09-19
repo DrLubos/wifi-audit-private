@@ -23,13 +23,11 @@ collector.py  ->  shape.py (Kismet JSON -> compact record)  ->  store.py (SQLite
 | `kismet_client.py` | Read-only REST client (`requests`, Basic auth) |
 | `shape.py` | Field list requested from Kismet and the raw -> record mapping |
 | `store.py` | Schema and writes of the SQLite buffer |
-| `analyze.py` | Read-only summary of the buffer (totals, RSSI stability, config changes, alerts, probes, growth) |
-| `rssi_stability.py` | Read-only RSSI baseline statistics across all APs (per-AP std dev distribution, day-to-day drift, out-of-baseline rate per threshold) |
-| `inventory_changes.py` | Read-only characterisation of AP inventory churn (baseline vs later, transient vs sustained, impostor candidates for protected SSIDs) |
 | `collector.conf.example` | Runtime configuration template |
 | `tests/` | `python3 -m unittest discover -s collector/tests` (stdlib only) |
-| `../wifi-sensor-collector.service` | systemd unit template |
+| `../systemd/wifi-sensor-collector.service` | systemd unit template |
 | `../install_collector.sh` | Installer, run on the Pi with `sudo` |
+| `../analysis/` | One-off read-only analysis scripts for the buffer (not part of the service, see its README) |
 
 ## Installation on the Pi
 
@@ -37,17 +35,22 @@ collector.py  ->  shape.py (Kismet JSON -> compact record)  ->  store.py (SQLite
 sudo ./install_collector.sh
 ```
 
-Copies the code to `/opt/wifi-sensor/collector`, creates
-`/etc/wifi-sensor/collector.conf` from the example (kept on re-runs), creates
-`/var/lib/wifi-sensor` for the buffer, and enables `wifi-sensor-collector.service`
-running as the sensor user (group `kismet`), started after `kismet.service`.
-Credentials are read from Kismet's own `~/.kismet/kismet_httpd.conf`; nothing is
-stored twice. Re-run the installer after every code change.
+Copies the code to `/opt/wifi-sensor/collector` (and the analysis scripts to
+`/opt/wifi-sensor/analysis`), creates `/etc/wifi-sensor/collector.conf` from the
+example (kept on re-runs), creates `/var/lib/wifi-sensor` for the buffer, and
+enables `wifi-sensor-collector.service` running as the sensor user (group
+`kismet`), started after `kismet.service`. Credentials are read from Kismet's own
+`~/.kismet/kismet_httpd.conf`; nothing is stored twice. Re-run the installer
+after every code change.
 
 ```
 journalctl -u wifi-sensor-collector -f
-INFO poll ok: total=237 active=94 new_obs=61 alerts=0/0 ds=up 210ms
+INFO poll ok: total=237 active=94 skipped=0 new_obs=61 alerts=0/0 ds=up 210ms
 ```
+
+`skipped` counts devices that `shape.py` could not turn into a record (each one
+is also logged with its reason); it should stay at 0, a steady non-zero value
+points to a shaping regression.
 
 ## What one poll does
 
@@ -103,49 +106,8 @@ Future: `sent` on the deduplicated tables resets whenever `last_seen` advances
 The deduplicated tables (`associations`, `probes`, `devices`) are never pruned;
 a long-running sensor will eventually need a `last_seen`-based retention for them.
 
-A one-shot overview of what has been collected, opened read-only so the
-collector keeps running (run as the sensor user, which owns the `-shm` file):
-
-```
-python3 /opt/wifi-sensor/collector/analyze.py            # path from collector.conf
-python3 /opt/wifi-sensor/collector/analyze.py --top 12 --hist 5 --utc
-```
-
-`rssi_stability.py` quantifies how stable a fixed AP's RSSI is as seen by the
-fixed sensor, across every AP with enough readings (default: >= 200 readings on
->= 2 days). It reports the distribution of per-AP standard deviation (plain and
-MAD-robust, by band and by signal strength), the day-to-day drift of each AP's
-mean, and - with a baseline fitted on the first half of each AP's history and
-evaluated on the second half - how often genuine readings exceed
-`|rssi - baseline| > Y dB` for a sweep of thresholds, by how much, and whether
-they come as single samples or runs. It describes the data only; nothing is
-flagged or stored.
-
-```
-python3 /opt/wifi-sensor/collector/rssi_stability.py                 # full report
-python3 /opt/wifi-sensor/collector/rssi_stability.py --no-table --csv ~/rssi_aps.csv
-python3 /opt/wifi-sensor/collector/rssi_stability.py --min-obs 500 --min-days 3 --thresholds 4,6,8,10
-```
-
-`inventory_changes.py` asks whether "a network appeared where it should not" is
-a usable signal. It splits the capture into a baseline window (first 24 h) and
-the rest, reports APs that appeared later or vanished, measures the raw churn
-(new APs per day, transient vs sustained, share of randomised BSSIDs - the
-noise floor of a naive "new AP" alert), and then looks at the targeted signal:
-for each `--protected` SSID prefix every BSSID advertising it (now or earlier,
-via the config history) with OUI, encryption, first/last seen and typical RSSI,
-flagged when the OUI differs from the infrastructure (given with `--infra-oui`
-or inferred), it appeared late, it is much stronger than its peers, uses a
-different encryption, has a randomised BSSID or carried another SSID before;
-plus look-alike SSIDs. A persistence x strength cross-table of all newcomers and
-a candidate list close the report. Characterisation only - nothing is flagged
-live or stored.
-
-```
-python3 /opt/wifi-sensor/collector/inventory_changes.py --protected IK-WIFI,FRI_wifi
-python3 /opt/wifi-sensor/collector/inventory_changes.py --protected IK-WIFI --infra-oui 00:11:22 --csv ~/candidates.csv
-python3 /opt/wifi-sensor/collector/inventory_changes.py --protected IK-WIFI --baseline-hours 48 --close-dbm -55 --list 50
-```
+Read-only reports over the buffer (overview, RSSI stability, AP inventory churn)
+live in `../analysis/` - see `analysis/README.md`.
 
 Useful read-only queries on the Pi (`sqlite3 -readonly /var/lib/wifi-sensor/buffer.db`):
 

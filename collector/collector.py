@@ -141,11 +141,13 @@ def poll_once(client, store, cfg, since):
         return since
 
     records = []
+    skipped = 0  # devices shape_device() rejected; a steady non-zero count means a shape.py bug
     for d in raw_devices if isinstance(raw_devices, list) else []:
         try:
             records.append(shape_device(d, ts))
         except (ValueError, TypeError) as e:
-            log.debug("skipping device: %s", e)
+            skipped += 1
+            log.info("skipping device: %s", e)
     alerts = [shape_alert(a) for a in raw_alerts if isinstance(a, dict)] \
         if isinstance(raw_alerts, list) else []
 
@@ -159,8 +161,8 @@ def poll_once(client, store, cfg, since):
     }
     ms = int((time.monotonic() - t0) * 1000)
     new_obs, new_alerts = store.write_poll(ts, health, records, alerts, ms)
-    log.info("poll ok: total=%s active=%d new_obs=%d alerts=%d/%d ds=%s %dms",
-             health["devices_total"], len(records), new_obs, new_alerts, len(alerts),
+    log.info("poll ok: total=%s active=%d skipped=%d new_obs=%d alerts=%d/%d ds=%s %dms",
+             health["devices_total"], len(records), skipped, new_obs, new_alerts, len(alerts),
              "up" if ds_running else ("DOWN " + (ds_error or "")), ms)
     if abs(kismet_ts - ts) > 5:
         log.warning("clock skew: kismet=%d collector=%d", kismet_ts, ts)

@@ -1,5 +1,5 @@
-# wifi-sensor-collector.service - template installed by install_collector.sh,
-# which replaces __SENSOR_USER__ and __INSTALL_DIR__.
+# wifi-sensor-collector.service - template (repo: systemd/) installed by
+# install_collector.sh, which replaces __SENSOR_USER__ and __INSTALL_DIR__.
 #
 # Polls the local Kismet REST API and appends compact per-device records to a
 # SQLite buffer. Runs unprivileged as the sensor user, never as root.

@@ -73,8 +73,9 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   0 packets for hours): `sensor/kismet-prestart.sh` runs as `ExecStartPre` of
   `kismet.service` (waits for the USB adapter and chrony, bounded; rfkill unblock;
   deletes a stale `${CAPTURE_IFACE}mon`; power save off) and
-  `sensor/capture-watchdog.sh` runs from `wifi-sensor-capture-watchdog.timer` every
-  2 min, checking Kismet's datasource `num_packets` via REST and escalating
+  `sensor/capture-watchdog.sh` runs from `wifi-sensor-capture-watchdog.timer`
+  (templates in `systemd/`) every 2 min, checking Kismet's datasource
+  `num_packets` via REST and escalating
   restart Kismet -> reload driver -> USB re-plug. Both touch only the capture
   adapter. Root cause of the original failure: the RTL8821CU enumerates as USB
   storage first and mode-switches ~15 s later, the clock steps by days at boot
@@ -96,12 +97,19 @@ Eventbus (push) for alerts later. Fields of interest:
 
 ## Collector (Milestone 2, part 1 - implemented)
 
-- Code in `collector/` (`collector.py`, `kismet_client.py`, `shape.py`, `store.py`),
-  unit `wifi-sensor-collector.service`, installer `install_collector.sh` (run on the Pi
-  with sudo, after `install_sensor.sh`). Details and schema: `collector/README.md`.
-- Installed to `/opt/wifi-sensor/collector`, config `/etc/wifi-sensor/collector.conf`,
+- Repo layout: the deployed daemon is `collector/` (`collector.py`, `kismet_client.py`,
+  `shape.py`, `store.py`, `tests/`); unit templates are in `systemd/`
+  (`wifi-sensor-collector.service` + the capture-watchdog units); one-off read-only
+  analysis scripts are in `analysis/` (not part of the service, see `analysis/README.md`);
+  installers (`install_sensor.sh`, `install_collector.sh`) and `sensor.conf.example`
+  stay at the repo root. `install_collector.sh` is run on the Pi with sudo after
+  `install_sensor.sh`. Details and schema: `collector/README.md`.
+- Installed to `/opt/wifi-sensor/collector` (analysis scripts to
+  `/opt/wifi-sensor/analysis`), config `/etc/wifi-sensor/collector.conf`,
   buffer `/var/lib/wifi-sensor/buffer.db`. Credentials come from Kismet's own
   `~/.kismet/kismet_httpd.conf`.
+- The installers never delete files on the Pi (the repo is git-cloned there; the
+  installer only copies, configures and (re)starts). Leftovers are the user's call.
 - Tests: `python3 -m unittest discover -s collector/tests` (stdlib only, runs on the PC).
 - Kismet quirks the code depends on: field-filtered responses return `0` (not `null`)
   for missing fields, so `0` is mapped to NULL for all non-counter fields, RSSI included;
