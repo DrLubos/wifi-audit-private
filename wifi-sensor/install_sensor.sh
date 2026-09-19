@@ -15,7 +15,8 @@
 #                        2 min; restarts Kismet, reloads the driver, re-plugs
 #                        the USB device when no frames arrive.
 #
-# Usage - on the Pi, from your normal user account (never as root directly):
+# Usage - on the Pi, from the wifi-sensor/ folder of the monorepo clone, from
+# your normal user account (never as root directly):
 #
 #   sudo ./install_sensor.sh
 #   sudo CAPTURE_IFACE=wlan1 ./install_sensor.sh

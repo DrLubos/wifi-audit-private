@@ -9,7 +9,8 @@
 # Requires install_sensor.sh to have been run first (Kismet installed, sensor
 # user in group kismet, credentials in ~/.kismet/kismet_httpd.conf).
 #
-# Usage - on the Pi, from your normal user account:
+# Usage - on the Pi, from the wifi-sensor/ folder of the monorepo clone, from
+# your normal user account:
 #
 #   sudo ./install_collector.sh
 #

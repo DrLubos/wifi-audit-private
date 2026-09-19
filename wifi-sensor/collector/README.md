@@ -32,6 +32,7 @@ collector.py  ->  shape.py (Kismet JSON -> compact record)  ->  store.py (SQLite
 ## Installation on the Pi
 
 ```
+cd wifi-sensor            # the sensor folder of the monorepo clone
 sudo ./install_collector.sh
 ```
 
