@@ -7,6 +7,10 @@ collector.conf
 __pycache__/
 *.pyc
 
+# node / vite (server/frontend)
+node_modules/
+dist/
+
 # local data
 *.db
 *.db-wal

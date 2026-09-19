@@ -26,21 +26,32 @@ is not the sensor user: `ssh pi 'sudo -u pi python3 - /var/tmp/buffer-snapshot.d
 
 ## 2. Schema
 
-```
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f server/schema.sql
-```
+In the compose stack the `db` container runs `schema.sql` itself on its first
+start (`/docker-entrypoint-initdb.d/`). To re-apply it after a change (it is
+idempotent), or against a database you reach directly:
 
-Idempotent; re-run after every schema change.
+```
+docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+    -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/10-schema.sql
+# or:  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f server/schema.sql
+```
 
 ## 3. Import
 
-Copy the snapshot to wherever psql runs (the server box), then:
+Copy the snapshot to the server box and pipe the stream into psql inside the
+`db` container (the DB port is not published; psql on the container's unix
+socket needs no password):
 
 ```
-python3 server/seed/import_snapshot.py buffer-snapshot.db --sensor pi-fri \
+cd server
+python3 seed/import_snapshot.py buffer-snapshot.db --sensor pi-fri \
     --location "FRI, 3rd floor" --tz Europe/Bratislava \
-    | psql "$DATABASE_URL" -v ON_ERROR_STOP=1
+    | docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1
+# or, with direct access:  ... | psql "$DATABASE_URL" -v ON_ERROR_STOP=1
 ```
+
+`$POSTGRES_USER`/`$POSTGRES_DB` are the values from `.env`
+(`set -a; . ./.env; set +a`).
 
 - `--sensor NAME` is the `sensors.name` the data is filed under (created on
   first use). `--location`, `--description` and `--tz` are optional; when omitted
