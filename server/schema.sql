@@ -130,15 +130,15 @@ CREATE TABLE IF NOT EXISTS observations (
   bssid      macaddr,
   PRIMARY KEY (ts, sensor_id, device_key),
   FOREIGN KEY (sensor_id, device_key) REFERENCES devices (sensor_id, device_key));
--- The per-device time-series query; the PK is time-leading for the hypertable.
-CREATE INDEX IF NOT EXISTS observations_device_ts ON observations (sensor_id, device_key, ts);
--- Covering index for the per-AP RSSI series (/api/aps/{key}/rssi): the bucket
--- query needs only (ts, rssi) of one device, so with rssi INCLUDEd it runs as
--- an index-only scan. Without it every bucket query touched ~14k heap pages
+-- The per-device time-series index (the PK is time-leading for the hypertable).
+-- It covers rssi so the bucket query of /api/aps/{key}/rssi runs as an
+-- index-only scan: without INCLUDE (rssi) it touched ~14k heap pages per AP
 -- (rows of one AP are spread over the whole table, inserted in time order),
--- 3-5 s on a cold cache.
+-- 3-8 s on a cold cache; with it, ~125 index pages and ~0.1 s.
 CREATE INDEX IF NOT EXISTS observations_device_ts_rssi
   ON observations (sensor_id, device_key, ts) INCLUDE (rssi);
+-- Its predecessor without INCLUDE (same leading columns) is redundant.
+DROP INDEX IF EXISTS observations_device_ts;
 COMMENT ON TABLE observations IS
   'One row per active device per poll: the core RSSI/counter time series. A row exists only for polls in which the device was active.';
 
