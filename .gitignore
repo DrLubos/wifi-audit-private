@@ -18,3 +18,7 @@ dist/
 
 # macOS
 .DS_Store
+
+# database dumps (server/backup.sh)
+backups/
+*.dump

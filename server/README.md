@@ -81,6 +81,35 @@ bind mount pins the file's inode, and `git pull` writes a new file, so the
 container keeps seeing the old contents until `db` is restarted. The mount is
 only there for the first init.
 
+### Backup and restore
+
+The seeded dataset lives in the `db-data` volume only, so back it up:
+
+```
+./backup.sh                                   # -> backups/<db>-<UTC stamp>.dump (custom format, validated, gitignored)
+scp google:~/wifi-audit/server/backups/<file> ~/somewhere-safe/    # copy it OFF the box
+```
+
+`backup.sh` reads `.env`, runs `pg_dump -Fc` inside the `db` container (read-only
+on the database), checks the archive with `pg_restore --list`, prints size and
+sha256, and keeps the newest `KEEP` dumps (default 7). A cron line on the box, if
+wanted: `17 3 * * * cd ~/wifi-audit/server && ./backup.sh >> backups/backup.log 2>&1`.
+
+Restore into the running stack (replaces the current contents; `--clean` drops
+and recreates every object in the dump, including the function and the view):
+
+```
+set -a; . ./.env; set +a
+docker compose exec -T db pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+    --clean --if-exists --no-owner --exit-on-error < backups/<file>.dump
+docker compose restart api                    # drop pooled connections that saw the old objects
+```
+
+Restore on a fresh box: `docker compose up -d db` (the first init creates the
+empty schema), then the same `pg_restore` line, then `up -d` the rest. A dump
+taken with an older `schema.sql` restores the objects *as dumped*; re-apply the
+current `schema.sql` afterwards if the schema moved on (it is idempotent).
+
 ### Local development without containers
 
 `api/`: `DATABASE_URL=postgresql://... uvicorn app.main:app --reload` (needs a
