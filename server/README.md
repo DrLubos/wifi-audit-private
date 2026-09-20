@@ -65,7 +65,7 @@ after a seed.
 ```
 docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"     # psql (socket auth inside the container)
 docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-    -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/10-schema.sql        # re-apply the idempotent schema
+    -v ON_ERROR_STOP=1 < schema.sql                                         # re-apply the idempotent schema (stdin, see note)
 docker compose exec frontend caddy reload --config /etc/caddy/Caddyfile     # after editing the Caddyfile
 docker compose build api && docker compose up -d api                        # after an api change
 docker compose logs -f api
@@ -74,6 +74,12 @@ docker compose logs -f api
 `$POSTGRES_USER`/`$POSTGRES_DB` above are the values from `.env`
 (`set -a; . ./.env; set +a` loads them into the shell). Seeding from a Pi
 snapshot: `seed/README.md`.
+
+Re-apply the schema from the host file (stdin), not from
+`/docker-entrypoint-initdb.d/10-schema.sql` inside the container: a single-file
+bind mount pins the file's inode, and `git pull` writes a new file, so the
+container keeps seeing the old contents until `db` is restarted. The mount is
+only there for the first init.
 
 ### Local development without containers
 

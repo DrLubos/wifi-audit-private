@@ -31,10 +31,13 @@ start (`/docker-entrypoint-initdb.d/`). To re-apply it after a change (it is
 idempotent), or against a database you reach directly:
 
 ```
-docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-    -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/10-schema.sql
+cd server
+docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < schema.sql
 # or:  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f server/schema.sql
 ```
+
+(Pipe the host file in; the copy mounted inside the container goes stale after
+a `git pull` - see the note in `../README.md`.)
 
 ## 3. Import
 
