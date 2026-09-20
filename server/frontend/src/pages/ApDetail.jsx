@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useApi } from "../api";
 import RssiChart from "../components/RssiChart";
+import Skeleton from "../components/Skeleton";
 import StatTile from "../components/StatTile";
 import { bandOf, fmtDateTime, fmtDb, fmtDbm, fmtDuration, fmtInt } from "../format";
 
@@ -20,7 +21,32 @@ const HISTORY_FIELDS = [
   ["mfp_sup", "MFP sup."], ["mfp_req", "MFP req."],
 ];
 
+const CHART_HEIGHT = 320;
+// The first view of an AP reads its whole history from disk; say so instead of
+// looking stuck.
+const RSSI_LOADING = "Loading RSSI history — the first view of an access point reads its full history";
+
 const show = (v) => (v === true ? "yes" : v === false ? "no" : v ?? "-");
+
+// Page-shaped placeholder while /api/aps/{key} loads: same blocks, same heights.
+function DetailSkeleton() {
+  return (
+    <>
+      <p className="crumbs"><Link to="/aps">← Access points</Link></p>
+      <Skeleton height="1.7rem" width="40%" />
+      <div className="ap-head" style={{ marginTop: "0.5rem" }}>
+        <Skeleton height="1.1rem" width="70%" />
+      </div>
+      <div className="tiles skeleton-row" aria-hidden="true">
+        {[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} />)}
+      </div>
+      <div className="chart-card">
+        <div className="chart-head"><h2>RSSI over time</h2></div>
+        <Skeleton height={CHART_HEIGHT} label={RSSI_LOADING} />
+      </div>
+    </>
+  );
+}
 
 export default function ApDetail() {
   const { deviceKey } = useParams();
@@ -36,7 +62,7 @@ export default function ApDetail() {
       </>
     );
   }
-  if (!detail.data) return <p className="muted">Loading…</p>;
+  if (!detail.data) return <DetailSkeleton />;
 
   const { ap, baseline, observations, config_history: history } = detail.data;
   const current = ap;
@@ -87,8 +113,9 @@ export default function ApDetail() {
         </div>
         {rssi.error ? <p className="error">Failed to load: {rssi.error}</p> : null}
         {rssi.data ? (
-          <RssiChart data={rssi.data} baseline={rssi.data.baseline} loading={rssi.loading} />
-        ) : (!rssi.error ? <p className="muted">Loading…</p> : null)}
+          <RssiChart data={rssi.data} baseline={rssi.data.baseline} loading={rssi.loading}
+                     height={CHART_HEIGHT} />
+        ) : (!rssi.error ? <Skeleton height={CHART_HEIGHT} label={RSSI_LOADING} /> : null)}
       </div>
 
       <h2>Configuration history

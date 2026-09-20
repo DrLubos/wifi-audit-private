@@ -291,3 +291,32 @@ details.table-view .table-wrap { max-height: 320px; overflow: auto; margin-top: 
   .topbar { gap: 0.75rem; }
   .tile-value { font-size: 1.2rem; }
 }
+
+/* --- loading skeletons --------------------------------------------------- */
+
+.skeleton {
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--border) 25%, var(--bg) 50%, var(--border) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 0 1rem;
+}
+
+.skeleton-label { background: var(--surface); padding: 0.25rem 0.6rem; border-radius: 4px; }
+
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
+
+.tiles.skeleton-row .skeleton { height: 4.2rem; }
