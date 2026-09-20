@@ -7,6 +7,7 @@ module never touches the network. Plain SQL over psycopg 3; no ORM.
 
 import os
 
+from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -20,5 +21,6 @@ pool = ConnectionPool(
     timeout=5,                         # seconds to wait for a connection
     open=False,
     check=ConnectionPool.check_connection,   # drop connections broken by a DB restart
-    kwargs={"connect_timeout": 5, "application_name": "wifi-audit-api"},
+    kwargs={"connect_timeout": 5, "application_name": "wifi-audit-api",
+            "row_factory": dict_row},   # rows come back as dicts
 )
