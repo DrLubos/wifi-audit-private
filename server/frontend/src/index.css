@@ -1,28 +1,293 @@
+/* Tokens (light), dark under the OS setting and under an explicit toggle.
+   Chart hues are the dataviz reference palette: series slot 1 (blue) for the
+   data, a neutral gray for the baseline reference. */
 :root {
-  color-scheme: light dark;
-  font-family: system-ui, sans-serif;
+  color-scheme: light;
+  --bg: #fcfcfb;
+  --surface: #ffffff;
+  --border: #e6e5e1;
+  --text: #0b0b0b;
+  --text-2: #52514e;
+  --text-3: #8a8983;
+  --grid: #eceae5;
+  --series-1: #2a78d6;
+  --series-1-fill: rgba(42, 120, 214, 0.15);
+  --baseline: #8a8983;
+  --baseline-fill: rgba(138, 137, 131, 0.18);
   --ok: #1a7f37;
   --bad: #b3261e;
+  --changed: #fff3c4;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #1a1a19;
+    --surface: #222221;
+    --border: #33332f;
+    --text: #ffffff;
+    --text-2: #c3c2b7;
+    --text-3: #8f8e86;
+    --grid: #2c2c29;
+    --series-1: #3987e5;
+    --series-1-fill: rgba(57, 135, 229, 0.22);
+    --baseline: #8f8e86;
+    --baseline-fill: rgba(143, 142, 134, 0.22);
+    --ok: #3fb950;
+    --bad: #f0716b;
+    --changed: #4a3f12;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1a1a19;
+  --surface: #222221;
+  --border: #33332f;
+  --text: #ffffff;
+  --text-2: #c3c2b7;
+  --text-3: #8f8e86;
+  --grid: #2c2c29;
+  --series-1: #3987e5;
+  --series-1-fill: rgba(57, 135, 229, 0.22);
+  --baseline: #8f8e86;
+  --baseline-fill: rgba(143, 142, 134, 0.22);
+  --ok: #3fb950;
+  --bad: #f0716b;
+  --changed: #4a3f12;
+}
+
+* { box-sizing: border-box; }
 
 body {
   margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
 }
+
+a { color: inherit; }
+
+/* --- shell --------------------------------------------------------------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.brand {
+  font-weight: 600;
+  text-decoration: none;
+  letter-spacing: 0.01em;
+}
+
+.topbar nav { display: flex; gap: 1rem; }
+
+.topbar nav a {
+  text-decoration: none;
+  color: var(--text-2);
+  padding: 0.2rem 0;
+  border-bottom: 2px solid transparent;
+}
+
+.topbar nav a.active { color: var(--text); border-bottom-color: var(--series-1); }
+
+.topbar .spacer { flex: 1; }
 
 main {
-  max-width: 40rem;
-  margin: 4rem auto;
-  padding: 0 1rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.25rem 1rem 3rem;
 }
 
-.status {
-  font-family: ui-monospace, monospace;
+h1 { font-size: 1.35rem; margin: 0 0 0.25rem; }
+h2 { font-size: 1.05rem; margin: 1.75rem 0 0.6rem; }
+h1 small, h2 small { font-weight: 400; color: var(--text-3); margin-left: 0.5rem; }
+
+.muted { color: var(--text-3); }
+.sub { color: var(--text-2); margin: 0 0 1rem; }
+.mono { font-family: var(--mono); font-size: 0.92em; }
+.error { color: var(--bad); }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.crumbs { margin-bottom: 0.75rem; }
+.crumbs a { color: var(--text-2); text-decoration: none; }
+.crumbs a:hover { text-decoration: underline; }
+
+/* --- health badge -------------------------------------------------------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-2);
 }
 
-.status.ok {
-  color: var(--ok);
+.badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
+.badge.ok .dot { background: var(--ok); }
+.badge.bad .dot { background: var(--bad); }
+
+/* --- stat tiles ---------------------------------------------------------- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.6rem;
+  margin: 0.75rem 0;
 }
 
-.status.bad {
-  color: var(--bad);
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  min-width: 0;
+}
+
+.tile-label { color: var(--text-2); font-size: 0.82rem; }
+.tile-value { font-size: 1.45rem; font-weight: 600; margin-top: 0.1rem; white-space: nowrap; }
+.tile-hint { color: var(--text-3); font-size: 0.8rem; margin-top: 0.1rem; }
+
+/* --- tables -------------------------------------------------------------- */
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+
+table { border-collapse: collapse; width: 100%; }
+
+th, td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+th {
+  font-weight: 600;
+  color: var(--text-2);
+  font-size: 0.82rem;
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+}
+
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text); }
+th .arrow { color: var(--text-3); font-size: 0.75em; margin-left: 0.25rem; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr.clickable { cursor: pointer; }
+tbody tr.clickable:hover { background: var(--bg); }
+td.changed { background: var(--changed); }
+td.wrap { white-space: normal; }
+
+.small-table th, .small-table td { padding: 0.3rem 0.6rem; }
+.inline-tables { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; }
+.inline-tables .table-wrap { flex: 1 1 320px; }
+
+/* --- filter row ---------------------------------------------------------- */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.75rem 0;
+}
+
+.filters input[type="search"] {
+  font: inherit;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  min-width: 240px;
+}
+
+.chips { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+
+.chip, .seg button {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.chip[aria-pressed="true"], .seg button[aria-pressed="true"] {
+  color: var(--text);
+  border-color: var(--series-1);
+  box-shadow: inset 0 0 0 1px var(--series-1);
+}
+
+.seg { display: inline-flex; gap: 0.25rem; }
+.filters .count { margin-left: auto; color: var(--text-3); }
+
+/* --- chart --------------------------------------------------------------- */
+
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 0.75rem 0.5rem;
+}
+
+.chart-head { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 0.4rem; }
+.chart-head h2 { margin: 0; }
+.chart-head .seg { margin-left: auto; }
+
+.readout {
+  min-height: 1.6em;
+  font-size: 0.9rem;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin-bottom: 0.3rem;
+}
+
+.readout b { color: var(--text); font-weight: 600; }
+.readout .key { display: inline-block; width: 14px; height: 0; border-top: 2px solid var(--series-1); vertical-align: middle; margin-right: 0.35rem; }
+.readout .key.band { border-top-width: 6px; border-top-color: var(--series-1-fill); }
+.readout .key.base { border-top-style: dashed; border-top-color: var(--baseline); }
+
+.chart { transition: opacity 0.15s; }
+.chart.loading { opacity: 0.45; }
+.chart .uplot { font-family: var(--font); }
+.chart .u-legend { display: none; }
+
+details.table-view { margin-top: 0.5rem; }
+details.table-view summary { cursor: pointer; color: var(--text-2); font-size: 0.85rem; }
+details.table-view .table-wrap { max-height: 320px; overflow: auto; margin-top: 0.5rem; }
+
+/* --- header block of the AP page ---------------------------------------- */
+
+.ap-head { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; color: var(--text-2); margin-bottom: 0.5rem; }
+.ap-head .mono { color: var(--text); }
+.flag {
+  font-size: 0.75rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-2);
+}
+
+@media (max-width: 640px) {
+  .topbar { gap: 0.75rem; }
+  .tile-value { font-size: 1.2rem; }
 }

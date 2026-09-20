@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.9.0",
+    "uplot": "^1.6.32"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.0",
