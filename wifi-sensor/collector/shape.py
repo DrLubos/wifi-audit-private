@@ -18,6 +18,13 @@ crypto is carried by crypt_string (human readable) and crypt_bitfield (64-bit).
 Deliberately NOT requested (bystander PII, not needed for the RF analysis):
 dot11.client.ipdata (DHCP/ARP-learned client IPs) and the WPS identity fields
 (wps_serial_number, wps_model_name, wps_manuf, wps_device_name).
+
+Deauth/disassoc fields (verified in the Kismet source, phy_80211.cc): on every
+deauth/disassoc frame for a BSSID Kismet sets client_disconnects_last to the
+frame's unix second and bumps client_disconnects, which restarts at 1 after a
+> 1 s pause and after every DEAUTHFLOOD alert (so it is a burst size, not a
+counter). kismet.device.base.num_alerts is requested but never stored: nothing
+in Kismet increments it (always 0, even on devices with DEAUTHFLOOD alerts).
 """
 
 import hashlib
@@ -55,6 +62,7 @@ DEVICE_FIELDS = [
     [_DOT11 + "last_bssid", "last_bssid"],
     [_DOT11 + "num_associated_clients", "n_clients"],
     [_DOT11 + "client_disconnects", "disconnects"],
+    [_DOT11 + "client_disconnects_last", "disconnects_last"],
     [_DOT11 + "beacon_fingerprint", "beacon_fp"],
     [_DOT11 + "bss_timestamp", "bss_ts"],
     [_DOT11 + "associated_client_map", "clients"],
@@ -114,6 +122,12 @@ def _positive(v):
 
 def _dbm(v):
     """Signal level in dBm. 0 is Kismet's blank value, never a reading."""
+    n = _positive(v)
+    return int(n) if n is not None else None
+
+
+def _unix_ts(v):
+    """Unix-second timestamp; 0 means "never happened"."""
     n = _positive(v)
     return int(n) if n is not None else None
 
@@ -223,6 +237,8 @@ def _shape_ap(raw, dtype):
         "util_pct": _num(raw.get("util_pct")),
         "n_clients": _counter(raw.get("n_clients")),
         "disconnects": _counter(raw.get("disconnects")),
+        # unix second of the last deauth/disassoc frame; 0 = none seen yet
+        "disconnects_last": _unix_ts(raw.get("disconnects_last")),
         "clients": sorted(clients) if isinstance(clients, dict) else [],
     }
 

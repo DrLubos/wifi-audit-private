@@ -20,6 +20,12 @@ at which the AP still listed this client", not "last frame exchanged". Storing
 the pair once (schema v2) instead of per poll (v1) cut the table from ~85 % of
 the buffer to a negligible share.
 
+Schema v3 adds observations.disconnects_last (unix second of the AP's last
+deauth/disassoc frame, Kismet client_disconnects_last). A change of it between
+two polls is an exact "deauth/disassoc activity in this interval" bit, which
+the burst-size field disconnects cannot give. The v2 -> v3 migration is a
+single ALTER TABLE ADD COLUMN: metadata only, no rewrite, old rows read NULL.
+
 "sent" columns are for the upload step (later); the prototype only prunes by
 age. No detection lives here - the store only writes what shape.py produced.
 """
@@ -30,7 +36,7 @@ import sqlite3
 
 log = logging.getLogger("collector.store")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -106,7 +112,8 @@ CREATE TABLE IF NOT EXISTS observations (
   bytes     INTEGER,
   -- AP only (NULL otherwise)
   n_clients     INTEGER,
-  disconnects   INTEGER,             -- client_disconnects: deauth/disassoc seen
+  disconnects   INTEGER,             -- client_disconnects: size of the current deauth/disassoc burst
+  disconnects_last INTEGER,          -- unix s of the last deauth/disassoc frame (NULL = none yet; v3)
   qbss_stations INTEGER,             -- AP-reported station count
   util_pct      REAL,                -- AP-reported channel utilisation
   bss_timestamp INTEGER,             -- AP uptime (us); a drop means a restart
@@ -180,7 +187,11 @@ class Store:
         v = self.get_meta("schema_version")
         if v == "1":
             self._migrate_v1_to_v2()
-        elif v is not None and int(v) != SCHEMA_VERSION:
+            v = "2"
+        if v == "2":
+            self._migrate_v2_to_v3()
+            v = "3"
+        if v is not None and int(v) != SCHEMA_VERSION:
             raise RuntimeError("database schema version %s, collector expects %d"
                                % (v, SCHEMA_VERSION))
         self.db.executescript(_SCHEMA)
@@ -199,6 +210,24 @@ class Store:
         try:
             self.db.execute("DROP TABLE IF EXISTS associations")
             self.set_meta("schema_version", "2")
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+
+    def _migrate_v2_to_v3(self):
+        """v3 adds observations.disconnects_last. ALTER TABLE ADD COLUMN only
+        touches the schema (no rewrite of the ~million-row table), so the
+        collector resumes polling immediately; existing rows read NULL. A
+        buffer without the table yet (fresh, or a v1 file that held only
+        associations) gets the column from the CREATE TABLE in _SCHEMA."""
+        log.info("migrating buffer schema v2 -> v3: adding observations.disconnects_last")
+        self.db.execute("BEGIN")
+        try:
+            cols = [r[1] for r in self.db.execute("PRAGMA table_info(observations)")]
+            if cols and "disconnects_last" not in cols:
+                self.db.execute("ALTER TABLE observations ADD COLUMN disconnects_last INTEGER")
+            self.set_meta("schema_version", "3")
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
@@ -320,14 +349,15 @@ class Store:
         self.db.execute(
             "INSERT INTO observations(ts, key, last_time, freq_khz, channel, "
             "rssi, rssi_min, rssi_max, pk_total, pk_tx, pk_rx, pk_data, bytes, "
-            "n_clients, disconnects, qbss_stations, util_pct, bss_timestamp, "
+            "n_clients, disconnects, disconnects_last, qbss_stations, util_pct, bss_timestamp, "
             "ie_checksum, beacon_fp, bssid) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (rec["ts"], key, rec["last"], rec["freq"], rec["ch"],
              rec["rssi"], rec["rssi_min"], rec["rssi_max"],
              rec["pk"], rec["tx"], rec["rx"], rec["data"], rec["bytes"],
              ap["n_clients"] if ap else None,
              ap["disconnects"] if ap else None,
+             ap["disconnects_last"] if ap else None,
              ap["qbss_stations"] if ap else None,
              ap["util_pct"] if ap else None,
              ap["bss_ts"] if ap else None,

@@ -33,7 +33,7 @@ AP_RAW = {
     "kismet.device.base.freq_khz_map": {"2447000": 90, "2412000": 9},
     "sig_last": -54, "sig_min": -72, "sig_max": -49,
     "last_bssid": "02:0B:0A:03:02:01",
-    "n_clients": 2, "disconnects": 3,
+    "n_clients": 2, "disconnects": 3, "disconnects_last": 1789481102,
     "beacon_fp": 563282674, "bss_ts": 1628729078212,
     "clients": {"02:AA:00:00:00:01": "4202770D00000000_0100000000AA02",
                 "02:AA:00:00:00:02": "4202770D00000000_0200000000AA02"},
@@ -64,7 +64,7 @@ CLIENT_RAW = {
     "kismet.device.base.freq_khz_map": {"2457000": 22, "5180000": 1},
     "sig_last": -76, "sig_min": -78, "sig_max": -68,
     "last_bssid": "02:0B:0A:03:02:01",
-    "n_clients": 0, "disconnects": 0, "beacon_fp": 0, "bss_ts": 0,
+    "n_clients": 0, "disconnects": 0, "disconnects_last": 0, "beacon_fp": 0, "bss_ts": 0,
     "clients": 0,
     "probed": [
         {"dot11.probedssid.ssid": "", "dot11.probedssid.ssidlen": 0,
@@ -132,6 +132,7 @@ class ShapeApTest(unittest.TestCase):
         self.assertAlmostEqual(ap["util_pct"], 2.352941)
         self.assertEqual(ap["n_clients"], 2)
         self.assertEqual(ap["disconnects"], 3)
+        self.assertEqual(ap["disconnects_last"], 1789481102)
         self.assertEqual(ap["clients"], ["02:AA:00:00:00:01", "02:AA:00:00:00:02"])
 
     def test_ap_has_no_client_block(self):
@@ -145,6 +146,11 @@ class ShapeApTest(unittest.TestCase):
         self.assertEqual(ap["n_clients"], 0)
         self.assertEqual(ap["qbss_stations"], 0)
         self.assertEqual(ap["clients"], [])
+
+    def test_ap_never_deauthed_has_no_last_disconnect(self):
+        # A timestamp of 0 means "no deauth/disassoc frame yet", not epoch.
+        raw = dict(AP_RAW, disconnects=0, disconnects_last=0)
+        self.assertIsNone(shape_device(raw, TS)["ap"]["disconnects_last"])
 
     def test_cloaked_ssid_kept_as_empty_string(self):
         raw = dict(AP_RAW, ssid="", cloaked=1)

@@ -46,16 +46,17 @@ class StoreTest(unittest.TestCase):
 
     def test_ap_observation_columns(self):
         self.poll(TS, [AP_RAW])
-        row = self.q("SELECT rssi, n_clients, disconnects, qbss_stations, util_pct, "
-                     "bss_timestamp, ie_checksum, beacon_fp, bssid FROM observations")[0]
-        self.assertEqual(row[:4], (-54, 2, 3, 1))
-        self.assertAlmostEqual(row[4], 2.352941)
-        self.assertEqual(row[5:], (1628729078212, 1851240727, 563282674, None))
+        row = self.q("SELECT rssi, n_clients, disconnects, disconnects_last, qbss_stations, "
+                     "util_pct, bss_timestamp, ie_checksum, beacon_fp, bssid FROM observations")[0]
+        self.assertEqual(row[:5], (-54, 2, 3, 1789481102, 1))
+        self.assertAlmostEqual(row[5], 2.352941)
+        self.assertEqual(row[6:], (1628729078212, 1851240727, 563282674, None))
 
     def test_client_observation_columns(self):
         self.poll(TS, [CLIENT_RAW])
-        row = self.q("SELECT rssi, n_clients, disconnects, bssid FROM observations")[0]
-        self.assertEqual(row, (-76, None, None, "02:0B:0A:03:02:01"))
+        row = self.q("SELECT rssi, n_clients, disconnects, disconnects_last, bssid "
+                     "FROM observations")[0]
+        self.assertEqual(row, (-76, None, None, None, "02:0B:0A:03:02:01"))
 
     def test_signal_sentinel_stored_as_null(self):
         raw = dict(CLIENT_RAW, sig_last=0)
@@ -153,7 +154,49 @@ class StoreTest(unittest.TestCase):
         path = self.store.db.execute("PRAGMA database_list").fetchone()[2]
         self.store.close()
         self.store = Store(path)
-        self.assertEqual(self.store.get_meta("schema_version"), "2")
+        self.assertEqual(self.store.get_meta("schema_version"), "3")
+
+    def test_migrates_v2_to_v3_keeps_observations(self):
+        path = os.path.join(self.tmp.name, "v2.db")
+        v2 = sqlite3.connect(path)
+        v2.executescript("""
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta VALUES ('schema_version', '2');
+            CREATE TABLE observations (
+              id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, key TEXT NOT NULL,
+              last_time INTEGER NOT NULL, freq_khz INTEGER, channel TEXT,
+              rssi INTEGER, rssi_min INTEGER, rssi_max INTEGER,
+              pk_total INTEGER, pk_tx INTEGER, pk_rx INTEGER, pk_data INTEGER, bytes INTEGER,
+              n_clients INTEGER, disconnects INTEGER, qbss_stations INTEGER, util_pct REAL,
+              bss_timestamp INTEGER, ie_checksum INTEGER, beacon_fp INTEGER,
+              bssid TEXT, sent INTEGER NOT NULL DEFAULT 0);
+            INSERT INTO observations(ts, key, last_time, rssi, disconnects)
+              VALUES (100, 'AP', 99, -50, 2);
+        """)
+        v2.close()
+        store = Store(path)
+        try:
+            self.assertEqual(store.get_meta("schema_version"), "3")
+            cols = [r[1] for r in store.db.execute("PRAGMA table_info(observations)")]
+            self.assertIn("disconnects_last", cols)
+            # The pre-migration row survives, with the new column NULL.
+            self.assertEqual(store.db.execute(
+                "SELECT ts, rssi, disconnects, disconnects_last FROM observations").fetchall(),
+                [(100, -50, 2, None)])
+            # New polls fill it in.
+            store.write_poll(TS, HEALTH, [shape_device(AP_RAW, TS)], [], 1)
+            self.assertEqual(store.db.execute(
+                "SELECT disconnects_last FROM observations WHERE ts = ?", (TS,)).fetchall(),
+                [(1789481102,)])
+        finally:
+            store.close()
+        # Reopening a migrated buffer is a no-op.
+        store = Store(path)
+        try:
+            self.assertEqual(store.get_meta("schema_version"), "3")
+            self.assertEqual(store.db.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 2)
+        finally:
+            store.close()
 
     def test_migrates_v1_associations(self):
         path = os.path.join(self.tmp.name, "v1.db")
@@ -169,7 +212,8 @@ class StoreTest(unittest.TestCase):
         v1.close()
         store = Store(path)
         try:
-            self.assertEqual(store.get_meta("schema_version"), "2")
+            # v1 -> v2 -> v3 in one start.
+            self.assertEqual(store.get_meta("schema_version"), "3")
             cols = [r[1] for r in store.db.execute("PRAGMA table_info(associations)")]
             self.assertEqual(cols, ["ap_key", "client_mac", "first_seen", "last_seen", "sent"])
             self.assertEqual(store.db.execute("SELECT COUNT(*) FROM associations").fetchone()[0], 0)

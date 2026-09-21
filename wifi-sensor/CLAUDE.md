@@ -86,6 +86,16 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   storage first and mode-switches ~15 s later, the clock steps by days at boot
   (no RTC), the first capture helper crashed and the re-open adopted a
   half-configured monitor VIF. Kismet reports such a source as running/no error.
+- **Hung-server incident (2026-09-21 16:22 UTC):** the Kismet server aborted with
+  glibc `corrupted size vs. prev_size` while the kernel logged 438 `rtw88_core`
+  `WARNING`s (`phy.c:1876/2193`, `rtw_get_tx_power_params` via `rtw_set_channel`
+  in `kismet_cap_linux_wifi`) within the same 41 s - never seen before or since.
+  Not an OOM (0 OOM-killer lines in 4 days of kernel journal, 23 MB of 905 MB zram
+  swap used, Kismet RSS 61 MB). The process then hung in `deactivating` for 5 h
+  because the packaged unit has `TimeoutStopSec=infinity`, so the watchdog's
+  `systemctl restart kismet` blocked instead of escalating. The drop-in now sets
+  `TimeoutStopSec=60`. A recurrence shows up as `polls.ok = 0` / `ds_running = 0`
+  rows in the buffer - note the window if it happens during a staged experiment.
 
 ## Data to read from Kismet (targets for the collector, Milestone 2)
 

@@ -463,6 +463,11 @@ WorkingDirectory=${KISMET_LOG_DIR}
 Environment=CAPTURE_IFACE=${CAPTURE_IFACE}
 ExecStartPre=-+${INSTALL_DIR}/sensor/kismet-prestart.sh
 RestartSec=5
+# The packaged unit has no stop timeout (infinity). On 2026-09-21 Kismet hung
+# after a glibc heap abort and the capture watchdog's 'systemctl restart'
+# blocked for five hours instead of escalating. Bound the stop so a hung
+# server is SIGKILLed and the restart / driver-reload chain can proceed.
+TimeoutStopSec=60
 EOF
   systemctl daemon-reload
   if [[ $(systemctl is-enabled kismet 2>/dev/null || true) == enabled ]]; then

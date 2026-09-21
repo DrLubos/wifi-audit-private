@@ -76,7 +76,7 @@ with `ok = 0` and the loop continues; the service is never taken down by it.
 | `polls` | poll | collector/Kismet timestamps, device counts, datasource state, duration, error |
 | `devices` | device | key, MAC, type, manufacturer, first/last seen; for APs the advertised configuration: SSID, cloaked, `crypt` (Kismet crypt string), `crypt_bits`, MFP supported/required, advertised channel, HT mode, beacon rate, country |
 | `device_config_history` | AP configuration change | the configuration that was replaced, with the poll time of the change |
-| `observations` | active device per poll | Kismet `last_time`, heard frequency and channel, RSSI last/min/max, cumulative packet and byte counters; AP only: associated client count, `disconnects` (deauth/disassoc seen), QBSS station count and channel utilisation, BSS timestamp (uptime), beacon IE checksum and fingerprint; client only: BSSID |
+| `observations` | active device per poll | Kismet `last_time`, heard frequency and channel, RSSI last/min/max, cumulative packet and byte counters; AP only: associated client count, `disconnects` (size of the current deauth/disassoc burst, not a counter) and `disconnects_last` (unix second of the last deauth/disassoc frame, NULL until one is seen), QBSS station count and channel utilisation, BSS timestamp (uptime), beacon IE checksum and fingerprint; client only: BSSID |
 | `device_freq_hist` | device × frequency | cumulative packet count per frequency (Kismet `freq_khz_map`) |
 | `associations` | AP × client MAC | first/last poll at which the client MAC was listed in the AP's associated-client map (Kismet gives no per-client times and never drops entries, so `last_seen` is "still listed", not "last frame") |
 | `probes` | client × SSID | first/last time the SSID was probed for (`""` = wildcard) |
@@ -86,6 +86,18 @@ with `ok = 0` and the loop continues; the service is never taken down by it.
 Cumulative counters are stored as Kismet reports them; deltas are derived when
 the data is analysed, which keeps the collector free of state and robust to
 missed polls. `sent` columns exist for the later upload step.
+
+Schema v3 added `observations.disconnects_last` (Kismet
+`dot11.device.client_disconnects_last`, verified in `phy_80211.cc`: set to the
+frame's unix second on every deauth/disassoc frame for the BSSID). A change of
+it between two polls is an exact "deauth/disassoc frames arrived in between" bit,
+whatever the burst size, whereas `disconnects` is only the current burst size
+(restarts at 1 after a 1 s pause and after every DEAUTHFLOOD alert). A v2 buffer
+is migrated at start by one `ALTER TABLE ADD COLUMN` (metadata only, instant, no
+data loss; older rows read NULL). The old collector refuses a v3 buffer; to roll
+the code back, set `meta.schema_version` to `2` - the extra column is harmless.
+`kismet.device.base.num_alerts` is fetched but not stored: nothing in Kismet
+increments it (0 on every device in every log, alerts included).
 
 Schema v2 (associations deduplicated) replaced v1, where `associations` held one
 row per poll and made up ~85 % of the buffer (~290 MB/day). A v1 buffer is
