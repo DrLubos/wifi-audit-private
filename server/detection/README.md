@@ -23,6 +23,9 @@ once before the first run (it adds the `detections_dedupe` index):
 
 Unit tests (stdlib, no database): `cd server && python3 -m unittest discover -s detection/tests`.
 
+The dashboard shows the rows read-only: `GET /api/detections` and the *Detections*
+page (row expand = the evidence); Overview carries an "open detections" tile.
+
 | File | Purpose |
 |---|---|
 | `__main__.py` | `python -m detection <detector> [options]`; one subcommand per detector |

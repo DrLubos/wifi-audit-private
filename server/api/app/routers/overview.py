@@ -1,4 +1,4 @@
-"""GET /api/overview - capture span, poll health, device counts, alert count."""
+"""GET /api/overview - capture span, poll health, device counts, alert and detection counts."""
 
 from fastapi import APIRouter, Depends
 
@@ -48,6 +48,9 @@ def overview(sensor=Depends(get_sensor)):
             (sid,)).fetchone()
         baselines = conn.execute(
             "SELECT count(*) AS n FROM ap_baselines WHERE sensor_id = %s", (sid,)).fetchone()
+        detections = conn.execute(
+            "SELECT count(*) AS total, count(*) FILTER (WHERE NOT acked) AS open, max(ts) AS last_ts "
+            "FROM detections WHERE sensor_id = %s", (sid,)).fetchone()
 
     by_type = {r["type"]: r["n"] for r in types}
     main_types = ("ap", "client", "bridged")
@@ -72,4 +75,6 @@ def overview(sensor=Depends(get_sensor)):
         "observations": obs["n"],
         "alerts": {"total": alerts["total"], "last_ts": alerts["last_ts"]},
         "baselines": baselines["n"],
+        "detections": {"total": detections["total"], "open": detections["open"],
+                       "last_ts": detections["last_ts"]},
     }

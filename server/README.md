@@ -13,7 +13,7 @@ docker-compose stack.
 | `schema.sql` | done - idempotent PostgreSQL schema: the collector's tables mirrored with a `sensor_id` on every row, plus `sensors`, `ap_baselines`, `detections`, `refresh_ap_baselines()` and the `ap_inventory` view. TimescaleDB-ready (`observations` keyed `(ts, sensor_id, device_key)`), not enabled. |
 | `seed/` | done - `export_snapshot.py` (consistent copy of the Pi buffer) and `import_snapshot.py` (SQL + COPY stream piped into psql, idempotent merge). See `seed/README.md`. |
 | `docker-compose.yml`, `api/`, `frontend/` | done - the stack below |
-| dashboard (read-only) | done - `/api/overview`, `/api/aps`, `/api/aps/{key}`, `/api/aps/{key}/rssi` (bucketed in SQL), `/api/alerts`, `/api/findings`; React pages Overview, Access points, AP detail with the RSSI timeline vs baseline (uPlot). Seeded from the Pi snapshot of 2026-09-20 |
+| dashboard (read-only) | done - `/api/overview`, `/api/aps`, `/api/aps/{key}`, `/api/aps/{key}/rssi` (bucketed in SQL), `/api/alerts`, `/api/findings`, `/api/detections` (filters `severity`, `type`, `acked`); React pages Overview, Access points, AP detail with the RSSI timeline vs baseline (uPlot), Detections with a per-row evidence expand. Seeded from the Pi snapshot of 2026-09-20 |
 | `detection/` | prototype - batch detectors run on demand over a time window, writing only `detections`; one detector so far, `deauth-flood` (Kismet DEAUTHFLOOD alerts + burst events of the polled `client_disconnects` counter, per-AP baseline, idempotent re-runs). See `detection/README.md` |
 | live ingest | later; see `CLAUDE.md` for the scope rules |
 

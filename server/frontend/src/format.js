@@ -46,6 +46,14 @@ export function fmtDateTime(value) {
     + `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// Same, with seconds: 2026-09-18 09:42:56 (detections are seconds-long events).
+export function fmtDateTimeSec(value) {
+  if (value == null) return "-";
+  const d = typeof value === "number" ? new Date(value * 1000) : new Date(value);
+  if (Number.isNaN(d.getTime())) return "-";
+  return `${fmtDateTime(d)}:${pad(d.getSeconds())}`;
+}
+
 export function fmtDate(value) {
   return fmtDateTime(value).slice(0, 10);
 }

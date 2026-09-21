@@ -60,6 +60,8 @@ export default function Overview() {
               <StatTile label="Clients" value={fmtInt(o.devices.client)} />
               <StatTile label="Bridged" value={fmtInt(o.devices.bridged)} hint={`${fmtInt(o.devices.other)} other, ${fmtInt(o.devices.total)} devices`} />
               <StatTile label="Kismet alerts" value={fmtInt(o.alerts.total)} hint={o.alerts.last_ts ? `last ${fmtDateTime(o.alerts.last_ts)}` : ""} />
+              <StatTile label="Open detections" value={fmtInt(o.detections.open)}
+                        hint={<><Link to="/detections">{fmtInt(o.detections.total)} total</Link>{o.detections.last_ts ? ` · last ${fmtDateTime(o.detections.last_ts)}` : ""}</>} />
               <StatTile label="AP baselines" value={fmtInt(o.baselines)} hint="≥ 200 readings on ≥ 2 days" />
             </div>
             {o.polls.gaps.list.length ? (

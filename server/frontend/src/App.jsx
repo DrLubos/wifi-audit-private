@@ -10,6 +10,7 @@ export default function App() {
         <nav>
           <NavLink to="/" end>Overview</NavLink>
           <NavLink to="/aps">Access points</NavLink>
+          <NavLink to="/detections">Detections</NavLink>
         </nav>
         <span className="spacer" />
         <HealthBadge />

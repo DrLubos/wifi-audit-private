@@ -15,7 +15,7 @@ from psycopg import OperationalError
 from psycopg_pool import PoolTimeout
 
 from . import db
-from .routers import alerts, aps, findings, overview
+from .routers import alerts, aps, detections, findings, overview
 
 log = logging.getLogger("api")
 
@@ -89,3 +89,4 @@ app.include_router(overview.router)
 app.include_router(aps.router)
 app.include_router(alerts.router)
 app.include_router(findings.router)
+app.include_router(detections.router)
