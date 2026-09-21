@@ -244,8 +244,15 @@ CREATE TABLE IF NOT EXISTS detections (
   created_at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS detections_ts   ON detections (sensor_id, ts);
 CREATE INDEX IF NOT EXISTS detections_open ON detections (sensor_id) WHERE NOT acked;
+-- One row per (detector, subject, episode start). The batch detectors in
+-- detection/ refresh the row of an episode they have already stored
+-- (detection/detections.py matches on the stored window) instead of adding one;
+-- this index is the guarantee for an exact re-run. The subject is the device_key
+-- or, for a BSSID without a device row, the upper-case MAC.
+CREATE UNIQUE INDEX IF NOT EXISTS detections_dedupe
+  ON detections (sensor_id, type, coalesce(device_key, upper(mac::text)), ts);
 COMMENT ON TABLE detections IS
-  'Server-side detections (none are produced yet; the table exists so the dashboard can read and acknowledge them).';
+  'Server-side detections, written only by the batch detectors in detection/ (deauth_flood so far); the dashboard reads and acknowledges them. Re-runs refresh a stored episode, acked/ack_note survive.';
 
 -- --- helpers ------------------------------------------------------------------------------
 

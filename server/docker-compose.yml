@@ -59,6 +59,26 @@ services:
       - frontend
     logging: *logging
 
+  # On-demand batch detectors (server/detection/). Behind a profile, so
+  # `docker compose up` never starts it; it reuses the built api image (psycopg)
+  # and bind-mounts the package, so a code change needs no rebuild:
+  #   docker compose run --rm detect deauth-flood --from 2026-09-15 --to 2026-09-21 --dry-run
+  detect:
+    image: wifi-audit-api
+    profiles: ["tools"]
+    environment:
+      DATABASE_URL: "${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}}"
+    volumes:
+      - ./detection:/app/detection:ro
+    working_dir: /app
+    entrypoint: ["python", "-m", "detection"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
+    logging: *logging
+
   frontend:
     build: ./frontend
     restart: unless-stopped

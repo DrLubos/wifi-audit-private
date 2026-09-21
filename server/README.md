@@ -14,7 +14,8 @@ docker-compose stack.
 | `seed/` | done - `export_snapshot.py` (consistent copy of the Pi buffer) and `import_snapshot.py` (SQL + COPY stream piped into psql, idempotent merge). See `seed/README.md`. |
 | `docker-compose.yml`, `api/`, `frontend/` | done - the stack below |
 | dashboard (read-only) | done - `/api/overview`, `/api/aps`, `/api/aps/{key}`, `/api/aps/{key}/rssi` (bucketed in SQL), `/api/alerts`, `/api/findings`; React pages Overview, Access points, AP detail with the RSSI timeline vs baseline (uPlot). Seeded from the Pi snapshot of 2026-09-20 |
-| live ingest, detection | later; see `CLAUDE.md` for the scope rules |
+| `detection/` | prototype - batch detectors run on demand over a time window, writing only `detections`; one detector so far, `deauth-flood` (Kismet DEAUTHFLOOD alerts + burst events of the polled `client_disconnects` counter, per-AP baseline, idempotent re-runs). See `detection/README.md` |
+| live ingest | later; see `CLAUDE.md` for the scope rules |
 
 ## Stack
 
@@ -69,6 +70,7 @@ docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
 docker compose exec frontend caddy reload --config /etc/caddy/Caddyfile     # after editing the Caddyfile
 docker compose build api && docker compose up -d api                        # after an api change
 docker compose logs -f api
+docker compose run --rm detect deauth-flood --from 2026-09-15 --to 2026-09-21 --dry-run   # batch detector, see detection/README.md
 ```
 
 `$POSTGRES_USER`/`$POSTGRES_DB` above are the values from `.env`

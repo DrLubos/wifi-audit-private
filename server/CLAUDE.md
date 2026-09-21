@@ -21,6 +21,7 @@ detections and a dashboard for the thesis demo/defense.
   from a local machine.
 - Runs as a **docker-compose stack**, one container per tier, modelled on the
   developer's VehicleLocalization layout.
+- Deplyment server is available via `ssh google` it is google instance.
 
 ## Containers (this is the target architecture)
 
@@ -57,6 +58,15 @@ Conventions for the stack:
   (unknown BSSID advertising a protected SSID, gated by an operator-approved
   known-good whitelist). Rigorous detection + ROC vs staged attacks is thesis work
   after the topic is approved — do not build it now.
+- **Prototype detectors exist in `server/detection/`** (batch, run on demand with
+  `docker compose run --rm detect <detector> --from .. --to ..`; never scheduled,
+  never part of ingest; read-only on every source table, writes only `detections`,
+  idempotent re-runs). One so far: `deauth-flood`. Read `detection/README.md`
+  before touching it. Hard-won fact: `observations.disconnects` (Kismet
+  `client_disconnects`) is NOT a cumulative counter but the size of the current
+  burst (never > 11, resets to 1 after a pause and after every DEAUTHFLOOD alert),
+  so never build on its deltas; only a change to a non-zero value carries
+  information ("at least one new burst since the previous poll").
 
 ## Database
 
