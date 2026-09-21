@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from detection import deauth_flood as df  # noqa: E402
+from detection.common import iso  # noqa: E402
 from detection.deauth_flood import Alert, Burst, Params  # noqa: E402
 
 T0 = datetime(2026, 9, 18, 7, 42, 56, 533000, tzinfo=timezone.utc)
@@ -32,7 +33,15 @@ def alert(id_, seconds, header="DEAUTHFLOOD", src=CLIENT, dst=BSSID, direction="
 
 
 def burst(seconds, prev=1, cur=4, since=30, device_key=AP):
+    """A fallback (counter) event timed at its poll."""
     return Burst(ts=at(seconds), device_key=device_key, prev=prev, cur=cur, since_prev_s=since)
+
+
+def frame(seconds, poll_seconds=None, device_key=AP):
+    """An exact-rule event: ts is the frame second, poll_ts the poll that saw it."""
+    return Burst(ts=at(seconds), device_key=device_key, prev=1, cur=1, since_prev_s=30,
+                 poll_ts=at(poll_seconds if poll_seconds is not None else seconds + 12),
+                 source="last")
 
 
 def organic():
@@ -187,6 +196,29 @@ class AssessmentTest(unittest.TestCase):
         for e in ep2:
             df.assess(e, self.params, self.baseline, self.ap)
             self.assertFalse(e.emitted)
+
+    def test_exact_and_counter_events_merge_and_are_counted_by_source(self):
+        # Two frame-timed events and one counter event of the same AP within
+        # the burst window: one episode, rule B on the floor of 3.
+        bursts = [frame(0), burst(150), frame(300, poll_seconds=305)]
+        ep = df.build_episodes([], bursts, gap_s=300)[0]
+        self.assertEqual((ep.first_ts, ep.last_ts), (at(0), at(300)))
+        df.assess(ep, self.params, self.baseline, self.ap)
+        self.assertTrue(ep.rule_b)
+        self.assertEqual(ep.max_in_window, 3)
+        f = df.make_finding(ep, self.params)
+        b = f.evidence["bursts"]
+        self.assertEqual(b["sources"], {"last": 2, "counter": 1})
+        self.assertEqual(b["times"], [iso(at(0)), iso(at(150)), iso(at(300))])
+        self.assertEqual(b["polls"], [iso(at(12)), iso(at(150)), iso(at(305))])
+        self.assertEqual(f.evidence["version"], 2)
+
+    def test_frame_time_starts_the_episode_not_the_poll(self):
+        # The exact rule dates the event by the frame, up to a poll earlier
+        # than the observation that carried it.
+        ep = df.build_episodes([alert(1, 10)], [frame(2, poll_seconds=31)], gap_s=300)[0]
+        self.assertEqual(ep.first_ts, at(2))
+        self.assertEqual(ep.last_ts, at(10))
 
     def test_busy_ap_baseline_raises_the_threshold(self):
         bursts = [burst(0), burst(200), burst(400)]

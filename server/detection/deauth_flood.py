@@ -10,23 +10,34 @@ widened by the episode gap on both sides:
      useless '00_0'. BCASTDISCON and DISCONCODEINVALID alerts corroborate an
      episode but never start one.
 
-  2. Burst events from observations.disconnects. That column is Kismet's
-     dot11.device.client_disconnects, which is NOT a cumulative counter
-     (phy_80211.cc):
+  2. Burst events from the per-poll deauth/disassoc fields of observations.
+     Kismet keeps two per BSSID (phy_80211.cc, on every deauth/disassoc frame):
 
          if (now - client_disconnects_last > 1) client_disconnects = 1;
          else                                   client_disconnects += 1;
+         client_disconnects_last = now;                       // unix second of the frame
          if (client_disconnects > 10) { raise DEAUTHFLOOD; client_disconnects = 1; }
 
-     It is the size of the current burst, never above 11, restarting at 1 after
-     a pause and after every alert, so during a flood its polled value is
-     essentially random in 1..11 and deltas mean nothing. What a poll does tell:
-     a value that CHANGED to a non-zero number since the previous poll means at
-     least one new burst happened in between (a drop to 0 is a device
-     re-creation after a Kismet restart). That change is a "burst event" - a
-     lower bound on bursts, but organically rare and isolated (seeded data:
-     76 events on 28 of 343 APs in 5 days, never two consecutive polls, never
+     observations.disconnects_last (buffer v3, collected since 2026-09-22) is
+     the exact rule: a value that moved past the previous poll's time means at
+     least one deauth/disassoc frame arrived in between, whatever the burst
+     size, and the value is the frame's second. It needs no poll-spacing guard
+     - the frame time is in the value - so it also sees across observation gaps.
+
+     observations.disconnects (client_disconnects) is the fallback for rows
+     where disconnects_last is NULL (data seeded before v3). It is NOT a
+     cumulative counter: the size of the current burst, never above 11,
+     restarting at 1 after a pause and after every alert, so during a flood its
+     polled value is essentially random in 1..11 and deltas mean nothing. What
+     it does tell: a value that CHANGED to a non-zero number since the previous
+     poll (at most --max-gap earlier) means at least one new burst happened in
+     between (a drop to 0 is a device re-creation after a Kismet restart). That
+     is a lower bound, but organically rare and isolated (seeded data: 76
+     events on 28 of 343 APs in 5 days, never two consecutive polls, never
      more than 2 per AP per hour), while a flood changes it in ~10 of 11 polls.
+
+     Either way one poll yields at most one burst event, timed at the frame
+     second (exact rule) or the poll (fallback).
 
 Alerts and burst events of one AP are merged into episodes (silence > --gap
 closes one). An episode is a detection when
@@ -58,7 +69,7 @@ from . import common, detections
 from .common import POLL_INTERVAL_S, fmt_dur, fmt_ts, iso
 
 TYPE = "deauth_flood"
-VERSION = 1
+VERSION = 2                     # 2: burst events from disconnects_last (exact rule)
 TRIGGER_HEADERS = ("DEAUTHFLOOD",)
 CORROBORATING_HEADERS = ("BCASTDISCON", "DISCONCODEINVALID")
 ATTACK_DIRECTIONS = ("from_ap", "broadcast")
@@ -74,6 +85,9 @@ WITH s AS (
   SELECT o.device_key, o.ts,
          o.disconnects                                                   AS cur,
          lag(o.disconnects) OVER w                                       AS prev,
+         o.disconnects_last                                              AS cur_last,
+         lag(o.disconnects_last) OVER w                                  AS prev_last,
+         lag(o.ts) OVER w                                                AS prev_ts,
          o.ts - lag(o.ts) OVER w                                         AS since_prev,
          (o.pk_total - o.pk_data) - lag(o.pk_total - o.pk_data) OVER w   AS mgmt_delta
   FROM observations o
@@ -83,16 +97,27 @@ WITH s AS (
   WINDOW w AS (PARTITION BY o.device_key ORDER BY o.ts)
 )"""
 _KEY_FILTER = "\n    AND o.device_key = ANY(%(keys)s)"
-_BURST_COND = """prev IS NOT NULL AND cur IS NOT NULL AND cur <> prev AND cur > 0
-      AND since_prev <= %(max_gap_s)s * interval '1 second'"""
+# Exact rule (disconnects_last present): a frame time newer than the previous
+# poll. The value moving is not enough on its own - after a Kismet restart the
+# first poll of a re-created device carries its old frame time again.
+_BURST_LAST = """cur_last IS NOT NULL AND cur_last IS DISTINCT FROM prev_last
+       AND cur_last > coalesce(prev_ts, %(scan_from)s)"""
+# Fallback (rows without disconnects_last): the burst-size field changed to a
+# non-zero value since a previous poll at most --max-gap earlier.
+_BURST_COUNTER = """cur_last IS NULL AND prev IS NOT NULL AND cur IS NOT NULL AND cur <> prev AND cur > 0
+       AND since_prev <= %(max_gap_s)s * interval '1 second'"""
+_BURST_COND = "((" + _BURST_LAST + ")\n      OR (" + _BURST_COUNTER + "))"
 _REGULAR_POLL = "since_prev BETWEEN interval '25 seconds' AND interval '35 seconds'"
 
 # Burst events of every AP in the scan range (one pass over observations).
+# ts is the event time: the frame second under the exact rule, else the poll.
 EVENTS_SQL = _EVENTS_CTE.format(key_filter="") + """
-SELECT device_key, ts, prev, cur, extract(epoch FROM since_prev)::int AS since_prev_s, mgmt_delta
+SELECT device_key, coalesce(cur_last, ts) AS ts, ts AS poll_ts,
+       CASE WHEN cur_last IS NULL THEN 'counter' ELSE 'last' END AS source,
+       prev, cur, extract(epoch FROM since_prev)::int AS since_prev_s, mgmt_delta
 FROM s
 WHERE """ + _BURST_COND + """
-ORDER BY device_key, ts"""
+ORDER BY 1, 2"""
 
 # Flood alerts with the AP resolved by BSSID and the frame direction.
 ALERTS_SQL = """
@@ -198,12 +223,14 @@ class Alert:
 
 @dataclass
 class Burst:
-    ts: datetime
+    ts: datetime                        # event time: frame second (source 'last') or the poll
     device_key: str
-    prev: int
-    cur: int
-    since_prev_s: int
+    prev: int | None
+    cur: int | None
+    since_prev_s: int | None
     mgmt_delta: int | None = None
+    poll_ts: datetime | None = None     # the poll that carried the event (None = ts)
+    source: str = "counter"             # 'last' (exact rule) or 'counter' (fallback)
 
 
 @dataclass
@@ -429,7 +456,10 @@ def evidence_dict(ep, params, observed=None, baseline_range=None):
             "corroborating": corr,
         },
         "bursts": {
-            "n": len(ep.bursts), "polls": [iso(x.ts) for x in ep.bursts],
+            "n": len(ep.bursts),
+            "sources": {s: sum(1 for x in ep.bursts if x.source == s) for s in ("last", "counter")},
+            "times": [iso(x.ts) for x in ep.bursts],
+            "polls": [iso(x.poll_ts or x.ts) for x in ep.bursts],
             "values": [[x.prev, x.cur] for x in ep.bursts],
             "max_in_window": ep.max_in_window, "threshold": ep.threshold,
         },
@@ -502,6 +532,7 @@ def analyse(conn, sensor, frm, to, params, quiet=False):
     info = {
         "scan_from": scan_from, "scan_to": scan_to, "baseline_from": base_from, "baseline_to": frm,
         "bursts": len(bursts), "aps_with_bursts": len({b.device_key for b in bursts}),
+        "bursts_last": sum(1 for b in bursts if b.source == "last"),
         "alerts": sum(1 for a in alerts if a.header in params.headers),
         "corroborating": sum(1 for a in alerts if a.header not in params.headers),
         "episodes": len(episodes),
@@ -586,7 +617,8 @@ def add_arguments(p):
     p.add_argument("--gap", type=float, default=300, metavar="S",
                    help="silence that closes an episode (default 300)")
     p.add_argument("--max-gap", type=float, default=120, metavar="S",
-                   help="a counter change counts only if the previous poll is this close (default 120)")
+                   help="fallback rule only (rows without disconnects_last): a counter change counts "
+                        "only if the previous poll is this close (default 120)")
     p.add_argument("--min-bursts", type=int, default=3, metavar="N",
                    help="rule B floor: burst polls within --burst-window (default 3)")
     p.add_argument("--burst-window", type=float, default=600, metavar="S",
@@ -636,9 +668,10 @@ def report(sensor, frm, to, params, episodes, findings, info, args):
     print("  params: gap %ss, max-gap %ss, min-bursts %d in %ss, alpha %g, sustain %ss, lookback %s, triggers %s"
           % (params.gap_s, params.max_gap_s, params.min_bursts, params.burst_window_s, params.alpha,
              params.sustain_s, fmt_dur(params.lookback_s), ",".join(params.headers)), file=out)
-    print("  scanned %s .. %s: %d burst polls on %d APs, %d trigger alerts, %d corroborating alerts, "
-          "%d episodes, %d in the window and above the floor, %d detections"
-          % (fmt_ts(info["scan_from"]), fmt_ts(info["scan_to"]), info["bursts"], info["aps_with_bursts"],
+    print("  scanned %s .. %s: %d burst polls (%d exact, %d counter) on %d APs, %d trigger alerts, "
+          "%d corroborating alerts, %d episodes, %d in the window and above the floor, %d detections"
+          % (fmt_ts(info["scan_from"]), fmt_ts(info["scan_to"]), info["bursts"], info["bursts_last"],
+             info["bursts"] - info["bursts_last"], info["aps_with_bursts"],
              info["alerts"], info["corroborating"], info["episodes"], info["candidates"],
              info["findings"]), file=out)
     print(file=out)
@@ -680,9 +713,15 @@ def _print_episode(ep, params, out):
             print("      %s  alert  %-17s #%-5d %s -> %s (%s)" % (
                 t, obj.header, obj.id, obj.source_mac or "?", obj.dest_mac or "?", obj.direction), file=out)
         else:
-            print("      %s  burst  counter %d -> %d (previous poll %ds earlier)%s" % (
-                t, obj.prev, obj.cur, obj.since_prev_s,
-                ", non-data frames +%d" % obj.mgmt_delta if obj.mgmt_delta is not None else ""), file=out)
+            mgmt = ", non-data frames +%d" % obj.mgmt_delta if obj.mgmt_delta is not None else ""
+            if obj.source == "last":
+                print("      %s  frame  deauth/disassoc frame(s), seen by the poll at %s%s" % (
+                    t, fmt_ts(obj.poll_ts or obj.ts).split(" ")[1], mgmt), file=out)
+            else:
+                print("      %s  burst  counter %s -> %s (previous poll %s earlier)%s" % (
+                    t, obj.prev, obj.cur,
+                    "%ds" % obj.since_prev_s if obj.since_prev_s is not None else "?",
+                    mgmt), file=out)
     b = ep.baseline
     if b:
         rate = _rate(b)

@@ -57,32 +57,48 @@ for an exact re-run.
 
 ### What the data actually carries
 
-`observations.disconnects` is Kismet's `dot11.device.client_disconnects`. It is
-**not a cumulative counter** (Kismet `phy_80211.cc`):
+Kismet keeps two deauth/disassoc fields per BSSID, both updated on every
+deauth/disassoc frame (`phy_80211.cc`):
 
 ```c
 if (now - client_disconnects_last > 1) client_disconnects = 1;
 else                                   client_disconnects += 1;
-client_disconnects_last = now;
+client_disconnects_last = now;                        // unix second of the frame
 if (client_disconnects > 10) { raise DEAUTHFLOOD; client_disconnects = 1; }
 ```
 
-It is the size of the *current* burst of deauth/disassoc frames for that BSSID
-(frames with no gap > 1 s between them), never above 11, restarting at 1 after a
-pause and after every alert. During a flood its polled value is essentially
-random in 1..11, so deltas mean nothing and a median/MAD baseline of them is
-degenerate. Verified on the seeded 5 days (885 143 AP polls, 343 APs): the
-maximum value ever polled is 6, it decreases on ordinary polls (2->1, 5->2), it
-drops to 0 for every AP at a Kismet restart, and of the two organic floods
-Kismet alerted on, one moved it 1->4 and the other not at all (2->2).
+**`observations.disconnects_last`** (`client_disconnects_last`, buffer schema v3,
+collected since the collector redeploy of 2026-09-22; NULL on everything seeded
+before) is the **exact rule**: a value newer than the previous poll's time means
+at least one deauth/disassoc frame arrived in between, whatever the burst size,
+and the value is the frame's second. It needs no poll-spacing guard (the frame
+time is in the value), so it also works across observation gaps, and it dates
+the event by the frame rather than by the poll. It would also register the slow
+attack variant (one frame every 2-3 s) that never trips Kismet's `> 10` rule.
+Guard: `cur_last IS DISTINCT FROM prev_last AND cur_last > coalesce(prev_ts,
+scan_from)` - after a Kismet restart the re-created device carries its old
+frame time again, and the second clause rejects it.
 
-What a poll does tell: a value that **changed to a non-zero number** since the
-previous poll of the same AP means at least one new burst happened in between
-(a *burst event*; a drop to 0 is a device re-creation). It is a lower bound - one
-event per poll whatever happened in the 30 s - but organically it is rare and
-isolated: 76 events on 28 APs in 5 days, never on two consecutive polls, never
-more than 2 per AP within an hour. A flood changes the value in about 10 of 11
-polls.
+**`observations.disconnects`** (`client_disconnects`) is the **fallback** for rows
+where `disconnects_last` is NULL. It is **not a cumulative counter** but the size
+of the *current* burst of deauth/disassoc frames for that BSSID (frames with no
+gap > 1 s between them), never above 11, restarting at 1 after a pause and after
+every alert. During a flood its polled value is essentially random in 1..11, so
+deltas mean nothing and a median/MAD baseline of them is degenerate. Verified on
+the seeded 5 days (885 143 AP polls, 343 APs): the maximum value ever polled is
+6, it decreases on ordinary polls (2->1, 5->2), it drops to 0 for every AP at a
+Kismet restart, and of the two organic floods Kismet alerted on, one moved it
+1->4 and the other not at all (2->2). What a poll does tell: a value that
+**changed to a non-zero number** since the previous poll of the same AP (at most
+`--max-gap` earlier) means at least one new burst happened in between (a drop
+to 0 is a device re-creation). Organically it is rare and isolated: 76 events on
+28 APs in 5 days, never on two consecutive polls, never more than 2 per AP
+within an hour. A flood changes the value in about 10 of 11 polls.
+
+Under either rule one poll yields at most one *burst event*, so the rate caps
+at one per poll (30 s). `kismet.device.base.num_alerts` is no help: nothing in
+Kismet increments it (0 on every device in every kismetdb log, alerts included),
+and the alerts themselves carry `device_key = 00_0`.
 
 The `DEAUTHFLOOD` alert (Kismet's `> 10` rule above) is throttled on the Pi by
 `alert=DEAUTHFLOOD,5/min,2/sec`: an organic one-second storm gives exactly a pair
@@ -99,7 +115,9 @@ client storm); a spoofing attacker produces `from_ap` / `broadcast`.
 Per sensor and AP, over `[--from, --to)` widened by `--gap` on both sides:
 
 1. **Events**: `DEAUTHFLOOD` alerts (trigger), `BCASTDISCON` and
-   `DISCONCODEINVALID` alerts (corroborators only), burst events.
+   `DISCONCODEINVALID` alerts (corroborators only), burst events (exact rule
+   where `disconnects_last` is set, counter fallback elsewhere; timed at the
+   frame second or the poll respectively).
 2. **Episodes**: events of one AP merged in time order; a silence longer than
    `--gap` closes an episode.
 3. **Rules** - an episode is a detection when
@@ -135,7 +153,7 @@ Per sensor and AP, over `[--from, --to)` widened by `--gap` on both sides:
 | `--from`, `--to` | `--to` = now, `--from` = 24 h earlier | window, ISO 8601, UTC when no offset, `--to` exclusive |
 | `--sensor` | first sensor | `sensors.name` |
 | `--gap` | 300 s | silence that closes an episode (a flood produces an alert at least every ~12 s) |
-| `--max-gap` | 120 s | a counter change counts only if the previous poll is this close (localisable) |
+| `--max-gap` | 120 s | fallback rule only: a counter change counts only if the previous poll is this close (localisable); the exact rule carries its own time |
 | `--min-bursts` | 3 | rule B floor (organic maximum: 2 per AP per hour) |
 | `--burst-window` | 600 s | sliding window for rule B |
 | `--alpha` | 1e-4 | Poisson tail for the per-AP threshold above the floor |
@@ -146,15 +164,16 @@ Per sensor and AP, over `[--from, --to)` widened by `--gap` on both sides:
 
 ### The row
 
-`type = 'deauth_flood'`, `ts` = episode start (first alert or burst poll; a burst
-poll is up to 30 s after its frames), `severity`, `device_key` (NULL when the
-BSSID has no device row), `mac` = BSSID, `ssid`, `summary`, `evidence`:
+`type = 'deauth_flood'`, `ts` = episode start (first alert or burst event; an
+exact-rule event is dated by its frame, a fallback event by its poll, which is
+up to 30 s after its frames), `severity`, `device_key` (NULL when the BSSID has
+no device row), `mac` = BSSID, `ssid`, `summary`, `evidence`:
 
 ```
-window_start, window_end, duration_s, rules {alerts, bursts},
+detector, version (2), window_start, window_end, duration_s, rules {alerts, bursts},
 alerts {ids, n, span_s, first_ts, last_ts, by_header, sources, directions, broadcast,
         corroborating {BCASTDISCON: [ids], DISCONCODEINVALID: [ids]}},
-bursts {n, polls, values [[prev, cur]...], max_in_window, threshold},
+bursts {n, sources {last, counter}, times, polls, values [[prev, cur]...], max_in_window, threshold},
 baseline {from, to, fallback, active_hours, polls, bursts, bursts_per_hour, flood_alerts,
           mgmt_per_poll_median, mgmt_per_poll_robust_sd},
 observed {bursts_per_hour, ratio_to_baseline, mgmt_per_poll_max, mgmt_per_poll_mean,
@@ -173,7 +192,11 @@ detections, both `low`, both rule A, both `to_ap`:
 | 2026-09-20 09:01:36 | `EC:58:EA:54:45:8C` IK-WIFI | 25, 26 (40 ms apart) | 0 (counter 2 -> 2) |
 
 Rule B alone: 0 rows. `--dry-run --min-bursts 2 --burst-window 3600` shows the
-organic near-misses the default sits above. Idempotency: re-run the same window
+organic near-misses the default sits above. The seeded rows have no
+`disconnects_last`, so this window exercises the fallback rule only (the run
+report prints `76 burst polls (0 exact, 76 counter)`); it doubles as the
+regression check that detector version 2 left the old path unchanged.
+Idempotency: re-run the same window
 (still 2 rows, `evidence->>'runs'` = 2), run two halves split at 2026-09-18 12:00
 and then overlapping windows (still 2 rows), acknowledge one row and re-run
 (`acked` kept). Row counts of every source table are unchanged by construction.
@@ -188,18 +211,24 @@ runs and record per run: detected, latency (`ts` - attack start), severity,
 directions and corroborators, number of rows (one per run unless paused longer
 than `--gap`), `mgmt_ratio_to_median`; and over the whole window the rows on any
 other AP (false positives), giving precision, recall over the staged runs and
-the contribution of rule A vs rule B. Expected: (a) and (b) one `high` row each
-with `DEAUTHFLOOD` at 5/min (+ `BCASTDISCON` for (a)) and bursts in ~10 of 11
-polls; (c) most likely missed by both signals (see below). Sweep `--min-bursts`,
+the contribution of rule A vs rule B. The attack data is collected after the
+v3 collector, so its burst events come from the exact rule (`sources.last` in
+the evidence). Expected: (a) and (b) one `high` row each with `DEAUTHFLOOD` at
+5/min (+ `BCASTDISCON` for (a)) and an exact-rule event in every poll; (c) no
+alert, but an exact-rule event in every poll, i.e. rule B alone -> `medium`
+(before v3 it would have been missed by both signals). Sweep `--min-bursts`,
 `--burst-window` and `--gap` in `--dry-run` over both windows to pick the
 defaults for the thesis and to produce the FP/TP table.
 
 ### Limitations
 
-- Sensitivity is bounded by Kismet's counter: an attack with > 1 s between
-  frames never alerts and, if its bursts are of constant size, never changes the
-  counter either.
-- Burst events are a lower bound: one per poll, whatever happened in the 30 s.
+- Rule A is bounded by Kismet's counter: an attack with > 1 s between frames
+  never alerts. Rule B sees it through the exact rule (v3 data only); on
+  pre-v3 rows, if its bursts are of constant size, it never changes the counter
+  either.
+- Burst events are one per poll, whatever happened in the 30 s: the exact rule
+  gives an activity bit and the last frame's second, not a frame count. The
+  non-data frame rate (evidence) is the only per-poll volume measure.
 - Both organic events are client-side storms Kismet still calls floods; they are
   reported as `low`, not suppressed.
 - Kismet keeps `alertbacklog=50` alerts; at the throttled 5+5 per minute a flood
@@ -207,8 +236,7 @@ defaults for the thesis and to produce the FP/TP table.
 - The per-AP baseline query reads every poll of the AP over the lookback
   (~10 s per AP pair on a cold cache, since one AP's rows are spread over the
   whole table); the event scan is one pass over the window (~10 s for 5 days).
-- Recommended collector follow-up (a separate sensor change, out of scope here):
-  also sample `dot11.device.client_disconnects_last` (unix second of the last
-  burst) and store the already-fetched per-device `num_alerts`. A change of
-  `_last` between polls is an exact "deauth activity in this poll" bit
-  independent of burst size, which turns signal 2 into a proper rate.
+- The baseline burst rate of an AP learned over pre-v3 data is a lower bound
+  for what the exact rule will count on it; the seeded data suggests the two
+  agree on quiet APs (isolated bursts), but the Poisson threshold rarely rises
+  above the floor of 3 anyway.

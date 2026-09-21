@@ -66,7 +66,13 @@ Conventions for the stack:
   `client_disconnects`) is NOT a cumulative counter but the size of the current
   burst (never > 11, resets to 1 after a pause and after every DEAUTHFLOOD alert),
   so never build on its deltas; only a change to a non-zero value carries
-  information ("at least one new burst since the previous poll").
+  information ("at least one new burst since the previous poll"). Since buffer
+  v3 (collector redeploy 2026-09-22) `observations.disconnects_last` holds the
+  unix second of the AP's last deauth/disassoc frame (Kismet sets it on every
+  such frame): a value newer than the previous poll is an exact "activity in
+  this interval" bit and dates the event. NULL on everything seeded before v3 -
+  detectors must fall back to the counter rule there. `num_alerts` is dead in
+  Kismet (never incremented) and is not stored.
 
 ## Database
 
