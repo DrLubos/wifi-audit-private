@@ -52,7 +52,7 @@ docker compose build frontend                 # the node build is the memory pea
 docker compose build api
 docker compose up -d
 docker compose ps                             # db healthy -> api healthy -> frontend running
-curl -s http://localhost/api/health           # {"status":"ok","database":"ok","schema_version":"1"}
+curl -s http://localhost/api/health           # {"status":"ok","database":"ok","schema_version":"2"}
 ```
 
 `SITE_ADDRESS=:80` serves plain HTTP; a domain name switches Caddy to automatic

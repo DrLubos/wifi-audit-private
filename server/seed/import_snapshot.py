@@ -30,7 +30,8 @@ Everything runs between BEGIN and COMMIT, so a failure (bad MAC, FK violation,
 lost connection) leaves the database untouched. psql's own "COPY n" / "INSERT 0 n"
 command tags show what was staged and what was actually inserted.
 
-Column and semantics reference: wifi-sensor/collector/store.py (buffer schema v2)
+Column and semantics reference: wifi-sensor/collector/store.py (buffer schema v2
+or v3; v3 added observations.disconnects_last, which a v2 snapshot imports as NULL)
 and server/schema.sql.
 """
 
@@ -42,7 +43,7 @@ import sys
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-EXPECTED_SCHEMA_VERSION = "2"
+EXPECTED_SCHEMA_VERSIONS = ("2", "3")
 
 _MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
 # COPY text format: backslash, tab, newline and carriage return are escaped;
@@ -59,6 +60,8 @@ _CONFIG_COLS = ("ssid", "cloaked", "crypt", "crypt_bits", "mfp_sup", "mfp_req",
 # stage:  (pg_column, pg_type[, sqlite_expression]) - the staging table keeps the
 #         buffer's representation (bigint seconds, text MACs, 0/1 flags); the
 #         conversions happen in the INSERT ... SELECT.
+# optional: staging columns that older buffer versions lack; they are selected
+#         as NULL when the snapshot's table does not have them.
 # macs:   staging columns that must be a MAC address (validated before COPY).
 # insert: the merge statement; :sid is the psql variable holding sensors.id.
 
@@ -66,9 +69,15 @@ def _stage_ddl(spec):
     return ", ".join("%s %s" % (c[0], c[1]) for c in spec["stage"])
 
 
-def _stage_select(spec):
-    cols = ", ".join((c[2] if len(c) > 2 else c[0]) for c in spec["stage"])
-    return "SELECT %s FROM %s%s" % (cols, spec["name"], spec.get("order", ""))
+def _stage_select(spec, db):
+    present = {r[1] for r in db.execute("PRAGMA table_info(%s)" % spec["name"])}
+    cols = []
+    for c in spec["stage"]:
+        expr = c[2] if len(c) > 2 else c[0]
+        if c[0] in spec.get("optional", ()) and expr not in present:
+            expr = "NULL AS " + c[0]
+        cols.append(expr)
+    return "SELECT %s FROM %s%s" % (", ".join(cols), spec["name"], spec.get("order", ""))
 
 
 def _newer_wins(col):
@@ -145,17 +154,20 @@ TABLES = [
                   ("rssi_min", "smallint"), ("rssi_max", "smallint"), ("pk_total", "bigint"),
                   ("pk_tx", "bigint"), ("pk_rx", "bigint"), ("pk_data", "bigint"),
                   ("bytes", "bigint"), ("n_clients", "integer"), ("disconnects", "integer"),
+                  ("disconnects_last", "bigint"),
                   ("qbss_stations", "integer"), ("util_pct", "real"), ("bss_timestamp", "bigint"),
                   ("ie_checksum", "bigint"), ("beacon_fp", "bigint"), ("bssid", "text")],
+        "optional": ("disconnects_last",),        # buffer v3
         "macs": ("bssid",),
         "insert": (
             "INSERT INTO observations (ts, sensor_id, device_key, last_time, freq_khz, channel, "
             "rssi, rssi_min, rssi_max, pk_total, pk_tx, pk_rx, pk_data, bytes, n_clients, "
-            "disconnects, qbss_stations, util_pct, bss_timestamp, ie_checksum, beacon_fp, bssid)\n"
+            "disconnects, disconnects_last, qbss_stations, util_pct, bss_timestamp, ie_checksum, "
+            "beacon_fp, bssid)\n"
             "SELECT to_timestamp(ts), :sid, device_key, to_timestamp(last_time), freq_khz, channel, "
             "rssi, rssi_min, rssi_max, pk_total, pk_tx, pk_rx, pk_data, bytes, n_clients, "
-            "disconnects, qbss_stations, util_pct, bss_timestamp, ie_checksum, beacon_fp, "
-            "bssid::macaddr\n"
+            "disconnects, to_timestamp(disconnects_last), qbss_stations, util_pct, bss_timestamp, "
+            "ie_checksum, beacon_fp, bssid::macaddr\n"
             "FROM stage_observations\n"
             "ON CONFLICT DO NOTHING;"),
     },
@@ -236,9 +248,9 @@ def open_snapshot(path):
     except sqlite3.DatabaseError as e:
         raise SnapshotError("%s does not look like a collector buffer (%s)" % (path, e))
     version = row[0] if row else None
-    if version != EXPECTED_SCHEMA_VERSION:
-        raise SnapshotError("buffer schema version %s, this importer expects %s"
-                            % (version, EXPECTED_SCHEMA_VERSION))
+    if version not in EXPECTED_SCHEMA_VERSIONS:
+        raise SnapshotError("buffer schema version %s, this importer expects one of %s"
+                            % (version, ", ".join(EXPECTED_SCHEMA_VERSIONS)))
     return db
 
 
@@ -286,7 +298,7 @@ def emit_copy(out, db, spec, log):
     out.write("COPY %s FROM STDIN;\n" % stage)
     n = 0
     try:
-        for row in db.execute(_stage_select(spec)):
+        for row in db.execute(_stage_select(spec, db)):
             for i in mac_idx:
                 v = row[i]
                 if v is not None and not _MAC_RE.match(v):

@@ -3,7 +3,7 @@
 -- Idempotent: run as often as you like with
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema.sql
 --
--- Mirrors the sensor's SQLite buffer (wifi-sensor/collector/store.py, schema v2)
+-- Mirrors the sensor's SQLite buffer (wifi-sensor/collector/store.py, schema v3)
 -- with a sensor_id on every row, and adds sensors, ap_baselines and detections.
 -- Differences from the buffer, all intentional:
 --   * unix seconds -> timestamptz, MAC strings -> macaddr, 0/1 -> boolean,
@@ -20,7 +20,8 @@ BEGIN;
 CREATE TABLE IF NOT EXISTS schema_meta (
   key   text PRIMARY KEY,
   value text NOT NULL);
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '1')
+-- 2: observations.disconnects_last (buffer v3)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '2')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- sensors ------------------------------------------------------------------
@@ -120,7 +121,8 @@ CREATE TABLE IF NOT EXISTS observations (
   bytes      bigint,
   -- AP only (NULL otherwise)
   n_clients     integer,
-  disconnects   integer,                     -- client_disconnects: deauth/disassoc seen
+  disconnects   integer,                     -- client_disconnects: size of the current deauth/disassoc burst
+  disconnects_last timestamptz,              -- last deauth/disassoc frame (buffer v3; NULL before, or none yet)
   qbss_stations integer,                     -- AP-reported station count
   util_pct      real,                        -- AP-reported channel utilisation
   bss_timestamp bigint,                      -- AP uptime (us); a drop means a restart
@@ -130,6 +132,9 @@ CREATE TABLE IF NOT EXISTS observations (
   bssid      macaddr,
   PRIMARY KEY (ts, sensor_id, device_key),
   FOREIGN KEY (sensor_id, device_key) REFERENCES devices (sensor_id, device_key));
+-- Schema 2: the column above on a table created by schema 1 (metadata only, rows
+-- seeded from a v2 buffer keep NULL and the detectors fall back to `disconnects`).
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS disconnects_last timestamptz;
 -- The per-device time-series index (the PK is time-leading for the hypertable).
 -- It covers rssi so the bucket query of /api/aps/{key}/rssi runs as an
 -- index-only scan: without INCLUDE (rssi) it touched ~14k heap pages per AP
