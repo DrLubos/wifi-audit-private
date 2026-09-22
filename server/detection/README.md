@@ -32,6 +32,7 @@ page (row expand = the evidence); Overview carries an "open detections" tile.
 | `common.py` | connection from `DATABASE_URL`, sensor resolution, `--from/--to` parsing, table printer |
 | `detections.py` | the sink: matches an episode to its stored row and inserts or refreshes it |
 | `deauth_flood.py` | the deauth/disassoc flood detector (below) |
+| `evil_twin.py` | the RSSI-baseline / evil-twin detector (below) |
 | `tests/` | synthetic-timeline tests of the pure logic |
 
 Every detector runs its analysis in a `READ ONLY` transaction and its writes in
@@ -247,3 +248,98 @@ column is produced (use it with `--dry-run --json`, it never writes the DB).
   for what the exact rule will count on it; the seeded data suggests the two
   agree on quiet APs (isolated bursts), but the Poisson threshold rarely rises
   above the floor of 3 anyway.
+
+## evil_twin
+
+Rogue access points cloning a known AP. Two signals, `type = 'evil_twin'`, same
+episode/overlap-merge machinery as `deauth_flood`.
+
+### Why signal (b) is the contribution, and (a) is subordinate
+
+**(b) RSSI baseline deviation of a known BSSID** is the headline. An exact-BSSID
+clone (the classic evil twin) is the *same* Kismet device — same MAC, same
+`device_key` — so the attacker's frames land in that BSSID's own
+`observations.rssi` stream. A *fixed, continuous* sensor can therefore notice the
+signal sustainedly leaving the band this AP has occupied for days; a mobile
+one-shot audit cannot. This has **no Kismet equivalent** and is the detector's
+own algorithm.
+
+**(a) unknown BSSID for an established SSID** is deliberately a cheap,
+deterministic corroborator. It is the same class as Kismet's native **APSPOOF**
+alert — verified: Kismet 2025.09.0 has `alert=APSPOOF,10/min,1/sec` enabled but
+only the commented `Foo1/Foo2` example `apspoof=` rules, so it never fires (0
+APSPOOF in the seeded data). Kismet *could* do (a), but only with a
+hand-maintained `validmacs` list; the value (a) adds over Kismet is operational,
+not scientific, so it is subordinate to (b) and gets only a membership check. If
+`apspoof=` rules are ever configured, the stored APSPOOF alerts corroborate (a)
+the way `DEAUTHFLOOD` corroborates the deauth detector.
+
+### The false positives this must not repeat (findings.md §3/§4)
+
+The naive `analysis/inventory_changes.py` flagged 39 legitimate Ruckus BSSIDs
+from three mistakes, each dropped here:
+- **SSID prefix grouping** (`IK-WIFI` sweeping in `IK-WIFI-DOT1X`) → **exact SSID
+  match only** (`test_dot1x_bssid_not_matched_to_ik_wifi_trusted_set`).
+- **OUI-minority flagging** (2 legit `3C:46:A1` vs 60 `EC:58:EA`) → **OUI/crypt are
+  corroborating score, never a trigger; a same-OUI + same-crypt second-vendor
+  BSSID is `low`, not `high`** (`test_ruckus_second_vendor_same_oui_and_crypt_is_low_not_high`).
+- **`strong`-RSSI-alone** → RSSI never triggers (a); and (b) **never thresholds a
+  single reading** — a per-reading `3σ` rule flags 8 % of genuine readings, so (b)
+  works on the **median of a sliding window** plus persistence.
+
+### Signal (b) algorithm
+
+Per AP with a qualifying baseline (`ap_baselines`, `n_obs ≥ 200`, `n_days ≥ 2`):
+a sliding window of `W` observations deviates when its **median** leaves
+`rssi_median` by more than `max(k·rssi_robust_sd, --floor-db)` (`median_shift`)
+or its **MAD** exceeds `max(spread_k·robust_sd, spread_floor)` (`spread_inflation`
+— a BSSID heard from two positions is bimodal even when the medians cross).
+Deviating windows merge into an episode; a detection needs `≥ --persistence`
+deviating windows within `--persist-window`. `direction` is the sign of the
+deviation; *stronger* + sustained on a `trusted` AP is the twin signature and
+grades up. Severity: magnitude `low`/`medium`/`high` by `--med-dev`/`--high-dev`,
+`+1` level for a stronger clone on a trusted AP or when (a) corroborates.
+
+### Signal (a) algorithm
+
+The trusted BSSID set per **exact** SSID is the operator whitelist
+(`ap_baselines.trusted`), or — for the seeded FP audit before any approval —
+the BSSIDs first seen before `--from + --baseline-hours` (`--trusted-source
+baseline`). A BSSID advertising an established SSID (now or in
+`device_config_history`) that is not in its trusted set, is **sustained**
+(`≥ --persist-hours` or `≥ --persist-obs` observations) and non-random is a
+candidate. Severity: `low` when OUI ∈ the set's OUIs *and* crypt = its dominant
+crypt (legit second vendor); `medium` on a foreign OUI or crypt mismatch; `+1`
+when close/strong or (b) corroborates.
+
+### The row
+
+`type = 'evil_twin'`, `ts` = episode start = `evidence.window_start` (the
+evaluation harness's latency anchor — it keys on the type unchanged), `mac` =
+BSSID, `device_key` = subject. `evidence` carries `rules {rssi_deviation,
+unknown_bssid}`, and for (b) `rssi {facet, baseline{…}, observed{max_dev_db,
+k_sigma, spread_mad, direction, …}, threshold{…}}`, for (a) `membership
+{trusted_source, trusted_bssids, trusted_ouis, dominant_crypt, oui_in_trusted,
+crypt_matches, apspoof_alert_ids, persistence{…}}`. The `facet` field lets the FP
+audit separate median-shift from spread-inflation.
+
+### Options and validation
+
+`--window/-W 10`, `--k 6`, `--floor-db 8`, `--spread-k 3`, `--persistence 6` in
+`--persist-window 900`, `--med-dev 12`, `--high-dev 20`, `--gap 300`,
+`--trusted-source whitelist|baseline`, `--baseline-hours 24`, `--persist-hours 1`,
+`--persist-obs 20`; `--dry-run`/`--verbose`/`--json` as elsewhere.
+
+**Seeded false-positive audit** (no rogue present, so every detection is a false
+positive): fit baselines on the first half of the span and evaluate on the
+second so the baseline never saw the test data —
+`SELECT refresh_ap_baselines(<sid>,200,2,'<t0>','<t_mid>')` (the `p_from`/`p_until`
+params exist for this; the 50/50 midpoint ≈ 2026-09-18 01:45 UTC leaves 98 of 108
+qualifying APs) then `evil-twin --from <t_mid> --to <t_end> --dry-run` at `--k 3`,
+`4`, `6`, tabulating the FP count per `k`/`W` and **split by facet** (from the
+evidence). Expect **0 high/critical**. For (a): `--trusted-source baseline` on the
+seeded window → 0 sustained-unknown on `IK-WIFI`/`FRI_wifi` (findings §4: 0 later
+BSSIDs, 0 sustained-close newcomers). No physical rogue trial yet (adapter
+unavailable); the detector is exercised by `tests/test_evil_twin.py` (stdlib) and
+this audit. When staged later it reuses `server/evaluation/` with
+`type=evil_twin`: (b) gets the full N + Wilson CIs, (a) a light membership check.
