@@ -22,3 +22,12 @@ dist/
 # database dumps (server/backup.sh)
 backups/
 *.dump
+
+# staged-attack evaluation artefacts and generated output (server/docs)
+# committed only when a specific run is archived for the thesis
+server/docs/evaluation.md
+server/docs/evaluation_trials.csv
+server/docs/groundtruth*.csv
+server/docs/counter_only.json
+server/docs/cap/
+*.pcap

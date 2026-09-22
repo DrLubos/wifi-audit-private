@@ -79,6 +79,30 @@ services:
       - backend
     logging: *logging
 
+  # Staged-attack evaluation harness (read-only on the DB). Reads the detections
+  # a `detect` run wrote plus a ground-truth CSV under ./docs, and writes the
+  # report + CSV back to ./docs (the only writable mount). Same tools profile;
+  # never started by `up`. Reuses detection/common, so both are mounted.
+  #   docker compose run --rm evaluate report --groundtruth docs/groundtruth.enriched.csv \
+  #       --sensor pi-fri --from 2026-09-24 --to 2026-09-25 --out docs/evaluation.md
+  evaluate:
+    image: wifi-audit-api
+    profiles: ["tools"]
+    environment:
+      DATABASE_URL: "${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}}"
+    volumes:
+      - ./detection:/app/detection:ro
+      - ./evaluation:/app/evaluation:ro
+      - ./docs:/app/docs
+    working_dir: /app
+    entrypoint: ["python", "-m", "evaluation"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
+    logging: *logging
+
   frontend:
     build: ./frontend
     restart: unless-stopped

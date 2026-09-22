@@ -1,0 +1,8 @@
+trial_id,type,variant,channel_config,target_bssid,start_utc,stop_utc,frames_claimed,pcap_file,notes,first_frame_utc,last_frame_utc,pcap_frames,frame_count_ok
+# Authorisation: own isolated test AP <SSID/BSSID> on channel <N>, <own network>, operator <name>, supervisor notified <date>.
+# Rows below are illustrative. attack_trial.sh appends the first ten columns; `truth-check` fills the last four from the pcaps.
+L01,deauth_flood,fast,locked,AA:BB:CC:DD:EE:FF,2026-09-24T09:00:00Z,2026-09-24T09:03:00Z,,cap/L01.pcap,fast flood (>10/s),,,,
+L02,deauth_flood,moderate,locked,AA:BB:CC:DD:EE:FF,2026-09-24T09:10:00Z,2026-09-24T09:13:00Z,,cap/L02.pcap,~1/s,,,,
+L03,deauth_flood,slow,locked,AA:BB:CC:DD:EE:FF,2026-09-24T09:20:00Z,2026-09-24T09:23:00Z,,cap/L03.pcap,1 every 2-3 s (exact-rule only),,,,
+LC1,deauth_flood,clean,locked,,2026-09-24T09:30:00Z,2026-09-24T09:33:00Z,,,control window,,,,
+H01,deauth_flood,fast,hopping,AA:BB:CC:DD:EE:FF,2026-09-24T14:00:00Z,2026-09-24T14:03:00Z,,cap/H01.pcap,fast flood while channel-hopping,,,,
