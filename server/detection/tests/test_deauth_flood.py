@@ -248,6 +248,24 @@ class AssessmentTest(unittest.TestCase):
         self.assertEqual(params.headers, ("DEAUTHFLOOD", "BCASTDISCON"))
         self.assertEqual(params.gap_s, 120)
         self.assertEqual(params.as_dict()["trigger_headers"], ["DEAUTHFLOOD", "BCASTDISCON"])
+        self.assertFalse(params.counter_only)
+        self.assertIs(params.as_dict()["counter_only"], False)
+
+    def test_counter_only_flag_blanks_disconnects_last(self):
+        import argparse
+        p = argparse.ArgumentParser()
+        df.add_arguments(p)
+        params = Params.from_args(p.parse_args(["--counter-only"]))
+        self.assertTrue(params.counter_only)
+        # The exact rule reads o.disconnects_last; counter-only must blank every
+        # reference so it can never fire, leaving only the pre-v3 counter rule.
+        for base in (df.EVENTS_SQL, df.BASELINE_SQL, df.EPISODE_POLLS_SQL):
+            self.assertIn("o.disconnects_last", base)
+            sql = df._sql(base, params)
+            self.assertNotIn("o.disconnects_last", sql)
+            self.assertIn("NULL::timestamptz", sql)
+        # Default run is unchanged.
+        self.assertEqual(df._sql(df.EVENTS_SQL, Params()), df.EVENTS_SQL)
 
 
 if __name__ == "__main__":

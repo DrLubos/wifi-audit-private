@@ -220,6 +220,13 @@ alert, but an exact-rule event in every poll, i.e. rule B alone -> `medium`
 `--burst-window` and `--gap` in `--dry-run` over both windows to pick the
 defaults for the thesis and to produce the FP/TP table.
 
+The full staged-attack evaluation (independent pcap ground truth, recall with
+Wilson CIs, latency, channel-hop penalty, and the v2-vs-`--counter-only`
+old/new comparison) is automated in `../evaluation/` -> a generated
+`../docs/evaluation.md`. `--counter-only` here blanks `disconnects_last` so only
+the pre-v3 counter rule runs, which is how that comparison's "old detector"
+column is produced (use it with `--dry-run --json`, it never writes the DB).
+
 ### Limitations
 
 - Rule A is bounded by Kismet's counter: an attack with > 1 s between frames

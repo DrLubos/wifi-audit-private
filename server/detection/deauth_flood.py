@@ -193,19 +193,28 @@ class Params:
     sustain_s: float = 60
     lookback_s: float = 7 * 86400
     headers: tuple = TRIGGER_HEADERS
+    counter_only: bool = False           # ignore disconnects_last (the pre-v3 counterfactual)
 
     @classmethod
     def from_args(cls, args):
         return cls(gap_s=args.gap, max_gap_s=args.max_gap, min_bursts=args.min_bursts,
                    burst_window_s=args.burst_window, alpha=args.alpha, sustain_s=args.sustain,
                    lookback_s=common.parse_duration(args.lookback),
-                   headers=tuple(h.strip().upper() for h in args.headers.split(",") if h.strip()))
+                   headers=tuple(h.strip().upper() for h in args.headers.split(",") if h.strip()),
+                   counter_only=getattr(args, "counter_only", False))
 
     def as_dict(self):
         return {"gap_s": self.gap_s, "max_gap_s": self.max_gap_s, "min_bursts": self.min_bursts,
                 "burst_window_s": self.burst_window_s, "alpha": self.alpha,
                 "sustain_s": self.sustain_s, "lookback_s": self.lookback_s,
-                "trigger_headers": list(self.headers)}
+                "trigger_headers": list(self.headers), "counter_only": self.counter_only}
+
+
+def _sql(base, params):
+    """The events CTE for this run. --counter-only blanks disconnects_last so the
+    exact rule can never fire and only the pre-v3 counter rule remains - the
+    'what the old detector would have caught' counterfactual for the evaluation."""
+    return base.replace("o.disconnects_last", "NULL::timestamptz") if params.counter_only else base
 
 
 @dataclass
@@ -523,7 +532,7 @@ def analyse(conn, sensor, frm, to, params, quiet=False):
     headers = list(params.headers) + list(CORROBORATING_HEADERS)
 
     _log("scanning observations %s .. %s ..." % (fmt_ts(scan_from), fmt_ts(scan_to)), quiet)
-    bursts = [Burst(**r) for r in conn.execute(EVENTS_SQL, {
+    bursts = [Burst(**r) for r in conn.execute(_sql(EVENTS_SQL, params), {
         "sid": sid, "scan_from": scan_from, "scan_to": scan_to,
         "max_gap_s": params.max_gap_s}).fetchall()]
     alerts = [Alert(**r) for r in conn.execute(ALERTS_SQL, {
@@ -583,7 +592,7 @@ def analyse(conn, sensor, frm, to, params, quiet=False):
 
 
 def _baselines(conn, sid, keys, b_from, b_to, params):
-    rows = conn.execute(BASELINE_SQL, {
+    rows = conn.execute(_sql(BASELINE_SQL, params), {
         "sid": sid, "keys": keys, "scan_from": b_from, "scan_to": b_to,
         "max_gap_s": params.max_gap_s, "poll_s": POLL_INTERVAL_S}).fetchall()
     return {r["device_key"]: dict(r) for r in rows}
@@ -592,7 +601,7 @@ def _baselines(conn, sid, keys, b_from, b_to, params):
 def _episode_polls(conn, sid, ep, params):
     """Non-data frame rate of the AP during the episode (regular polls only)."""
     lead = timedelta(seconds=3 * POLL_INTERVAL_S)
-    rows = conn.execute(EPISODE_POLLS_SQL, {
+    rows = conn.execute(_sql(EPISODE_POLLS_SQL, params), {
         "sid": sid, "keys": [ep.device_key],
         "scan_from": ep.first_ts - lead, "scan_to": ep.last_ts + lead,
         "max_gap_s": params.max_gap_s}).fetchall()
@@ -631,6 +640,9 @@ def add_arguments(p):
                    help="baseline window before --from, e.g. 7d, 36h (default 7d)")
     p.add_argument("--headers", default=",".join(TRIGGER_HEADERS),
                    help="trigger alert headers (default %s)" % ",".join(TRIGGER_HEADERS))
+    p.add_argument("--counter-only", action="store_true",
+                   help="ignore disconnects_last (the exact rule): the pre-v3 counterfactual, "
+                        "for the evaluation's old-vs-new comparison. Use with --dry-run --json.")
     p.add_argument("--dry-run", action="store_true", help="analyse and print, write nothing")
     p.add_argument("--verbose", "-v", action="store_true",
                    help="print every episode's event timeline and baseline")
@@ -662,8 +674,9 @@ def run(args):
 
 def report(sensor, frm, to, params, episodes, findings, info, args):
     out = sys.stderr if args.json else sys.stdout
-    print("deauth_flood  sensor %s (id %d)  window %s .. %s UTC%s" % (
+    print("deauth_flood  sensor %s (id %d)  window %s .. %s UTC%s%s" % (
         sensor["name"], sensor["id"], fmt_ts(frm), fmt_ts(to),
+        "  [counter-only]" if params.counter_only else "",
         "  [dry run]" if args.dry_run else ""), file=out)
     print("  params: gap %ss, max-gap %ss, min-bursts %d in %ss, alpha %g, sustain %ss, lookback %s, triggers %s"
           % (params.gap_s, params.max_gap_s, params.min_bursts, params.burst_window_s, params.alpha,
