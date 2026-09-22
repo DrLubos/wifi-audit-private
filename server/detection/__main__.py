@@ -6,10 +6,11 @@
 import argparse
 import sys
 
-from . import deauth_flood
+from . import deauth_flood, evil_twin
 
 DETECTORS = {
     "deauth-flood": deauth_flood,
+    "evil-twin": evil_twin,
 }
 
 
