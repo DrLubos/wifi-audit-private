@@ -1,0 +1,30 @@
+# wifi-sensor-kismet-log-retention.service - template installed by install_sensor.sh,
+# which fills in the double-underscore placeholders (install dir, KISMET_LOG_*).
+#
+# One retention pass over the kismetdb log directory, started by the matching
+# .timer (the same script also runs before every Kismet start). Deletes only
+# old / empty / over-cap <log title>-*.kismet{,-journal} files, never the one
+# Kismet has open (see the script).
+#
+# Runs as root: the Kismet server is not dumpable, so only root can read its
+# /proc/<pid>/fd to see which log is open. The sandbox below limits writes to
+# the log directory.
+[Unit]
+Description=Wi-Fi sensor Kismet log retention (bounded kismetdb directory)
+
+[Service]
+Type=oneshot
+Environment=KISMET_LOG_DIR=__KISMET_LOG_DIR__
+Environment=KISMET_LOG_TITLE=__KISMET_LOG_TITLE__
+Environment=KISMET_LOG_KEEP_DAYS=__KISMET_LOG_KEEP_DAYS__
+Environment=KISMET_LOG_MAX_MB=__KISMET_LOG_MAX_MB__
+Environment=KISMET_LOG_MIN_FREE_MB=__KISMET_LOG_MIN_FREE_MB__
+ExecStart=__INSTALL_DIR__/sensor/kismet-log-retention.sh
+Nice=10
+IOSchedulingClass=idle
+ProtectSystem=strict
+ReadWritePaths=__KISMET_LOG_DIR__
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes

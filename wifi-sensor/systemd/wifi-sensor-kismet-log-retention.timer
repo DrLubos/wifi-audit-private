@@ -1,0 +1,15 @@
+# wifi-sensor-kismet-log-retention.timer - installed by install_sensor.sh.
+#
+# First pass 10 minutes after boot, then hourly. Kismet without frame logging
+# writes a few MB per hour, so an hourly pass is far inside the limits; the
+# pre-start pass covers crash loops (one empty log per start attempt).
+[Unit]
+Description=Wi-Fi sensor Kismet log retention timer
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

@@ -17,8 +17,17 @@ CAPTURE_IFACE=wlan1
 # Prefix of the kismetdb log file names.
 #KISMET_LOG_TITLE=wifi-sensor
 
+# kismetdb log retention (kismet-log-retention.sh: hourly timer + every Kismet
+# start). The log Kismet has open is never deleted.
+# Delete logs older than this many days.
+#KISMET_LOG_KEEP_DAYS=3
+# Size cap for all logs together (oldest deleted first).
+#KISMET_LOG_MAX_MB=1024
+# Also delete the oldest logs while the filesystem has less free space than this.
+#KISMET_LOG_MIN_FREE_MB=2048
+
 # Kismet web UI / REST API port.
 #KISMET_HTTPD_PORT=2501
 
-# Where the helper scripts (kismet pre-start, capture watchdog) are installed.
+# Where the helper scripts (kismet pre-start, capture watchdog, log retention) are installed.
 #INSTALL_DIR=/opt/wifi-sensor

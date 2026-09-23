@@ -14,6 +14,13 @@
 #   capture-watchdog.sh  systemd timer: checks Kismet's packet counter every
 #                        2 min; restarts Kismet, reloads the driver, re-plugs
 #                        the USB device when no frames arrive.
+#   kismet-log-retention.sh
+#                        hourly systemd timer and every Kismet start: deletes
+#                        old / empty / over-cap kismetdb logs (never the open one).
+#
+# Disk and memory bounds (after the 2026-09-22 disk-full incident): kismetdb
+# without frame logging, idle devices expire from Kismet's tracker, log
+# retention as above, and a journald size cap.
 #
 # Usage - on the Pi, from the wifi-sensor/ folder of the monorepo clone, from
 # your normal user account (never as root directly):
@@ -32,6 +39,10 @@
 #   KISMET_LOG_DIR     Directory for kismetdb logs.   Default: /var/lib/kismet
 #   KISMET_LOG_TITLE   Log file name prefix.          Default: wifi-sensor
 #   KISMET_HTTPD_PORT  Web UI port.                   Default: 2501
+#   KISMET_LOG_KEEP_DAYS    Delete kismetdb logs older than this.     Default: 3
+#   KISMET_LOG_MAX_MB       Size cap for all kismetdb logs together.  Default: 1024
+#   KISMET_LOG_MIN_FREE_MB  Delete old logs while the filesystem has
+#                           less free space than this.                Default: 2048
 #   KISMET_HTTPD_USER  Web UI username  - prompted for if unset. Environment
 #   KISMET_HTTPD_PASS  Web UI password    only; keep credentials out of sensor.conf.
 #   INSTALL_DIR        Where the helper scripts go.  Default: /opt/wifi-sensor
@@ -52,13 +63,14 @@ export DEBIAN_FRONTEND=noninteractive
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_VARS=(CAPTURE_IFACE SENSOR_USER KISMET_LOG_DIR KISMET_LOG_TITLE
-           KISMET_HTTPD_PORT KISMET_HTTPD_USER KISMET_HTTPD_PASS INSTALL_DIR)
+           KISMET_HTTPD_PORT KISMET_HTTPD_USER KISMET_HTTPD_PASS INSTALL_DIR
+           KISMET_LOG_KEEP_DAYS KISMET_LOG_MAX_MB KISMET_LOG_MIN_FREE_MB)
 
 # Helper scripts (sensor/) and unit templates (systemd/) shipped in this repository.
 SENSOR_SRC_DIR="$SCRIPT_DIR/sensor"
+UNIT_TEMPLATE_DIR="$SCRIPT_DIR/systemd"
 WATCHDOG_UNIT="wifi-sensor-capture-watchdog"
-WATCHDOG_SERVICE_TEMPLATE="$SCRIPT_DIR/systemd/$WATCHDOG_UNIT.service"
-WATCHDOG_TIMER_TEMPLATE="$SCRIPT_DIR/systemd/$WATCHDOG_UNIT.timer"
+RETENTION_UNIT="wifi-sensor-kismet-log-retention"
 
 # Locations defined by the Kismet / Debian packaging (not sensor-specific).
 KISMET_KEY_URL="https://www.kismetwireless.net/repos/kismet-release.gpg.key"
@@ -70,6 +82,7 @@ KISMET_SITE_CONF="/etc/kismet/kismet_site.conf"
 KISMET_ETC_HTTPD_CONF="/etc/kismet/kismet_httpd.conf"
 KISMET_UNIT_OVERRIDE="/etc/systemd/system/kismet.service.d/override.conf"
 NM_CONF="/etc/NetworkManager/conf.d/99-wifi-sensor-capture.conf"
+JOURNALD_CONF="/etc/systemd/journald.conf.d/60-wifi-sensor.conf"
 
 # ------------------------------------------------------------------ helpers --
 ts()   { date '+%H:%M:%S'; }
@@ -340,6 +353,31 @@ install_chrony() {
         | awk -F': *' '/^(Leap status|System time)/ {printf "%s: %s; ", $1, $2}')"
 }
 
+configure_journald() {
+  step "journald: size cap"
+  local kismet_changed=$CHANGED
+  # No cap is set by default, which lets journald take up to 10 % of the
+  # filesystem (~1.5 GB on the 15 GB card), and journald does not rate-limit
+  # kernel messages - the rtw88 WARN storm (~430 traces/min) would fill it.
+  # SystemKeepFree protects the collector buffer on the same filesystem.
+  write_if_changed "$JOURNALD_CONF" 0644 root:root <<EOF
+# Managed by install_sensor.sh (wifi-sensor).
+[Journal]
+Storage=persistent
+SystemMaxUse=200M
+SystemKeepFree=1G
+SystemMaxFileSize=25M
+RuntimeMaxUse=48M
+EOF
+  if [[ $LAST_WRITE_CHANGED -eq 1 ]]; then
+    systemctl restart systemd-journald
+    log "systemd-journald restarted with the new limits"
+  fi
+  # A journald-only change must not restart Kismet.
+  CHANGED=$kismet_changed
+  log "journal: $(journalctl --disk-usage 2>/dev/null || echo '?')"
+}
+
 # ---------------------------------------------------------- capture adapter --
 prepare_capture_adapter() {
   step "Capture adapter: $CAPTURE_IFACE"
@@ -402,10 +440,40 @@ source=${CAPTURE_IFACE}:name=capture,type=linuxwifi
 #   source=${CAPTURE_IFACE}:name=capture,type=linuxwifi,channels="1,6,11"
 
 # --- logging ---------------------------------------------------------------
-# kismetdb (SQLite) only; the collector (Milestone 2) reads from it / the REST API.
+# kismetdb (SQLite) only. Nothing on the sensor reads it - the collector uses
+# only the REST API - it is kept for alerts, messages and SYSTEM snapshots
+# (RSS / device-count trend) when investigating an incident. Old files are
+# removed by kismet-log-retention.sh (timer + pre-start).
 log_types=kismet
 log_prefix=${KISMET_LOG_DIR}
 log_title=${KISMET_LOG_TITLE}
+# Frames were ~93 % of every kismetdb file (~1.5 GB/day, 76 % of them control
+# frames) and filled the disk on 2026-09-22; nothing reads them - staged trials
+# use operator-side pcaps. Set to true temporarily (and re-run the installer)
+# only if a trial needs the sensor's own frames.
+kis_log_packets=false
+# Rolling limits inside one log file (Kismet deletes older rows periodically).
+kis_log_device_timeout=86400
+kis_log_snapshot_timeout=604800
+kis_log_message_timeout=604800
+# Alerts are few (33 in 52 h) and kept for the life of the file.
+
+# --- memory ------------------------------------------------------------------
+# Kismet keeps every device forever by default and its RSS grows ~21 KB per
+# tracked device (392 MB at 17.5k devices after 52 h on a 905 MB Pi). Expire
+# devices idle for 1 h: at most ~2.1k devices are active in any hour, so the
+# tracker stays around 4k devices / ~90 MB. The collector only asks for devices
+# active since its last poll, so it never needs an idle one; a device that
+# returns is re-created with the same key (collector merges first_seen with
+# MIN; disconnects_last reads NULL until its next deauth/disassoc frame, which
+# deauth_flood handles).
+tracker_device_timeout=3600
+# tracker_max_devices is deliberately NOT set. In Kismet 2025-09 it never
+# refuses new devices but, every 5 s over the cap, sorts by last_time ascending
+# and removes from begin()+max to the end - i.e. the MOST RECENTLY seen
+# devices (a new rogue BSSID would vanish), without removing them from the
+# views, using a comparator that is not a strict weak ordering for the empty
+# slots idle expiry leaves (devicetracker.cc, timetracker_event()).
 
 # --- web UI ----------------------------------------------------------------
 httpd_port=${KISMET_HTTPD_PORT}
@@ -434,8 +502,9 @@ EOF
 install_sensor_scripts() {
   step "Helper scripts -> $INSTALL_DIR/sensor"
   local f
-  [[ -f $SENSOR_SRC_DIR/kismet-prestart.sh && -f $SENSOR_SRC_DIR/capture-watchdog.sh ]] \
-    || die "helper scripts not found in $SENSOR_SRC_DIR"
+  for f in kismet-prestart.sh capture-watchdog.sh kismet-log-retention.sh; do
+    [[ -f $SENSOR_SRC_DIR/$f ]] || die "helper script $f not found in $SENSOR_SRC_DIR"
+  done
   install -d -m 0755 -o root -g root "$INSTALL_DIR" "$INSTALL_DIR/sensor"
   for f in "$SENSOR_SRC_DIR"/*.sh; do
     write_if_changed "$INSTALL_DIR/sensor/$(basename "$f")" 0755 root:root <"$f"
@@ -461,6 +530,12 @@ WorkingDirectory=${KISMET_LOG_DIR}
 # bounded), unblock the radio, remove a stale monitor VIF, power saving off.
 # '+' runs it as root, '-' never lets it block Kismet from starting.
 Environment=CAPTURE_IFACE=${CAPTURE_IFACE}
+# The pre-start also runs the kismetdb log retention (see kismet-log-retention.sh).
+Environment=KISMET_LOG_DIR=${KISMET_LOG_DIR}
+Environment=KISMET_LOG_TITLE=${KISMET_LOG_TITLE}
+Environment=KISMET_LOG_KEEP_DAYS=${KISMET_LOG_KEEP_DAYS}
+Environment=KISMET_LOG_MAX_MB=${KISMET_LOG_MAX_MB}
+Environment=KISMET_LOG_MIN_FREE_MB=${KISMET_LOG_MIN_FREE_MB}
 ExecStartPre=-+${INSTALL_DIR}/sensor/kismet-prestart.sh
 RestartSec=5
 # The packaged unit has no stop timeout (infinity). On 2026-09-21 Kismet hung
@@ -484,19 +559,30 @@ EOF
   fi
 }
 
-install_watchdog() {
-  step "systemd: $WATCHDOG_UNIT.timer"
-  local rendered
-  [[ -f $WATCHDOG_SERVICE_TEMPLATE && -f $WATCHDOG_TIMER_TEMPLATE ]] \
-    || die "watchdog unit templates not found next to $0"
-  rendered=$(sed -e "s|__INSTALL_DIR__|$INSTALL_DIR|g" -e "s|__CAPTURE_IFACE__|$CAPTURE_IFACE|g" \
-                 -e "s|__KISMET_URL__|http://127.0.0.1:$KISMET_HTTPD_PORT|g" \
-                 -e "s|__AUTH_FILE__|$AUTH_FILE|g" "$WATCHDOG_SERVICE_TEMPLATE")
-  write_if_changed "/etc/systemd/system/$WATCHDOG_UNIT.service" 0644 root:root <<<"$rendered"
-  write_if_changed "/etc/systemd/system/$WATCHDOG_UNIT.timer" 0644 root:root <"$WATCHDOG_TIMER_TEMPLATE"
+# Fill the __PLACEHOLDER__s of a unit template from the installer's settings.
+render_unit() {
+  sed -e "s|__INSTALL_DIR__|$INSTALL_DIR|g" -e "s|__CAPTURE_IFACE__|$CAPTURE_IFACE|g" \
+      -e "s|__KISMET_URL__|http://127.0.0.1:$KISMET_HTTPD_PORT|g" \
+      -e "s|__AUTH_FILE__|$AUTH_FILE|g" \
+      -e "s|__KISMET_LOG_DIR__|$KISMET_LOG_DIR|g" -e "s|__KISMET_LOG_TITLE__|$KISMET_LOG_TITLE|g" \
+      -e "s|__KISMET_LOG_KEEP_DAYS__|$KISMET_LOG_KEEP_DAYS|g" \
+      -e "s|__KISMET_LOG_MAX_MB__|$KISMET_LOG_MAX_MB|g" \
+      -e "s|__KISMET_LOG_MIN_FREE_MB__|$KISMET_LOG_MIN_FREE_MB|g" "$1"
+}
+
+# install_timer UNIT - install UNIT.service (rendered) + UNIT.timer from
+# systemd/ and enable the timer.
+install_timer() {
+  local unit=$1 rendered
+  local service_tpl="$UNIT_TEMPLATE_DIR/$unit.service" timer_tpl="$UNIT_TEMPLATE_DIR/$unit.timer"
+  step "systemd: $unit.timer"
+  [[ -f $service_tpl && -f $timer_tpl ]] || die "unit templates for $unit not found in $UNIT_TEMPLATE_DIR"
+  rendered=$(render_unit "$service_tpl")
+  write_if_changed "/etc/systemd/system/$unit.service" 0644 root:root <<<"$rendered"
+  write_if_changed "/etc/systemd/system/$unit.timer" 0644 root:root <"$timer_tpl"
   systemctl daemon-reload
-  systemctl enable --now "$WATCHDOG_UNIT.timer" >/dev/null 2>&1
-  log "$WATCHDOG_UNIT.timer: $(systemctl is-active "$WATCHDOG_UNIT.timer"), next run $(systemctl show -p NextElapseUSecRealtime --value "$WATCHDOG_UNIT.timer" 2>/dev/null || echo '?')"
+  systemctl enable --now "$unit.timer" >/dev/null 2>&1
+  log "$unit.timer: $(systemctl is-active "$unit.timer"), next run $(systemctl show -p NextElapseUSecRealtime --value "$unit.timer" 2>/dev/null || echo '?')"
 }
 
 verify_kismet() {
@@ -578,8 +664,14 @@ print_next_steps() {
   Capture    iw dev                      # expect '${CAPTURE_IFACE}mon' with type monitor
   Watchdog   systemctl list-timers ${WATCHDOG_UNIT}.timer
              journalctl -b -u kismet -u ${WATCHDOG_UNIT}     # pre-start + watchdog lines included
-  Logs       ${KISMET_LOG_DIR}/${KISMET_LOG_TITLE}-*.kismet
+  Logs       ${KISMET_LOG_DIR}/${KISMET_LOG_TITLE}-*.kismet   (no frames; kept ${KISMET_LOG_KEEP_DAYS} d / ${KISMET_LOG_MAX_MB} MB)
              kismetdb_statistics --in <file.kismet>
+             systemctl list-timers ${RETENTION_UNIT}.timer
+             journalctl -u ${RETENTION_UNIT}        # what was deleted
+             sudo env KISMET_LOG_DIR=${KISMET_LOG_DIR} KISMET_LOG_TITLE=${KISMET_LOG_TITLE} KISMET_LOG_KEEP_DAYS=${KISMET_LOG_KEEP_DAYS} \\
+               KISMET_LOG_MAX_MB=${KISMET_LOG_MAX_MB} KISMET_LOG_MIN_FREE_MB=${KISMET_LOG_MIN_FREE_MB} \\
+               ${INSTALL_DIR}/sensor/kismet-log-retention.sh --dry-run
+  Journal    journalctl --disk-usage                  (capped: ${JOURNALD_CONF})
   Time       chronyc tracking
   Rules      never run 'sudo kismet' - the service runs unprivileged as '${SENSOR_USER}'.
              '${SENSOR_USER}' is in group 'kismet'; log out and in again before running kismet by hand.
@@ -610,6 +702,13 @@ main() {
   KISMET_LOG_TITLE="${KISMET_LOG_TITLE:-wifi-sensor}"
   KISMET_HTTPD_PORT="${KISMET_HTTPD_PORT:-2501}"
   INSTALL_DIR="${INSTALL_DIR:-/opt/wifi-sensor}"
+  KISMET_LOG_KEEP_DAYS="${KISMET_LOG_KEEP_DAYS:-3}"
+  KISMET_LOG_MAX_MB="${KISMET_LOG_MAX_MB:-1024}"
+  KISMET_LOG_MIN_FREE_MB="${KISMET_LOG_MIN_FREE_MB:-2048}"
+  local v
+  for v in KISMET_LOG_KEEP_DAYS KISMET_LOG_MAX_MB KISMET_LOG_MIN_FREE_MB; do
+    [[ ${!v} =~ ^[0-9]+$ ]] || die "$v must be a non-negative integer (got '${!v}')"
+  done
 
   CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
   [[ -n $CODENAME ]] || die "cannot determine the Debian codename from /etc/os-release"
@@ -629,12 +728,14 @@ main() {
   install_kismet
   ensure_kismet_group
   install_chrony
+  configure_journald
   prepare_capture_adapter
   configure_network_manager
   configure_kismet
   install_sensor_scripts
   configure_service
-  install_watchdog
+  install_timer "$WATCHDOG_UNIT"
+  install_timer "$RETENTION_UNIT"
   verify_kismet
   print_next_steps
 }

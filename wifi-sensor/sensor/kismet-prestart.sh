@@ -14,6 +14,7 @@
 #   CAPTURE_IFACE            the capture adapter, e.g. wlan1            (required)
 #   PRESTART_IFACE_TIMEOUT   seconds to wait for the adapter to appear  (default 90)
 #   PRESTART_TIME_TIMEOUT    seconds to wait for chrony to be in sync   (default 60)
+#   KISMET_LOG_*             passed through to kismet-log-retention.sh (step 0)
 #
 # Never blocks Kismet forever: every wait is bounded and a timeout only logs a
 # warning - the sensor must still capture when there is no uplink for NTP.
@@ -27,6 +28,13 @@ MON="${IFACE}mon"
 
 log()  { echo "kismet-prestart: $*"; }
 warn() { echo "kismet-prestart: WARNING: $*" >&2; }
+
+# 0. Log retention before Kismet opens a new log. Runs on every start so a
+#    crash loop cannot pile up empty kismetdb files (69 of them on 2026-09-22).
+RETENTION="$(dirname "$0")/kismet-log-retention.sh"
+if [[ -x $RETENTION ]]; then
+  "$RETENTION" || warn "log retention failed (exit $?) - starting Kismet anyway"
+fi
 
 if [[ -z $IFACE ]]; then
   warn "CAPTURE_IFACE is not set - nothing to prepare"
