@@ -30,7 +30,8 @@ known AP changing encryption/channel/BSSID).
 Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
 
 - **Milestone 1 - DONE:** Kismet runs on the Pi, capturing on the USB adapter
-  (`wlan1`), logging kismetdb and running its own WIDS alert engine.
+  (`wlan1`), logging a slim kismetdb (no frames, pruned by the log retention)
+  and running its own WIDS alert engine.
 - **Milestone 2 (collector) - DONE, deployed:** the collector polls Kismet's REST
   API every 30 s and writes compact time-series records to a local SQLite buffer.
   It is "dumb": read -> shape -> store. No detection logic.
@@ -89,13 +90,46 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
 - **Hung-server incident (2026-09-21 16:22 UTC):** the Kismet server aborted with
   glibc `corrupted size vs. prev_size` while the kernel logged 438 `rtw88_core`
   `WARNING`s (`phy.c:1876/2193`, `rtw_get_tx_power_params` via `rtw_set_channel`
-  in `kismet_cap_linux_wifi`) within the same 41 s - never seen before or since.
-  Not an OOM (0 OOM-killer lines in 4 days of kernel journal, 23 MB of 905 MB zram
-  swap used, Kismet RSS 61 MB). The process then hung in `deactivating` for 5 h
-  because the packaged unit has `TimeoutStopSec=infinity`, so the watchdog's
-  `systemctl restart kismet` blocked instead of escalating. The drop-in now sets
+  in `kismet_cap_linux_wifi`) within the same 41 s (the same WARN signature was
+  back as a continuous storm on 2026-09-22/23, see below).
+  Not an OOM-killer event (0 OOM-killer lines in 4 days of kernel journal, 23 MB of
+  905 MB zram swap used). The "Kismet RSS 61 MB" noted at the time was measured
+  right after the restart: Kismet's RSS grows ~21 KB per tracked device, and the
+  run that ended at 16:17 that day stood at 392 MB with 17.5k devices after
+  51.9 h (SYSTEM snapshots in its kismetdb) - memory was far from idle, even if
+  a causal link to the heap abort is not shown. The process then hung in
+  `deactivating` for 5 h because the packaged unit has `TimeoutStopSec=infinity`,
+  so the watchdog's `systemctl restart kismet` blocked instead of escalating. The drop-in now sets
   `TimeoutStopSec=60`. A recurrence shows up as `polls.ok = 0` / `ds_running = 0`
   rows in the buffer - note the window if it happens during a staged experiment.
+- **Disk-full incident (2026-09-22):** the 15 GB root filesystem filled up with
+  11 GB of kismetdb logs (79 files, 69 of them empty from a crash loop; ~1.5 GB/day,
+  ~93 % of each file the `packets` table, which nothing reads). Kismet's log
+  stopped at 12:19 UTC, the collector's last good poll was 13:43:21, then the
+  collector crash-looped on `disk I/O error` until the disk was freed; first good
+  poll again 2026-09-23 09:26:58 (gap recorded in `docs/findings.md`). The buffer
+  survived intact (`quick_check` ok after WAL replay - never delete `buffer.db-wal`).
+  Fixes, all in `install_sensor.sh`:
+  - `kismet_site.conf`: `kis_log_packets=false`, row timeouts for devices (1 d),
+    snapshots and messages (7 d); `tracker_device_timeout=3600` bounds Kismet's
+    RAM (at most ~2.1k devices are active per hour). **Do not set
+    `tracker_max_devices`:** in Kismet 2025-09 it evicts the MOST recently seen
+    devices (ascending last_time sort, removes `begin()+max..end`), leaves them in
+    the views and uses a comparator that breaks on empty slots - a new rogue BSSID
+    would vanish (`devicetracker.cc`, `timetracker_event()`).
+  - `sensor/kismet-log-retention.sh`: hourly timer
+    (`wifi-sensor-kismet-log-retention.timer`) + step 0 of the pre-start (so a crash
+    loop cannot pile up empty logs). See the retention policy under Collector.
+  - journald drop-in `/etc/systemd/journald.conf.d/60-wifi-sensor.conf`: persistent,
+    `SystemMaxUse=200M`, `SystemKeepFree=1G`.
+- **rtw88 WARN storm - NEXT TASK:** since at least 2026-09-22 21:03 UTC the kernel
+  logs ~430 `rtw_get_tx_power_params` WARN traces per minute (`phy.c:1876/2193`, via
+  `rtw_ops_config` -> `rtw_set_channel`, i.e. on channel changes - presumably
+  Kismet's hopping; not yet confirmed) - continuously,
+  not the 41 s burst of 2026-09-21. journald does not rate-limit kernel messages,
+  so with the now persistent journal this means **continuous SD-card writes until
+  the storm is fixed**: the 200 MB cap bounds the space, not the wear. Fixing (or
+  suppressing at the source) the rtw88 storm is the next task.
 
 ## Data to read from Kismet (targets for the collector, Milestone 2)
 
@@ -125,6 +159,16 @@ Eventbus (push) for alerts later. Fields of interest:
   `~/.kismet/kismet_httpd.conf`.
 - The installers never delete files on the Pi (the repo is git-cloned there; the
   installer only copies, configures and (re)starts). Leftovers are the user's call.
+- **Runtime retention - the one approved exception (2026-09-23):**
+  `sensor/kismet-log-retention.sh` is the only sensor component that deletes files.
+  Its scope is strictly `${KISMET_LOG_TITLE}-*.kismet` and `-journal` files directly in
+  `KISMET_LOG_DIR`: empty ones, ones older than `KISMET_LOG_KEEP_DAYS` (3), then the
+  oldest while the logs exceed `KISMET_LOG_MAX_MB` (1024) or the filesystem has less
+  than `KISMET_LOG_MIN_FREE_MB` (2048) free. It never deletes the log Kismet has open
+  (read from `/proc/<pid>/fd` - Kismet is not dumpable, so the unit runs as root,
+  sandboxed with `ReadWritePaths=` the log dir) nor the newest log, and never touches
+  the buffer or anything else. Widening its scope, or adding any other deleting
+  component, needs the developer's explicit approval.
 - Tests: `cd wifi-sensor && python3 -m unittest discover -s collector/tests`
   (stdlib only, runs on the PC).
 - Kismet quirks the code depends on: field-filtered responses return `0` (not `null`)

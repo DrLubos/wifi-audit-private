@@ -5,6 +5,8 @@ read-only analysis scripts in `analysis/`. Nothing here is recomputed: every
 figure is copied from the script output of one run on **2026-09-19, 12:32-12:35
 UTC**, over **3.9 days** of capture (2026-09-15 13:53 -> 2026-09-19 12:34 UTC).
 Re-running the scripts later will shift the values as data accumulates.
+Sections 1-4 predate the data gaps listed in section 6; any later re-run must
+account for them (e.g. exclude the gap from coverage and rate figures).
 
 | Script | Invocation |
 |---|---|
@@ -130,3 +132,33 @@ flowchart LR
     server["Server<br/>storage, analysis, dashboard<br/>(future)"]
     buffer -. "store-and-forward<br/>over HTTPS (future)" .-> server
 ```
+
+## 6. Known data gaps
+
+Windows in which the buffer has no usable polls. Exclude them from coverage,
+rate and "never seen" statements, and do not schedule staged experiments into
+them.
+
+| From (UTC) | To (UTC) | Length | Cause |
+|---|---|---|---|
+| 2026-09-22 13:43:21 (last ok poll) | 2026-09-23 09:26:58 (first ok poll) | 19 h 44 m | Root filesystem full (Kismet logs) |
+
+**2026-09-22 disk-full gap** (boundaries read from `polls` in the live buffer):
+
+- Cause: 11 GB of kismetdb logs in `/var/lib/kismet` (79 files, 69 of them empty)
+  filled the 15 GB root filesystem. Each file was ~93 % logged frames (~1.5 GB/day),
+  which nothing on the sensor reads.
+- Kismet's own log stopped growing at 12:19:57 (its writes failed first); the
+  collector kept polling until 13:43:21, then there are no rows at all until
+  20:01:57.
+- 20:01:57-20:29:27: 56 failed polls (`ok = 0`, connection refused) while Kismet
+  crash-looped every ~6 s, leaving one empty `.kismet` file per attempt.
+- From 20:29 the collector itself crash-looped (>1500 restarts) on
+  `sqlite3.OperationalError: disk I/O error` at `PRAGMA journal_mode=WAL` and
+  wrote nothing until the disk was freed on 2026-09-23.
+- No data loss before the gap: the buffer passed `PRAGMA quick_check` after WAL
+  replay (a copy taken during the outage; opening the main file without its WAL
+  showed it as malformed, so the `-wal` file must never be deleted by hand).
+- Fixes (`install_sensor.sh`): no frame logging in kismetdb, idle-device expiry in
+  Kismet's tracker, the kismetdb log retention timer, a journald size cap - see
+  `CLAUDE.md`, "Disk-full incident".
