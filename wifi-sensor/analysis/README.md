@@ -18,6 +18,7 @@ same way the collector resolves it: positional `DB_PATH` argument, then the
 | `analyze.py` | Summary of the buffer (totals, RSSI stability, config changes, alerts, probes, growth) |
 | `rssi_stability.py` | RSSI baseline statistics across all APs (per-AP std dev distribution, day-to-day drift, out-of-baseline rate per threshold) |
 | `inventory_changes.py` | Characterisation of AP inventory churn (baseline vs later, transient vs sustained, impostor candidates for protected SSIDs) |
+| `probe_study/` | Probe-request feasibility study tools: live capture from Kismet's stream to tmpfs, fingerprint/linkage analysis, hop-dwell measurement. Not installed; run from the repo clone. See `probe_study/README.md` |
 
 ## analyze.py
 
