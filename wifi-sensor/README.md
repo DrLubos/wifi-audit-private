@@ -27,7 +27,7 @@ USB adapter (wlan1, monitor mode)
 
 | Path | Purpose |
 |---|---|
-| `install_sensor.sh` | Provisions Kismet from its apt repo, chrony, the unprivileged `kismet.service` override, the pre-start, watchdog and log-retention helpers, and a journald size cap. Run first. |
+| `install_sensor.sh` | Provisions Kismet from its apt repo, chrony, the unprivileged `kismet.service` override, the pre-start, watchdog and log-retention helpers, the Kismet hop list (`CAPTURE_CHANNELS`), and a persistent, size-capped journal. Run first. |
 | `install_collector.sh` | Installs the collector daemon and the analysis scripts, creates the config and buffer directory, enables `wifi-sensor-collector.service`. Run second. |
 | `sensor.conf.example` | Installer configuration template (copy to `sensor.conf`, gitignored). |
 | `sensor/` | Kismet-side helpers: `kismet-prestart.sh` (USB/clock wait, stale monitor VIF cleanup, log retention), `capture-watchdog.sh` (restarts Kismet / reloads the driver / re-plugs USB when no frames arrive) and `kismet-log-retention.sh` (hourly + every Kismet start: deletes old / empty / over-cap kismetdb logs, never the open one). |
@@ -64,7 +64,7 @@ systemctl status kismet wifi-sensor-collector
 journalctl -u wifi-sensor-collector -f        # "poll ok: total=… active=… skipped=0 …"
 systemctl list-timers wifi-sensor-capture-watchdog.timer wifi-sensor-kismet-log-retention.timer
 journalctl -u wifi-sensor-kismet-log-retention  # which kismetdb logs were deleted
-df -h / ; journalctl --disk-usage              # journal capped at 200 MB
+df -h / ; journalctl --disk-usage              # persistent journal, capped at 200 MB
 iw dev                                        # expect wlan1mon, type monitor
 
 python3 /opt/wifi-sensor/analysis/analyze.py  # buffer overview (read-only)

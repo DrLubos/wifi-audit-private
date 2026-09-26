@@ -51,6 +51,9 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   `rtw88_8821cu` (RTL8821CU), monitor mode confirmed. Selected via the installer's
   `CAPTURE_IFACE` config (never hardcoded); a replacement must also be USB,
   monitor-capable, and must not be the SSH uplink - the installer refuses otherwise.
+  The hop list comes from the installer's `CAPTURE_CHANNELS` (built-in list only for
+  `rtw88_8821cu`; a replacement adapter falls back to Kismet's autodetected list -
+  check it for invalid entries like `165HT40-`, see the WARN storm below).
   Avoid chipsets needing out-of-tree / DKMS drivers (e.g. AIC8800 - no usable
   mainline monitor driver).
 - Built-in Wi-Fi (`wlan0`, brcmfmac) / Ethernet: management and uplink ONLY, never
@@ -121,15 +124,36 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
     (`wifi-sensor-kismet-log-retention.timer`) + step 0 of the pre-start (so a crash
     loop cannot pile up empty logs). See the retention policy under Collector.
   - journald drop-in `/etc/systemd/journald.conf.d/60-wifi-sensor.conf`: persistent,
-    `SystemMaxUse=200M`, `SystemKeepFree=1G`.
-- **rtw88 WARN storm - NEXT TASK:** since at least 2026-09-22 21:03 UTC the kernel
-  logs ~430 `rtw_get_tx_power_params` WARN traces per minute (`phy.c:1876/2193`, via
-  `rtw_ops_config` -> `rtw_set_channel`, i.e. on channel changes - presumably
-  Kismet's hopping; not yet confirmed) - continuously,
-  not the 41 s burst of 2026-09-21. journald does not rate-limit kernel messages,
-  so with the now persistent journal this means **continuous SD-card writes until
-  the storm is fixed**: the 200 MB cap bounds the space, not the wear. Fixing (or
-  suppressing at the source) the rtw88 storm is the next task.
+    `SystemMaxUse=200M`, `SystemKeepFree=1G`. It deliberately overrides Raspberry Pi
+    OS's `/usr/lib/systemd/journald.conf.d/40-rpi-volatile-storage.conf`
+    (`Storage=volatile`). **Until 2026-09-27 it had no effect:** journald moves to
+    `/var/log/journal` only after a flush, the boot-time flush had run under volatile
+    storage (no reboot since 09-15), so the journal stayed in the 48 MB `/run` journal
+    and the WARN storm rotated it in ~4 min. `configure_journald()` now ensures
+    `/var/log/journal` (tmpfiles owner/ACLs) and runs `journalctl --flush` when
+    `/run/systemd/journal/flushed` is missing; after a reboot
+    `systemd-journal-flush.service` does it by itself.
+- **rtw88 WARN storm - fixed in the installer, pending verification on the Pi:**
+  since at least 2026-09-22 21:03 UTC the kernel logged ~456 `rtw_get_tx_power_params`
+  WARN traces per minute (`phy.c:1876/2193`, via `rtw_ops_config` -> `rtw_set_channel`).
+  Root cause (2026-09-26): every trace is `band=1 bw=1 ch=163`, i.e. Kismet's
+  autodetected hop entry `165HT40-` - channel 165 has no 40 MHz partner and
+  `rtw_get_channel_group()` has no case for center 163. Measured effect: that hop
+  dwelled 721 ms instead of 215 ms (a 0.5 s stall per ~20 s hop cycle) and the
+  capture helper used ~4 % of a core, almost all kernel time. Fix: the installer
+  writes an explicit hop list (`CAPTURE_CHANNELS`; default for `rtw88_8821cu`:
+  Kismet's 91-entry autodetected list minus `165HT40-`, same order; `auto` for
+  other drivers). **Do not use `block_channels`** in Kismet 2025-09-R1: it passes a
+  `strcasecmp != 0` comparator to `string_vector_inline_filter` (`util.h`), which
+  erases the first entry that does NOT match - `block_channels=165HT40-` would drop
+  channel 1 instead. Any hop-list change alters per-channel dwell: record it with
+  its effective time in `docs/findings.md` (section 7). Channel reweighting for the
+  probe study is a separate, later decision.
+- **Open item - capture helper restarts:** Kismet's datasource reported
+  `retry_attempts = 45` (`error_reason` "IPC connection closed") after 3.4 days of
+  Kismet uptime, ~13 helper restarts/day, each a short capture gap. Cause unknown
+  (the old volatile journal kept only ~4 min). Re-measure after the storm fix with
+  the persistent journal (`journalctl -u kismet`, delta of `retry_attempts`).
 
 ## Data to read from Kismet (targets for the collector, Milestone 2)
 

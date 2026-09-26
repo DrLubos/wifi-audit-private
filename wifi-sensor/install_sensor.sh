@@ -20,7 +20,7 @@
 #
 # Disk and memory bounds (after the 2026-09-22 disk-full incident): kismetdb
 # without frame logging, idle devices expire from Kismet's tracker, log
-# retention as above, and a journald size cap.
+# retention as above, and a persistent, size-capped journal.
 #
 # Usage - on the Pi, from the wifi-sensor/ folder of the monorepo clone, from
 # your normal user account (never as root directly):
@@ -34,6 +34,10 @@
 #
 #   CAPTURE_IFACE      Wireless interface of the USB capture adapter (e.g. wlan1).
 #                      Prompted for if unset.
+#   CAPTURE_CHANNELS   Kismet hop list for the capture source: a comma-separated
+#                      Kismet channel list, or 'auto' for Kismet's autodetected
+#                      list. Default: a built-in list for the rtw88_8821cu
+#                      driver (auto minus 165HT40-), 'auto' for other drivers.
 #   SENSOR_USER        Unprivileged user that runs the Kismet server.
 #                      Default: the user who invoked sudo.
 #   KISMET_LOG_DIR     Directory for kismetdb logs.   Default: /var/lib/kismet
@@ -62,7 +66,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export DEBIAN_FRONTEND=noninteractive
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONF_VARS=(CAPTURE_IFACE SENSOR_USER KISMET_LOG_DIR KISMET_LOG_TITLE
+CONF_VARS=(CAPTURE_IFACE CAPTURE_CHANNELS SENSOR_USER KISMET_LOG_DIR KISMET_LOG_TITLE
            KISMET_HTTPD_PORT KISMET_HTTPD_USER KISMET_HTTPD_PASS INSTALL_DIR
            KISMET_LOG_KEEP_DAYS KISMET_LOG_MAX_MB KISMET_LOG_MIN_FREE_MB)
 
@@ -83,6 +87,25 @@ KISMET_ETC_HTTPD_CONF="/etc/kismet/kismet_httpd.conf"
 KISMET_UNIT_OVERRIDE="/etc/systemd/system/kismet.service.d/override.conf"
 NM_CONF="/etc/NetworkManager/conf.d/99-wifi-sensor-capture.conf"
 JOURNALD_CONF="/etc/systemd/journald.conf.d/60-wifi-sensor.conf"
+JOURNAL_DIR="/var/log/journal"
+JOURNAL_FLUSHED_FLAG="/run/systemd/journal/flushed"
+
+# Hop list for the RTL8821CU (rtw88_8821cu): Kismet 2025-09's autodetected list
+# (91 entries, same order) without 165HT40-. Channel 165 has no 40 MHz partner;
+# tuning to it (center 163) hits rtw_get_channel_group()'s default case, and the
+# driver logged ~456 WARN traces/min (rtw_get_tx_power_params, phy.c:1876/2193)
+# and stalled that hop for 721 ms instead of 215 ms (measured 2026-09-26).
+# An explicit channels= list is used because block_channels is broken in
+# 2025-09-R1: it erases the first entry that does NOT match (kis_datasource.cc
+# passes a strcasecmp != 0 comparator to string_vector_inline_filter), so
+# block_channels=165HT40- would drop channel 1 instead.
+RTW88_8821CU_CHANNELS="1,1HT40+,2,3,4,5,6,6HT40-,6HT40+,7,8,9,10,11,11HT40-,12,13,\
+36,36HT40+,36VHT80,40,40HT40-,40VHT80,44,44HT40+,44VHT80,48,48HT40-,48VHT80,\
+52,52HT40+,52VHT80,56,56HT40-,56VHT80,60,60HT40+,60VHT80,64,64HT40-,64VHT80,\
+100,100HT40+,100VHT80,104,104HT40-,104VHT80,108,108HT40+,108VHT80,112,112HT40-,112VHT80,\
+116,116HT40+,116VHT80,120,120HT40-,120VHT80,124,124HT40+,124VHT80,128,128HT40-,128VHT80,\
+132,132HT40+,132VHT80,136,136HT40-,136VHT80,140,140HT40-,140VHT80,144,144HT40-,144VHT80,\
+149,149HT40+,149VHT80,153,153HT40-,153VHT80,157,157HT40+,157VHT80,161,161HT40-,161VHT80,165"
 
 # ------------------------------------------------------------------ helpers --
 ts()   { date '+%H:%M:%S'; }
@@ -233,6 +256,30 @@ check_monitor_mode() {
   log "monitor mode: supported (frame injection is not needed by a passive sensor and is not tested)"
 }
 
+# Sets KISMET_SOURCE_OPTS (appended to the source= line) from CAPTURE_CHANNELS.
+# Needs CAPTURE_DRIVER, so it runs after check_capture_iface.
+resolve_capture_channels() {
+  local chans=${CAPTURE_CHANNELS:-} list
+  if [[ -z $chans ]]; then
+    if [[ $CAPTURE_DRIVER == rtw88_8821cu ]]; then
+      chans=$RTW88_8821CU_CHANNELS
+    else
+      log "hop list: no built-in list for driver $CAPTURE_DRIVER - using Kismet's autodetected list"
+      chans=auto
+    fi
+  fi
+  if [[ $chans == auto ]]; then
+    KISMET_SOURCE_OPTS=""
+    log "hop list: Kismet autodetect"
+    return
+  fi
+  [[ $chans =~ ^[0-9A-Za-z+-]+(,[0-9A-Za-z+-]+)*$ ]] \
+    || die "CAPTURE_CHANNELS must be 'auto' or a comma-separated Kismet channel list (got '$chans')"
+  KISMET_SOURCE_OPTS=",channels=\"$chans\""
+  IFS=, read -ra list <<<"$chans"
+  log "hop list: ${#list[@]} channels"
+}
+
 # ------------------------------------------------------------- credentials --
 KEEP_CREDS=0
 collect_credentials() {
@@ -354,11 +401,16 @@ install_chrony() {
 }
 
 configure_journald() {
-  step "journald: size cap"
+  step "journald: persistent, size cap"
   local kismet_changed=$CHANGED
+  # Raspberry Pi OS keeps the journal in RAM (raspberrypi-sys-mods ships
+  # journald.conf.d/40-rpi-volatile-storage.conf, Storage=volatile) to spare
+  # the SD card. This drop-in deliberately overrides it: without a persistent
+  # journal an incident (Kismet abort, helper crash, driver WARNs) cannot be
+  # reconstructed afterwards. The wear is bounded by the caps below.
   # No cap is set by default, which lets journald take up to 10 % of the
   # filesystem (~1.5 GB on the 15 GB card), and journald does not rate-limit
-  # kernel messages - the rtw88 WARN storm (~430 traces/min) would fill it.
+  # kernel messages (the rtw88 WARN storm logged ~456 traces/min).
   # SystemKeepFree protects the collector buffer on the same filesystem.
   write_if_changed "$JOURNALD_CONF" 0644 root:root <<EOF
 # Managed by install_sensor.sh (wifi-sensor).
@@ -375,7 +427,20 @@ EOF
   fi
   # A journald-only change must not restart Kismet.
   CHANGED=$kismet_changed
-  log "journal: $(journalctl --disk-usage 2>/dev/null || echo '?')"
+  # Owner, mode and ACLs as systemd's tmpfiles.d/systemd.conf expects them.
+  install -d -m 2755 -o root -g systemd-journal "$JOURNAL_DIR"
+  systemd-tmpfiles --create --prefix "$JOURNAL_DIR" || warn "systemd-tmpfiles failed for $JOURNAL_DIR"
+  # journald writes to /var only after a flush. At boot systemd-journal-flush
+  # does it, but on a system that booted with volatile storage a journald
+  # restart alone keeps the journal in /run - flush once if it never happened.
+  if [[ ! -e $JOURNAL_FLUSHED_FLAG ]]; then
+    if journalctl --flush; then
+      log "journal flushed to $JOURNAL_DIR"
+    else
+      warn "journalctl --flush failed - the journal stays in RAM until the next boot"
+    fi
+  fi
+  log "journal: $(journalctl --disk-usage 2>/dev/null || echo '?') ($JOURNAL_DIR: $(du -sh "$JOURNAL_DIR" 2>/dev/null | cut -f1))"
 }
 
 # ---------------------------------------------------------- capture adapter --
@@ -435,9 +500,12 @@ configure_kismet() {
 # --- capture ---------------------------------------------------------------
 # Dedicated USB adapter. Kismet puts it into monitor mode and hops channels
 # itself; nothing else on the system touches this interface.
-source=${CAPTURE_IFACE}:name=capture,type=linuxwifi
-# To pin the sensor to fixed channels later, e.g.:
-#   source=${CAPTURE_IFACE}:name=capture,type=linuxwifi,channels="1,6,11"
+# The hop list comes from CAPTURE_CHANNELS (installer config). For the
+# RTL8821CU it is Kismet's autodetected list without 165HT40- (no 40 MHz
+# partner; it caused an rtw88 WARN storm and a 0.5 s stall per hop cycle).
+# Do not use block_channels= in Kismet 2025-09: it removes the wrong entry.
+# CAPTURE_CHANNELS=auto restores Kismet's own list.
+source=${CAPTURE_IFACE}:name=capture,type=linuxwifi${KISMET_SOURCE_OPTS}
 
 # --- logging ---------------------------------------------------------------
 # kismetdb (SQLite) only. Nothing on the sensor reads it - the collector uses
@@ -630,7 +698,7 @@ for s in srcs:
     if s.get("kismet.datasource.error"):
         print("  datasource %s (%s): ERROR - %s" % (name, iface, s.get("kismet.datasource.error_reason")))
     elif s.get("kismet.datasource.running") and pk > 0:
-        print("  datasource %s (%s): running, hopping=%s, %d packets" % (name, iface, s.get("kismet.datasource.hopping"), pk))
+        print("  datasource %s (%s): running, hopping=%s, hop channels: %d, %d packets" % (name, iface, s.get("kismet.datasource.hopping"), len(s.get("kismet.datasource.hop_channels") or []), pk))
     elif s.get("kismet.datasource.running"):
         print("  datasource %s (%s): running but NO packets yet - the watchdog will restart Kismet if this persists" % (name, iface))
     else:
@@ -671,7 +739,8 @@ print_next_steps() {
              sudo env KISMET_LOG_DIR=${KISMET_LOG_DIR} KISMET_LOG_TITLE=${KISMET_LOG_TITLE} KISMET_LOG_KEEP_DAYS=${KISMET_LOG_KEEP_DAYS} \\
                KISMET_LOG_MAX_MB=${KISMET_LOG_MAX_MB} KISMET_LOG_MIN_FREE_MB=${KISMET_LOG_MIN_FREE_MB} \\
                ${INSTALL_DIR}/sensor/kismet-log-retention.sh --dry-run
-  Journal    journalctl --disk-usage                  (capped: ${JOURNALD_CONF})
+  Journal    journalctl --disk-usage                  (persistent in ${JOURNAL_DIR}, capped: ${JOURNALD_CONF})
+             journalctl --list-boots                  # previous boots must be listed
   Time       chronyc tracking
   Rules      never run 'sudo kismet' - the service runs unprivileged as '${SENSOR_USER}'.
              '${SENSOR_USER}' is in group 'kismet'; log out and in again before running kismet by hand.
@@ -719,6 +788,7 @@ main() {
   log "protected (uplink/SSH) interfaces: ${!PROTECTED[*]}"
   select_capture_iface
   check_capture_iface
+  resolve_capture_channels
   # All interactive input happens here, before the long-running apt steps.
   collect_credentials
 

@@ -8,6 +8,13 @@
 # Wireless interface of the dedicated USB capture adapter (see: iw dev).
 CAPTURE_IFACE=wlan1
 
+# Kismet hop list for the capture source: 'auto' (Kismet's autodetected list) or
+# a comma-separated Kismet channel list, e.g. 1,6,11,36,40,44,48.
+# Default: for the rtw88_8821cu driver a built-in list (Kismet's autodetected
+# list without 165HT40-, which triggers an rtw88 WARN storm); 'auto' otherwise.
+# Changing it changes per-channel dwell - note the date in docs/findings.md.
+#CAPTURE_CHANNELS=auto
+
 # Unprivileged user that runs the Kismet server. Default: the user invoking sudo.
 #SENSOR_USER=pi
 
