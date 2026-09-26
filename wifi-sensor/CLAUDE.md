@@ -126,14 +126,18 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   - journald drop-in `/etc/systemd/journald.conf.d/60-wifi-sensor.conf`: persistent,
     `SystemMaxUse=200M`, `SystemKeepFree=1G`. It deliberately overrides Raspberry Pi
     OS's `/usr/lib/systemd/journald.conf.d/40-rpi-volatile-storage.conf`
-    (`Storage=volatile`). **Until 2026-09-27 it had no effect:** journald moves to
+    (`Storage=volatile`). **Until 2026-09-26 ~22:40 UTC it had no effect:** journald moves to
     `/var/log/journal` only after a flush, the boot-time flush had run under volatile
     storage (no reboot since 09-15), so the journal stayed in the 48 MB `/run` journal
     and the WARN storm rotated it in ~4 min. `configure_journald()` now ensures
     `/var/log/journal` (tmpfiles owner/ACLs) and runs `journalctl --flush` when
     `/run/systemd/journal/flushed` is missing; after a reboot
-    `systemd-journal-flush.service` does it by itself.
-- **rtw88 WARN storm - fixed in the installer, pending verification on the Pi:**
+    `systemd-journal-flush.service` does it by itself. Verified by the controlled
+    reboot of 2026-09-26 22:46: `journalctl --list-boots` lists the previous boot.
+    Journal lines before each boot's "clock synchronised" pre-start line carry the
+    stale clock (no RTC).
+- **rtw88 WARN storm - fixed, verified 2026-09-26** (0 WARNs since the Kismet
+  restart at 22:45:26 UTC and across the reboot; max dwell 0.223 s):
   since at least 2026-09-22 21:03 UTC the kernel logged ~456 `rtw_get_tx_power_params`
   WARN traces per minute (`phy.c:1876/2193`, via `rtw_ops_config` -> `rtw_set_channel`).
   Root cause (2026-09-26): every trace is `band=1 bw=1 ch=163`, i.e. Kismet's
@@ -149,6 +153,15 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   channel 1 instead. Any hop-list change alters per-channel dwell: record it with
   its effective time in `docs/findings.md` (section 7). Channel reweighting for the
   probe study is a separate, later decision.
+- **Open - hop coverage halved since 2026-09-26 22:45:26 UTC (Kismet 2025-09 bug):**
+  the capture helper hops through the shuffled list with a stride derived only from
+  the list length (`capture_framework.c`: first s with `N % (N / s) != 0` - not a
+  coprimality test; the server never sends a stride). For the 90-entry list it
+  picks 4, gcd(90, 4) = 2, so only 45 entries (every other list position) are ever
+  tuned (`dwell_poll.py --list`; `kismet.datasource.hop_shuffle_skip`). The old
+  91-entry list was fully covered by luck. Any hop list must be checked for
+  gcd(N, stride) = 1 - a prime N is safe for every stride. Fix pending (plan);
+  record its effective time in `docs/findings.md` section 7.
 - **Open item - capture helper restarts:** Kismet's datasource reported
   `retry_attempts = 45` (`error_reason` "IPC connection closed") after 3.4 days of
   Kismet uptime, ~13 helper restarts/day, each a short capture gap. Cause unknown

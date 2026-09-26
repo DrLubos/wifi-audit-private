@@ -7,6 +7,9 @@ UTC**, over **3.9 days** of capture (2026-09-15 13:53 -> 2026-09-19 12:34 UTC).
 Re-running the scripts later will shift the values as data accumulates.
 Sections 1-4 predate the data gaps listed in section 6; any later re-run must
 account for them (e.g. exclude the gap from coverage and rate figures).
+Section 7 lists sensor configuration changes that alter what is captured (e.g.
+the channel-hop list, 2026-09-26): compare per-channel figures only within one
+configuration period. Section 8 is the probe-request feasibility study.
 
 | Script | Invocation |
 |---|---|
@@ -142,6 +145,7 @@ them.
 | From (UTC) | To (UTC) | Length | Cause |
 |---|---|---|---|
 | 2026-09-22 13:43:21 (last ok poll) | 2026-09-23 09:26:58 (first ok poll) | 19 h 44 m | Root filesystem full (Kismet logs) |
+| 2026-09-26 22:46:43 (last ok poll) | 2026-09-26 22:48:23 (first ok poll) | 1 m 40 s | Controlled reboot after the hop-list/journal install (`sudo reboot` 22:46:55, Kismet up 22:47:52; one failed poll at 22:47:53) |
 
 **2026-09-22 disk-full gap** (boundaries read from `polls` in the live buffer):
 
@@ -162,3 +166,129 @@ them.
 - Fixes (`install_sensor.sh`): no frame logging in kismetdb, idle-device expiry in
   Kismet's tracker, the kismetdb log retention timer, a journald size cap - see
   `CLAUDE.md`, "Disk-full incident".
+
+## 7. Sensor configuration changes (dataset boundaries)
+
+Changes to the sensor that alter what is captured. Figures that depend on the
+channel coverage (per-channel counts, probe rates, "never seen on channel X")
+must not be compared across these boundaries without saying so. Times are UTC,
+read from the running system after the change (journal, `polls`), not planned.
+
+| Effective from (UTC) | Change | Effect on the data |
+|---|---|---|
+| 2026-09-26 22:45:26 | Hop list: explicit `channels=` list, Kismet's autodetected 91-entry list without `165HT40-` (90 entries, same order, shuffled at 5 hops/s). `install_sensor.sh` restarted Kismet at 22:45:25-26; last poll on the old list 22:45:13, first on the new list 22:45:43 | rtw88 WARN storm over (last WARN 22:45:22; 0 since); the 721 ms stall per cycle is gone (dwell median 0.215 s, max 0.223 s). **But only 45 of the 90 entries are visited** - see below |
+| 2026-09-26 ~22:40 | Journal persistent (`journalctl --flush` during the install; the oldest entry kept from that boot is 22:40:39) | Kernel, Kismet and collector logs survive reboots (200 MB cap). Earlier incidents have only ~4 min of journal. Each boot's first lines carry the stale clock (e.g. 2026-09-15 13:53) until chrony syncs - the pre-start logs "clock synchronised" at that point |
+
+**Hop coverage before and after 22:45:26** (measured with
+`analysis/probe_study/dwell_poll.py`):
+
+| | Before (2026-09-26 ~22:20, 90 s) | After (~22:52, 90 s; 22:59, 20 s) |
+|---|---|---|
+| Hop-list entries | 91 | 90 |
+| Distinct settings visited | 91 | **45** (every other list position) |
+| Dwell per hop | median 0.215 s; `165HT40-` 0.721 s | median 0.215 s, max 0.223 s |
+| Full cycle | ~20.1 s | ~9.7 s (45 x 0.215 s) |
+| 2.4 GHz time share | 18.2 % | 19.7 % (20 s sample) |
+| Channel 165 airtime | ~4.6 % (165 + 165HT40-, incl. stall) | 0 % (`165` is not visited) |
+
+Why only half: the capture helper steps through the (shuffled) list with a fixed
+stride that Kismet 2025-09 derives from the list length alone
+(`capture_framework.c`, `cf_handler_assign_hop_channels`: it accepts the first
+stride s with `N % (N / s) != 0`, which is not a coprimality test). For N = 91
+it happened to pick a stride coprime with 91 (reported `hop_shuffle_skip` 4);
+for N = 90 it picks 4, gcd(90, 4) = 2, so only even list positions are tuned.
+Not visited since 22:45:26: 2.4 GHz `1HT40+`, 3, 5, `6HT40-`, 7, 9, 11 (20 MHz;
+11 is still the primary of `11HT40-`), 12; on 5 GHz every odd position (e.g. 36,
+`36VHT80`, `40HT40-`, 44, `44VHT80`, ..., 165). Adjacent-channel reception on
+2.4 GHz still hears some frames of the skipped channels. This period ends when
+the list length is fixed (pending, see `CLAUDE.md`); that end time goes into this
+table as its own row. No channel reweighting was done - that is a separate,
+later decision for the probe study.
+
+## 8. Probe-request feasibility study (2026-09-26)
+
+Question: can this sensor (Pi 3B+, one RTL8821CU on `rtw88_8821cu`, Kismet
+2025-09-R1, channel hopping) passively fingerprint Wi-Fi clients and re-link
+probe-request bursts of devices that randomise their MAC, from frame features
+(probe-request IEs, 802.11 sequence numbers, timing, RSSI)? Scripts:
+`analysis/probe_study/`. Sample: **2026-09-26 22:01-22:16 UTC (Saturday night)**,
+15 min on the old 91-entry hop list (before section 7): 53,232 frames,
+**355 probe requests from 157 MACs**. All captures lived in tmpfs on the Pi and
+were deleted; MACs/SSIDs were only handled as keyed hashes with a per-run key;
+everything below is aggregate. **Night-time, one location, 15 minutes: repeat at
+the daytime peak before drawing conclusions.**
+
+### Capture paths (verified in the 2025-09-R1 source and live)
+
+| Path | Result |
+|---|---|
+| REST pcapng stream `GET /datasource/pcap/by-uuid/<uuid>/packets.pcapng` (`datasourcetracker.cc`), also `/pcap/all_packets.pcapng` | **Used.** Read-only role, basic auth. Full frames, linktype 127 (radiotap). Filterable only per datasource, device key or BSSID - not by frame type, so every frame is streamed (probe requests were 0.67 %). Fed at the packet-chain logging stage; drops silently when its 512 KB backlog is full (no counter) |
+| Eventbus websocket `/eventbus/events` | Nothing per frame: `NEW_DEVICE`, `DOT11_NEW_PROBED_SSID` (once per new device+SSID), `PACKETCHAIN_STATS`, `ALERT`, `DATASOURCE_*`, `TIMESTAMP`, `MESSAGE`. `/devices/monitor` is per device |
+| Direct capture beside Kismet on `wlan1mon` | Needs root: no tcpdump/tshark/dumpcap/scapy installed, the sensor user has no capabilities (only `kismet_cap_linux_wifi` has `cap_net_admin,cap_net_raw`) |
+| Kismet's `dot11.device.probe_fingerprint` | Per MAC, last value only (Adler-32 over IEs 1, 50, 59, 107, 127, two vendor IEs) - useless across randomised MACs |
+
+**Cross-check, Kismet stream vs raw socket** (`raw_vs_kismet.py`, run by the
+developer with sudo on 2026-09-26 at night, before the hop-list change at
+22:44): 5 min, **58/58 probe requests on both** the raw AF_PACKET socket (kernel
+BPF filter) and the Kismet stream, **0 kernel drops** on the raw socket. CPU:
+Kismet-stream thread ~2.68 s vs raw-socket thread 0.09 s over 300 s (the stream
+parses every frame; the BPF passes only probe requests). The 15-min sample's
+stream delivered ~98 % of the frames the datasource counter advanced by in the
+same window (a 60 s re-run on 2026-09-26 23:00: 98.6 %); the 58/58 result shows
+that this gap did not cost probe requests in that window.
+
+### Feature availability
+
+| Feature | Status | Evidence |
+|---|---|---|
+| Full probe frames + radiotap without root | Available | REST stream, 100 % of frames with radiotap |
+| dBm signal | Available | 2 fields per frame (combined + antenna 0); median -67 dBm, p10/p90 -92/-46 |
+| TSFT | Available | 100 % of frames, monotonic, all distinct |
+| Channel, Flags, Rate, RX flags | Available | Flags always 0x10 (FCS appended); no MCS/VHT/HE fields (probes use legacy rates) |
+| Bad-FCS / drop visibility | Partial | FCS-failed frames are dropped in the kernel (`fcsfail` off): 0 bad frames seen. Stream has no drop counter; `wlan1mon`: 5 of 443k dropped, 0 transmitted |
+| True transmit channel | Partial | Radiotap gives the tuned channel. On 2.4 GHz 58 % of probes with a DS Parameter IE were heard from another channel (off by 1: 96, same: 79); the DS Parameter IE is in only 54 % of frames |
+| IE set/order fingerprint | Partial (low entropy) | 67 content fingerprints over frames, 38 over MACs; 3.3 bits over MACs (max possible 7.3); randomised MACs only 2.9 bits, largest group 54 % of them. Rate IEs differ by band, so fingerprints must be per band |
+| Sequence number within a MAC | Available | consecutive frames: 126 +1..16, 38 +17..256, 26 larger, 8 backwards |
+| Sequence number across a MAC change | Not available | first seq of new randomised MACs uniform (median 2151; 8 < 256 vs 9.2 by chance); nearest same-fingerprint successor within 10 s: 0 of 82 within +64 (1.3 by chance) - reset/randomised on MAC change |
+| Directed vs wildcard | Available, strong linker | 217 directed, 138 wildcard, 10 distinct SSIDs; 96 of 147 randomised MACs sent directed probes |
+| Burst structure | Partial | 214 bursts: 72 % one frame, 88 % on one channel; 118 of 157 MACs seen once |
+| WPS UUID-E | Absent | 0 frames |
+
+Example: 91 randomised MACs (106 frames, 2.4 GHz only, median -50 dBm) share one
+IE fingerprint and one directed SSID (89 % of their frames) - almost certainly
+one nearby device changing its MAC on every scan and trivially re-linkable.
+
+### Rates and coverage
+
+- 24.1 probe requests/min (5-52 per minute), 14.5 bursts/min; 93.6 % of MACs
+  but 65.9 % of frames randomised; 10 global MACs sent 34 % of frames.
+- Collector buffer, 2026-09-23..25 (`buffer_hourly.py`): ~6,500 new probing
+  MACs/day, 99.6 % randomised, most at 00-04 UTC - MAC-per-scan devices, not
+  people. (09-23 starts at 09:27 after the disk-full gap.)
+- Hop list then: 91 entries at 5/s, dwell 0.215 s, cycle ~20 s. Time share vs
+  probe yield: 2.4 GHz 18.2 % of listen time -> 63 % of probes (partly
+  off-channel); 5 GHz 36-48 13.2 % -> 9.6 %; DFS 52-144 52.7 % -> 13.5 %;
+  149-165 15.4 % -> 13.5 %.
+- A phone scan visits each channel for tens of ms; estimated chance of catching
+  a given scan ~0.3-0.45 (not measured), usually with one frame. Continuous
+  multi-day observation compensates - the planned ablation (continuous vs
+  one-shot) rests on this.
+
+### Cost on the Pi (15-min sample)
+
+Kismet 7.6 % of one core while streaming (5.9 % lifetime average, +1.7 points),
+RSS +1 MB; the consumer 0.7 % and 10 MB; loopback stream ~10 KB/s; system 5.9 %
+of 4 cores. Storage: raw probe frames average 179 B (~6 MB/day at the night
+rate); compact per-probe records ~2-3 MB/day; budget <= 10 MB/day for peaks.
+
+### Risks
+
+1. Most randomised MACs send one frame - fingerprints from 1-2 frames.
+2. Sequence-number linkage is not available on this population.
+3. Low IE entropy (~3 bits): linkage has to rest on directed SSIDs, RSSI and
+   timing; daytime samples may spread the classes.
+4. Hopping misses most scan bursts; capture-helper restarts (~13/day before the
+   storm fix) add gaps; the hop coverage bug in section 7 halves the channels.
+5. Weak sample (15 min, night, one site, dominated by one device).
+6. Data protection: keyed hashes are still pseudonymous personal data and
+   directed SSIDs are sensitive - an ethics/GDPR note is needed.
