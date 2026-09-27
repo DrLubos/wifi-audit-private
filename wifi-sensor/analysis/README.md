@@ -13,6 +13,14 @@ same way the collector resolves it: positional `DB_PATH` argument, then the
 `/etc/wifi-sensor/collector.conf` (or `COLLECTOR_CONF`), then
 `/var/lib/wifi-sensor/buffer.db`. All scripts are stdlib only.
 
+**Dataset rule - RSSI floors:** every script reads RSSI through
+`../collector/dataset_rules.py` (found next to `analysis/` both in the repo and
+under `/opt/wifi-sensor`): the adapter's floor values -106/-120 dBm are
+censored readings, never signal levels, and are left out of every RSSI
+statistic. Buffer rows written before schema v5 still carry them raw, so the
+filter is applied on read. Figures published before 2026-09-27 include them
+(`docs/findings.md` sections 2-3 and 11).
+
 | File | Purpose |
 |---|---|
 | `analyze.py` | Summary of the buffer (totals, RSSI stability, config changes, alerts, probes, growth) |
@@ -44,7 +52,16 @@ runs. It describes the data only; nothing is flagged or stored.
 python3 /opt/wifi-sensor/analysis/rssi_stability.py                 # full report
 python3 /opt/wifi-sensor/analysis/rssi_stability.py --no-table --csv ~/rssi_aps.csv
 python3 /opt/wifi-sensor/analysis/rssi_stability.py --min-obs 500 --min-days 3 --thresholds 4,6,8,10
+python3 /opt/wifi-sensor/analysis/rssi_stability.py --until "2026-09-19 12:34" --max-floor-share 0.35
 ```
+
+The dataset section reports the floor readings and the per-AP floor share
+(floor readings / all readings). `--since` / `--until` (UTC, `YYYY-MM-DD[
+HH:MM[:SS]]`) restrict the window; `--max-floor-share F` drops APs whose floor
+share exceeds F (the evil_twin eligibility rule, 0.35 on the server) - dropping
+floor readings biases a weak AP's median upward, so the per-AP figures of such
+APs are not comparable; `--keep-floor` counts the floor values as levels again
+(the pre-2026-09-27 behaviour, only to reproduce old figures).
 
 ## inventory_changes.py
 

@@ -199,7 +199,8 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   windows: `docs/findings.md` section 7.
 - **A capture-helper crash pins the sensor to channel 1 (Kismet 2025-09 bug,
   since the explicit `channels=` list of 2026-09-26 22:45:26) - mitigated by the
-  hop guard (pending deployment; then <= ~16 s of channel-1 data per crash):**
+  hop guard (deployed 2026-09-27 14:15:50 UTC; verified: 3 crashes, each list
+  re-applied 8-10 s later, "live 1 entries -> 89"):**
   after a helper error Kismet re-opens the source from a definition it rebuilds
   without quoting (`kis_datasource.cc`, `generate_source_definition()`: plain
   `key=value` pairs), so `channels="1,1HT40+,..."` comes back as `channels=1` plus
@@ -209,8 +210,9 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   12:22:55; after some crashes the re-opened source delivered no frames at all
   (then the watchdog's stuck-counter check restarts Kismet, ~4-6 min). A plain
   channel-1 capture keeps the counter moving, so **the watchdog does not catch
-  the collapse**. Until fixed, every helper crash can cost hours of coverage -
-  check `kismet.datasource.hop_channels` (or `dwell_poll.py`) after any
+  the collapse** - the hop guard does. Degraded polls show up as
+  `polls.ds_hop_ok = 0` (buffer v4, from 2026-09-27 14:15:57); if the guard is
+  stopped, check `kismet.datasource.hop_channels` (or `dwell_poll.py`) after any
   "IPC connection closed". `auto` lists survive a re-open (no commas in the
   definition). Dated windows: `docs/findings.md` sections 6 and 7.
   **Hop guard** (`sensor/hop_guard.py`, `wifi-sensor-hop-guard.service`, installed
@@ -241,9 +243,11 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   First persistent-journal data (after the storm fix): crashes at 2026-09-26
   23:09:14, 23:29:21, 23:54:22, 2026-09-27 00:11:05, 11:29:37, 11:30:07 and
   12:17:20/39/47 - then none between 00:11 and 11:29 (sensor on channel 1 only at
-  the time, see the item above). Keep counting (`journalctl -u kismet | grep
-  "IPC connection closed"`, delta of `retry_attempts`) and look at the kernel log
-  around each crash. Each crash currently triggers the channel-1 collapse.
+  the time, see the item above); later 14:16:41, 14:19:30 (no USB disconnect in
+  the kernel log) and 18:42:26 (USB disconnect). Keep counting (`journalctl -u
+  kismet | grep "IPC connection closed"`, delta of `retry_attempts`) and look at
+  the kernel log around each crash. Each crash still triggers the channel-1
+  collapse; since the hop guard it lasts ~10 s.
 
 ## Data to read from Kismet (targets for the collector, Milestone 2)
 
@@ -290,6 +294,27 @@ Eventbus (push) for alerts later. Fields of interest:
   there are no `wpa_version`/RSN fields, only `crypt_string` + `crypt_bitfield`;
   `ietag_checksum`/`beacon_fingerprint` vary per beacon (stored per-observation, not
   treated as a stable identity); `/alerts/alerts.json` is 404.
+- **Dataset rules (buffer schema v5, 2026-09-27; `docs/findings.md` section 11) -
+  pending the `install_collector.sh` run:**
+  - **RSSI floors are censored values, not levels.** The RTL8821CU reports
+    -106 dBm as its CCK floor (every 2.4 GHz beacon; `rtw8821c.c`:
+    `lna_gain_table[lna] - 2 * vga`, minimum -106) and -120 dBm as its OFDM
+    clamp. One definition: `collector/dataset_rules.py` (`RSSI_FLOOR_DBM`,
+    `rssi_value()`, `sql_rssi()`), used by `shape.py` and every analysis script.
+    From v5 the collector stores a floor as NULL in `rssi`/`rssi_min`/`rssi_max`
+    and sets `observations.rssi_floor = 1`; older rows keep the raw value, so
+    readers always filter. Never drop floors silently from a per-AP statistic:
+    report the floor share (a weak AP's median is biased upward without them).
+    A different capture adapter needs its floors re-derived (and a section-7
+    row). The server has the same list in `server/schema.sql` (`rssi_valid()`),
+    kept in sync by `collector/tests/test_dataset_rules.py`.
+  - **AP configuration is merged field by field** (`store.merge_config`): NULL
+    from Kismet = unknown, keep the stored value; only known -> different known
+    is a change. Before v5 the alternating empty/real beacon record wrote a
+    history row on almost every poll for some APs (42 % of all history rows).
+  - **`observations.freq_khz` is not the reception channel of `rssi`** (Kismet's
+    device frequency, set from other frames); the AP's channel is
+    `devices.adv_channel`.
 - **Privacy rule:** never collect bystander PII - no `dot11.client.ipdata` (client IPs)
   and no WPS serial/model/manufacturer/device-name fields. Associations and probed
   SSIDs are fine.

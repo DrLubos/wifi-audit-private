@@ -75,8 +75,8 @@ with `ok = 0` and the loop continues; the service is never taken down by it.
 |---|---|---|
 | `polls` | poll | collector/Kismet timestamps, device counts, datasource state, hop-list coverage (`ds_hop_n`, `ds_hop_visited`, `ds_hop_ok`), duration, error |
 | `devices` | device | key, MAC, type, manufacturer, first/last seen; for APs the advertised configuration: SSID, cloaked, `crypt` (Kismet crypt string), `crypt_bits`, MFP supported/required, advertised channel, HT mode, beacon rate, country |
-| `device_config_history` | AP configuration change | the configuration that was replaced, with the poll time of the change |
-| `observations` | active device per poll | Kismet `last_time`, heard frequency and channel, RSSI last/min/max, cumulative packet and byte counters; AP only: associated client count, `disconnects` (size of the current deauth/disassoc burst, not a counter) and `disconnects_last` (unix second of the last deauth/disassoc frame, NULL until one is seen), QBSS station count and channel utilisation, BSS timestamp (uptime), beacon IE checksum and fingerprint; client only: BSSID |
+| `device_config_history` | AP configuration change | the configuration that was replaced, with the poll time of the change; only when a known value changes to a different known value (field-wise merge, see below) |
+| `observations` | active device per poll | Kismet `last_time`, Kismet's device frequency (`freq_khz`, not the channel the RSSI frame was received on - see below) and channel, RSSI last/min/max (adapter floor values stored as NULL with `rssi_floor = 1`, v5), cumulative packet and byte counters; AP only: associated client count, `disconnects` (size of the current deauth/disassoc burst, not a counter) and `disconnects_last` (unix second of the last deauth/disassoc frame, NULL until one is seen), QBSS station count and channel utilisation, BSS timestamp (uptime), beacon IE checksum and fingerprint; client only: BSSID |
 | `device_freq_hist` | device × frequency | cumulative packet count per frequency (Kismet `freq_khz_map`) |
 | `associations` | AP × client MAC | first/last poll at which the client MAC was listed in the AP's associated-client map (Kismet gives no per-client times and never drops entries, so `last_seen` is "still listed", not "last frame") |
 | `probes` | client × SSID | first/last time the SSID was probed for (`""` = wildcard) |
@@ -86,6 +86,33 @@ with `ok = 0` and the loop continues; the service is never taken down by it.
 Cumulative counters are stored as Kismet reports them; deltas are derived when
 the data is analysed, which keeps the collector free of state and robust to
 missed polls. `sent` columns exist for the later upload step.
+
+Schema v5 added `observations.rssi_floor`. The RTL8821CU (`rtw88_8821cu`)
+reports two clamp values: **-106 dBm** for CCK frames (every 2.4 GHz beacon;
+`rtw8821c.c` computes `lna_gain_table[lna] - 2 * vga`, and -106 is the smallest
+value that formula can produce) and **-120 dBm** for OFDM frames
+(`max(PWDB - 110, -120)`). A floor means "at or below the floor", not a signal
+level: 3.6 % of all readings were exactly -106 (`docs/findings.md` sections 10
+and 11). From v5 `rssi`, `rssi_min` and `rssi_max` are NULL for a floor value
+and `rssi_floor = 1` records that the last reading was one, so the per-AP floor
+share (an eligibility criterion for RSSI baselines) stays countable. The one
+definition is `dataset_rules.py`, used by `shape.py` and the analysis scripts;
+rows written before v5 keep the raw -106/-120 in `rssi`, so every reader filters
+them (`dataset_rules.rssi_value()` / `sql_rssi()`). A different capture adapter
+needs its floors re-derived. Migration as for v3 (`ALTER TABLE ADD COLUMN`); to
+roll the code back set `meta.schema_version` to `4`.
+
+AP configuration (advertised channel, HT mode, beacon rate, country, ...) is
+merged field by field (`store.merge_config`): a NULL from Kismet means "not in
+this record, keep the stored value"; only a known value replaced by a
+different known value writes a `device_config_history` row and bumps
+`config_changed_at`, and unknown -> known fills the field silently. Before this
+(until the v5 collector deployment) Kismet's alternating empty/real
+`last_beaconed_ssid_record` (channel 0, empty HT mode, beacon rate 0 -> NULL)
+wrote a history row on almost every poll for some APs and blanked their
+`devices` configuration in between; 42 % of the server's history rows are this
+artefact (`docs/findings.md` section 11). Consequence of the merge: a field
+that genuinely disappears (e.g. a dropped country IE) is no longer recorded.
 
 Schema v4 added `polls.ds_hop_n` (live hop-list length), `ds_hop_visited`
 (entries the capture helper really tunes: N / gcd(N, shuffle stride)) and
@@ -156,7 +183,17 @@ SELECT header, COUNT(*) FROM alerts GROUP BY header;
   change constantly), so they are per-poll observation values, not part of the
   configuration diff.
 - `kismet.device.base.channel` is the last *known* channel and can disagree
-  with `frequency` on clients; `frequency` is stored as the heard frequency.
+  with `frequency` on clients. `frequency` (stored as `freq_khz`) is the
+  frequency Kismet attributed to the frame that last updated the device's
+  frequency (`devicetracker.cc`: the frame's own channel information if any,
+  else the tuned channel) - a different subset of frames than the one that sets
+  the signal. It is **not** the reception channel of `rssi` and not reliably the
+  AP's channel (a channel-12 BSSID showed 2417, 2437 and 5260 MHz); for the AP's
+  channel use `devices.adv_channel`.
+- An AP's `signal.last_signal` comes from a beacon
+  (`dot11_ap_signal_from_beacon=true` in the packaged `kismet_80211.conf`) and
+  Kismet takes the first radiotap dBm_AntSignal field; on 2.4 GHz that is a
+  1 Mbps CCK beacon, hence the -106 dBm floor above.
 - `/alerts/alerts.json` does not exist; `/alerts/last-time/{ts}/alerts.json` does.
   No alert had fired while this was written, so alert field *types* are handled
   leniently and the full alert JSON is kept in `alerts.raw`.

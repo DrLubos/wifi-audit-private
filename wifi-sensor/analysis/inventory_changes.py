@@ -58,6 +58,11 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "collector"))
+from dataset_rules import sql_rssi  # noqa: E402  (RSSI floors are censored, not levels)
+
+RSSI = sql_rssi("o.rssi")
+
 DEFAULT_CONF = "/etc/wifi-sensor/collector.conf"
 DEFAULT_DB = "/var/lib/wifi-sensor/buffer.db"
 LIFETIME_BINS = ((5 * 60, "< 5 min"), (3600, "5 min .. 1 h"), (6 * 3600, "1 .. 6 h"),
@@ -215,11 +220,11 @@ def load_aps(db, args, capture):
     rows = db.execute(
         "SELECT d.key, d.mac, d.manuf, d.ssid, d.cloaked, d.crypt, d.adv_channel, "
         "d.first_seen, d.last_seen, "
-        "COUNT(o.id) AS n_obs, COUNT(o.rssi) AS n_rssi, MIN(o.ts) AS obs_first, "
-        "MAX(o.ts) AS obs_last, AVG(o.rssi) AS rssi_avg, MAX(o.rssi) AS rssi_max, "
-        "COUNT(DISTINCT %s) AS days "
+        "COUNT(o.id) AS n_obs, COUNT({r}) AS n_rssi, MIN(o.ts) AS obs_first, "
+        "MAX(o.ts) AS obs_last, AVG({r}) AS rssi_avg, MAX({r}) AS rssi_max, "
+        "COUNT(DISTINCT {d}) AS days "
         "FROM devices d LEFT JOIN observations o ON o.key = d.key "
-        "WHERE d.type = 'ap' GROUP BY d.key" % date_expr("o.ts")).fetchall()
+        "WHERE d.type = 'ap' GROUP BY d.key".format(r=RSSI, d=date_expr("o.ts"))).fetchall()
     aps = {}
     for r in rows:
         a = dict(r)
@@ -247,7 +252,7 @@ def enrich(db, a):
     if a["rssi_med"] is not None or a["seen_pct"] is not None:
         return
     vals = [r[0] for r in db.execute(
-        "SELECT rssi FROM observations WHERE key = ? AND rssi IS NOT NULL", (a["key"],))]
+        "SELECT %s FROM observations o WHERE o.key = ? AND %s IS NOT NULL" % (RSSI, RSSI), (a["key"],))]
     a["rssi_med"] = statistics.median(vals) if vals else None
     if a["obs_first"] is not None:
         polls = db.execute("SELECT COUNT(*) FROM polls WHERE ok = 1 AND ts BETWEEN ? AND ?",

@@ -32,6 +32,26 @@ the live list is the configured one. Kismet 2025-09 can lose channel coverage
 without the packet counter noticing (docs/findings.md section 7); these columns
 make such windows visible in the data. Same metadata-only migration as v3.
 
+Schema v5 adds observations.rssi_floor: the adapter's floor values (-106 CCK,
+-120 OFDM; dataset_rules.py) are censored readings ("at or below the floor"),
+not levels. From v5 rssi is NULL for them and rssi_floor = 1 keeps the fact,
+so the per-AP floor share (an eligibility criterion) stays countable. Rows
+written before v5 keep the raw value in rssi; readers apply
+dataset_rules.rssi_value() / sql_rssi().
+
+Device configuration (the AP's advertised channel, HT mode, beacon rate, ...)
+is merged field by field: a NULL from Kismet means "not in this record",
+never "changed to nothing". Only a known value replaced by a different known
+value is a change (history row, config_changed_at). Until 2026-09-27 an
+alternating empty/real beacon record wrote a history row on almost every poll
+(docs/findings.md section 11); such rows in older buffers are that artefact.
+
+freq_khz is Kismet's kismet.device.base.frequency: the frequency attributed
+to the frame that last updated the device's frequency (Kismet prefers the
+frame's own channel information, else the tuned channel, and updates it from
+other frames than the signal). It is neither the reception channel of rssi
+nor reliably the AP's operating channel - use devices.adv_channel for that.
+
 "sent" columns are for the upload step (later); the prototype only prunes by
 age. No detection lives here - the store only writes what shape.py produced.
 """
@@ -42,7 +62,7 @@ import sqlite3
 
 log = logging.getLogger("collector.store")
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -110,11 +130,12 @@ CREATE TABLE IF NOT EXISTS observations (
   ts        INTEGER NOT NULL,        -- poll ts
   key       TEXT NOT NULL,
   last_time INTEGER NOT NULL,        -- kismet last_time
-  freq_khz  INTEGER,
+  freq_khz  INTEGER,                 -- Kismet device frequency, NOT the rssi frame's channel
   channel   TEXT,
-  rssi      INTEGER,                 -- NULL when Kismet has no reading, never 0
+  rssi      INTEGER,                 -- NULL when no reading or a floor value (v5), never 0
   rssi_min  INTEGER,
   rssi_max  INTEGER,
+  rssi_floor INTEGER,                -- 1 = sig_last was an adapter floor value (v5)
   pk_total  INTEGER,                 -- cumulative counters
   pk_tx     INTEGER,
   pk_rx     INTEGER,
@@ -183,6 +204,16 @@ _CONFIG_COLS = ("ssid", "cloaked", "crypt", "crypt_bits", "mfp_sup", "mfp_req",
                 "adv_channel", "ht_mode", "beacon_rate", "country")
 
 
+def merge_config(old, new):
+    """Field-wise merge of an AP's advertised configuration. A None in NEW means
+    "not in this beacon record" and keeps the OLD value. Returns (merged,
+    changed): changed is True only when a known value was replaced by a
+    different known value - an unknown value becoming known is not a change."""
+    merged = tuple(o if n is None else n for o, n in zip(old, new))
+    changed = any(o is not None and n is not None and n != o for o, n in zip(old, new))
+    return merged, changed
+
+
 class Store:
     def __init__(self, path):
         d = os.path.dirname(os.path.abspath(path))
@@ -204,6 +235,9 @@ class Store:
         if v == "3":
             self._migrate_v3_to_v4()
             v = "4"
+        if v == "4":
+            self._migrate_v4_to_v5()
+            v = "5"
         if v is not None and int(v) != SCHEMA_VERSION:
             raise RuntimeError("database schema version %s, collector expects %d"
                                % (v, SCHEMA_VERSION))
@@ -258,6 +292,21 @@ class Store:
                 if cols and c not in cols:
                     self.db.execute("ALTER TABLE polls ADD COLUMN %s INTEGER" % c)
             self.set_meta("schema_version", "4")
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+
+    def _migrate_v4_to_v5(self):
+        """v5 adds observations.rssi_floor (censored floor readings). ALTER TABLE
+        ADD COLUMN only; older rows read NULL and keep their raw rssi."""
+        log.info("migrating buffer schema v4 -> v5: adding observations.rssi_floor")
+        self.db.execute("BEGIN")
+        try:
+            cols = [r[1] for r in self.db.execute("PRAGMA table_info(observations)")]
+            if cols and "rssi_floor" not in cols:
+                self.db.execute("ALTER TABLE observations ADD COLUMN rssi_floor INTEGER")
+            self.set_meta("schema_version", "5")
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
@@ -363,15 +412,19 @@ class Store:
             sets = ["mac = ?", "type = ?", "manuf = COALESCE(?, manuf)",
                     "first_seen = MIN(first_seen, ?)", "last_seen = MAX(last_seen, ?)"]
             args = [rec["mac"], rec["type"], rec["manuf"], first_seen, rec["last"]]
-            if new_config is not None and new_config != old_config:
-                if any(v is not None for v in old_config):
+            if new_config is not None:
+                merged, changed = merge_config(old_config, new_config)
+                if changed:
                     self.db.execute(
                         "INSERT INTO device_config_history(ts, key, " +
                         ", ".join(_CONFIG_COLS) + ") VALUES (" +
                         ", ".join("?" * (2 + len(_CONFIG_COLS))) + ")",
                         (rec["ts"], key) + old_config)
-                sets += ["%s = ?" % c for c in _CONFIG_COLS] + ["config_changed_at = ?"]
-                args += list(new_config) + [rec["ts"]]
+                    sets += ["config_changed_at = ?"]
+                    args += [rec["ts"]]
+                if merged != old_config:
+                    sets += ["%s = ?" % c for c in _CONFIG_COLS]
+                    args += list(merged)
             args.append(key)
             self.db.execute("UPDATE devices SET " + ", ".join(sets) + " WHERE key = ?", args)
 
@@ -381,12 +434,12 @@ class Store:
         cl = rec.get("cl") or {}
         self.db.execute(
             "INSERT INTO observations(ts, key, last_time, freq_khz, channel, "
-            "rssi, rssi_min, rssi_max, pk_total, pk_tx, pk_rx, pk_data, bytes, "
+            "rssi, rssi_min, rssi_max, rssi_floor, pk_total, pk_tx, pk_rx, pk_data, bytes, "
             "n_clients, disconnects, disconnects_last, qbss_stations, util_pct, bss_timestamp, "
             "ie_checksum, beacon_fp, bssid) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (rec["ts"], key, rec["last"], rec["freq"], rec["ch"],
-             rec["rssi"], rec["rssi_min"], rec["rssi_max"],
+             rec["rssi"], rec["rssi_min"], rec["rssi_max"], rec.get("rssi_floor"),
              rec["pk"], rec["tx"], rec["rx"], rec["data"], rec["bytes"],
              ap["n_clients"] if ap else None,
              ap["disconnects"] if ap else None,

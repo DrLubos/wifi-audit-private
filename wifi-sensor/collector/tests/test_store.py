@@ -9,7 +9,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from shape import shape_alert, shape_device  # noqa: E402
-from store import SCHEMA_VERSION, Store  # noqa: E402
+from store import SCHEMA_VERSION, Store, merge_config  # noqa: E402
 from test_shape import ALERT_RAW, AP_RAW, CLIENT_RAW, TS  # noqa: E402
 
 HEALTH = {"kismet_ts": TS, "devices_total": 2, "ds_running": 1,
@@ -214,7 +214,7 @@ class StoreTest(unittest.TestCase):
         v3.close()
         store = Store(path)
         try:
-            self.assertEqual(store.get_meta("schema_version"), "4")
+            self.assertEqual(store.get_meta("schema_version"), str(SCHEMA_VERSION))
             cols = [r[1] for r in store.db.execute("PRAGMA table_info(polls)")]
             for c in ("ds_hop_n", "ds_hop_visited", "ds_hop_ok"):
                 self.assertIn(c, cols)
@@ -232,6 +232,82 @@ class StoreTest(unittest.TestCase):
         self.store.write_failed_poll(TS + 60, "boom", 5)
         self.assertEqual(self.q("SELECT ds_hop_n, ds_hop_visited, ds_hop_ok FROM polls ORDER BY ts"),
                          [(89, 89, 1), (None, None, None), (None, None, None)])
+
+    def test_migrates_v4_to_v5_adds_rssi_floor(self):
+        path = os.path.join(self.tmp.name, "v4.db")
+        v4 = sqlite3.connect(path)
+        v4.executescript("""
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta VALUES ('schema_version', '4');
+            CREATE TABLE observations (
+              id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, key TEXT NOT NULL,
+              last_time INTEGER NOT NULL, freq_khz INTEGER, channel TEXT,
+              rssi INTEGER, rssi_min INTEGER, rssi_max INTEGER,
+              pk_total INTEGER, pk_tx INTEGER, pk_rx INTEGER, pk_data INTEGER, bytes INTEGER,
+              n_clients INTEGER, disconnects INTEGER, disconnects_last INTEGER,
+              qbss_stations INTEGER, util_pct REAL, bss_timestamp INTEGER, ie_checksum INTEGER,
+              beacon_fp INTEGER, bssid TEXT, sent INTEGER NOT NULL DEFAULT 0);
+            INSERT INTO observations(ts, key, last_time, rssi) VALUES (100, 'AP', 99, -106);
+        """)
+        v4.close()
+        store = Store(path)
+        try:
+            self.assertEqual(store.get_meta("schema_version"), "5")
+            # the pre-v5 row keeps its raw value; readers apply dataset_rules
+            self.assertEqual(store.db.execute("SELECT rssi, rssi_floor FROM observations").fetchall(),
+                             [(-106, None)])
+        finally:
+            store.close()
+
+    def test_floor_reading_is_stored_as_null_with_flag(self):
+        raw = dict(AP_RAW, sig_last=-106, sig_min=-106, sig_max=-60)
+        self.poll(TS, [raw])
+        self.assertEqual(self.q("SELECT rssi, rssi_min, rssi_max, rssi_floor FROM observations"),
+                         [(None, None, -60, 1)])
+        raw2 = dict(raw, sig_last=-70)
+        raw2["kismet.device.base.last_time"] += 10
+        self.poll(TS + 30, [raw2])
+        self.assertEqual(self.q("SELECT rssi, rssi_floor FROM observations ORDER BY ts"),
+                         [(None, 1), (-70, None)])
+
+    def test_empty_beacon_record_does_not_churn_config_history(self):
+        # Kismet alternates between a full and an empty advertised record
+        self.poll(TS, [AP_RAW])
+        empty = dict(AP_RAW, adv_ch=0, ht=0, beacon_rate=0)
+        for i in range(1, 7):
+            raw = dict(empty if i % 2 else AP_RAW)
+            raw["kismet.device.base.last_time"] += 10 * i
+            self.poll(TS + 30 * i, [raw])
+        self.assertEqual(self.q("SELECT COUNT(*) FROM device_config_history")[0][0], 0)
+        self.assertEqual(self.q("SELECT adv_channel, ht_mode, beacon_rate, config_changed_at FROM devices"),
+                         [("8", "HT20", 10, TS)])
+
+    def test_unknown_becoming_known_is_not_a_change(self):
+        first = dict(AP_RAW, adv_ch=0, ht=0)
+        self.poll(TS, [first])
+        self.assertEqual(self.q("SELECT adv_channel, ht_mode FROM devices"), [(None, None)])
+        raw = dict(AP_RAW)
+        raw["kismet.device.base.last_time"] += 10
+        self.poll(TS + 30, [raw])
+        self.assertEqual(self.q("SELECT COUNT(*) FROM device_config_history")[0][0], 0)
+        self.assertEqual(self.q("SELECT adv_channel, ht_mode FROM devices"), [("8", "HT20")])
+
+    def test_real_channel_change_after_empty_records_is_logged_once(self):
+        self.poll(TS, [AP_RAW])
+        empty = dict(AP_RAW, adv_ch=0, ht=0, beacon_rate=0)
+        empty["kismet.device.base.last_time"] += 10
+        self.poll(TS + 30, [empty])
+        moved = dict(AP_RAW, adv_ch="11")
+        moved["kismet.device.base.last_time"] += 20
+        self.poll(TS + 60, [moved])
+        self.assertEqual(self.q("SELECT ts, adv_channel FROM device_config_history"), [(TS + 60, "8")])
+        self.assertEqual(self.q("SELECT adv_channel, config_changed_at FROM devices"), [("11", TS + 60)])
+
+    def test_merge_config(self):
+        self.assertEqual(merge_config(("a", "8"), (None, None)), (("a", "8"), False))
+        self.assertEqual(merge_config((None, "8"), ("a", "8")), (("a", "8"), False))
+        self.assertEqual(merge_config(("a", "8"), ("a", "11")), (("a", "11"), True))
+        self.assertEqual(merge_config(("a", "8"), (None, "11")), (("a", "11"), True))
 
     def test_migrates_v1_associations(self):
         path = os.path.join(self.tmp.name, "v1.db")

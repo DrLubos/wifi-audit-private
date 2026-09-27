@@ -30,6 +30,8 @@ in Kismet increments it (always 0, even on devices with DEAUTHFLOOD alerts).
 import hashlib
 import json
 
+from dataset_rules import is_rssi_floor, rssi_value
+
 _BASE = "kismet.device.base."
 _DOT11 = "dot11.device/dot11.device."
 _ADV = _DOT11 + "last_beaconed_ssid_record/dot11.advertisedssid."
@@ -121,9 +123,16 @@ def _positive(v):
 
 
 def _dbm(v):
-    """Signal level in dBm. 0 is Kismet's blank value, never a reading."""
+    """Signal level in dBm. 0 is Kismet's blank value and the adapter's floor
+    values (dataset_rules.RSSI_FLOOR_DBM) are censored, not levels: both None."""
     n = _positive(v)
-    return int(n) if n is not None else None
+    return rssi_value(n) if n is not None else None
+
+
+def _dbm_floor(v):
+    """1 when the reading is one of the adapter's floor values, else None."""
+    n = _positive(v)
+    return 1 if n is not None and is_rssi_floor(n) else None
 
 
 def _unix_ts(v):
@@ -179,6 +188,7 @@ def shape_device(raw, ts):
         "freq": _positive(raw.get(_BASE + "frequency")),
         "ch": _nonempty(raw.get(_BASE + "channel")),
         "rssi": _dbm(raw.get("sig_last")),
+        "rssi_floor": _dbm_floor(raw.get("sig_last")),   # censoring kept (v5)
         "rssi_min": _dbm(raw.get("sig_min")),
         "rssi_max": _dbm(raw.get("sig_max")),
         "pk": _counter(raw.get(_BASE + "packets.total")),

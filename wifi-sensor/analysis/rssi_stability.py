@@ -26,6 +26,17 @@ Usage:  python3 rssi_stability.py [DB_PATH] [--min-obs N] [--min-days N]
                                   [--min-day-obs N] [--train-frac F]
                                   [--thresholds 3,5,8,...] [--no-table]
                                   [--csv FILE] [--utc]
+                                  [--since WHEN] [--until WHEN]
+                                  [--keep-floor] [--max-floor-share F]
+
+RSSI floors (collector/dataset_rules.py): the adapter's floor values (-106,
+-120 dBm) are censored readings, not levels. By default they are excluded
+from every statistic and counted per AP (floor share); --max-floor-share
+drops APs whose share exceeds F (their median is censored/biased).
+--keep-floor reproduces the reports made before 2026-09-27, which treated
+the floor values as levels (docs/findings.md sections 2-3, superseded).
+--since/--until (UTC, "YYYY-MM-DD[ HH:MM[:SS]]" or unix seconds) restrict the
+readings to a time window.
 
 DB_PATH defaults to DB_PATH from the environment, then from
 /etc/wifi-sensor/collector.conf (or COLLECTOR_CONF), then
@@ -47,6 +58,9 @@ import statistics
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "collector"))
+from dataset_rules import sql_rssi, sql_rssi_is_floor  # noqa: E402  (one definition)
 
 DEFAULT_CONF = "/etc/wifi-sensor/collector.conf"
 DEFAULT_DB = "/var/lib/wifi-sensor/buffer.db"
@@ -232,11 +246,44 @@ def runs_of(flags):
 
 # --- per-AP analysis --------------------------------------------------------------
 
-def load_ap(db, key):
+class Scope:
+    """Which readings count: the RSSI expression (floors as NULL, or raw with
+    --keep-floor) and the optional time window. Every query goes through it."""
+
+    def __init__(self, db, keep_floor, since, until):
+        cols = {r[1] for r in db.execute("PRAGMA table_info(observations)")}
+        self.flag = "o.rssi_floor" if "rssi_floor" in cols else None   # buffer v5+
+        self.rssi = "o.rssi" if keep_floor else sql_rssi("o.rssi")
+        self.is_floor = sql_rssi_is_floor("o.rssi", self.flag)
+        self.present = "(o.rssi IS NOT NULL%s)" % (" OR coalesce(%s, 0) = 1" % self.flag if self.flag else "")
+        self.where, self.args = "", []
+        if since is not None:
+            self.where += " AND o.ts >= ?"
+            self.args.append(since)
+        if until is not None:
+            self.where += " AND o.ts < ?"
+            self.args.append(until)
+
+
+def parse_when(text):
+    if text is None:
+        return None
+    if text.isdigit():
+        return int(text)
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return int(datetime.strptime(text, fmt).replace(tzinfo=timezone.utc).timestamp())
+        except ValueError:
+            pass
+    sys.exit("cannot parse time %r (UTC 'YYYY-MM-DD[ HH:MM[:SS]]' or unix seconds)" % text)
+
+
+def load_ap(db, key, scope):
     """Observations of one AP with an RSSI reading, in time order."""
     return db.execute(
-        "SELECT ts, rssi, freq_khz FROM observations "
-        "WHERE key = ? AND rssi IS NOT NULL ORDER BY ts", (key,)).fetchall()
+        "SELECT o.ts, %s AS rssi, o.freq_khz FROM observations o "
+        "WHERE o.key = ? AND %s IS NOT NULL%s ORDER BY o.ts" % (scope.rssi, scope.rssi, scope.where),
+        [key] + scope.args).fetchall()
 
 
 def analyze_ap(dev, obs, args, thresholds):
@@ -306,17 +353,32 @@ def analyze_ap(dev, obs, args, thresholds):
 
 # --- report sections --------------------------------------------------------------
 
-def show_dataset(db, aps, skipped, args):
+def show_dataset(db, aps, skipped, args, scope, floors):
     section("DATASET")
-    polls = db.execute("SELECT COUNT(*), MIN(ts), MAX(ts), SUM(ok) FROM polls").fetchone()
+    pw = scope.where.replace("o.ts", "ts")
+    polls = db.execute("SELECT COUNT(*), MIN(ts), MAX(ts), SUM(ok) FROM polls WHERE 1 = 1" + pw,
+                       scope.args).fetchone()
     n_ap = db.execute("SELECT COUNT(*) FROM devices WHERE type = 'ap'").fetchone()[0]
-    n_obs = db.execute(
-        "SELECT COUNT(*) FROM observations o JOIN devices d USING(key) "
-        "WHERE d.type = 'ap' AND o.rssi IS NOT NULL").fetchone()[0]
+    n_obs, n_floor = db.execute(
+        "SELECT COUNT(%s), SUM(%s) FROM observations o JOIN devices d USING(key) "
+        "WHERE d.type = 'ap' AND %s%s" % (scope.rssi, scope.is_floor, scope.present, scope.where),
+        scope.args).fetchone()
     print("  polls: %d (%d ok), %s .. %s (%s)" % (
         polls[0] or 0, polls[3] or 0, fmt_ts(polls[1]), fmt_ts(polls[2]),
         fmt_dur((polls[2] or 0) - (polls[1] or 0))))
+    print("  window: %s .. %s (UTC)" % (args.since or "start", args.until or "end"))
     print("  APs in buffer: %d; AP observations with an RSSI reading: %d" % (n_ap, n_obs))
+    print("  RSSI floor readings (-106/-120, censored): %d%s" % (
+        n_floor or 0, " - KEPT AS LEVELS (--keep-floor, pre-2026-09-27 behaviour)" if args.keep_floor
+        else " - excluded from every statistic"))
+    if not args.keep_floor:
+        shares = sorted(floors.values())
+        if shares:
+            print("  floor share per qualifying AP: median %.3f, p90 %.3f, max %.3f; > 0.01: %d, > 0.35: %d"
+                  % (pct(shares, 50), pct(shares, 90), shares[-1], sum(1 for f in shares if f > 0.01),
+                     sum(1 for f in shares if f > 0.35)))
+        print("  APs removed by --max-floor-share %s: %d" % (
+            args.max_floor_share, getattr(args, "floor_removed", 0)))
     print("  qualifying APs (>= %d readings on >= %d distinct days): %d; skipped: %d" % (
         args.min_obs, args.min_days, len(aps), skipped))
     print("  qualifying readings: %d" % sum(a["n"] for a in aps))
@@ -607,6 +669,12 @@ def main():
     ap.add_argument("--no-table", action="store_true", help="skip the long per-AP table")
     ap.add_argument("--csv", metavar="FILE", help="also write the per-AP table as CSV")
     ap.add_argument("--utc", action="store_true", help="day boundaries and times in UTC")
+    ap.add_argument("--since", help="only readings at/after this UTC time")
+    ap.add_argument("--until", help="only readings before this UTC time")
+    ap.add_argument("--keep-floor", action="store_true",
+                    help="treat the adapter's floor values as levels (the superseded pre-2026-09-27 method)")
+    ap.add_argument("--max-floor-share", type=float, default=None, metavar="F",
+                    help="drop APs whose share of floor readings exceeds F (e.g. 0.35)")
     args = ap.parse_args()
     USE_UTC = args.utc
     if not 0.1 <= args.train_frac <= 0.9:
@@ -619,25 +687,42 @@ def main():
     db = open_readonly(path)
     print("wifi-sensor RSSI stability report  -  %s  -  %s" % (path, fmt_ts(datetime.now().timestamp())))
 
+    since, until = parse_when(args.since), parse_when(args.until)
+    scope = Scope(db, args.keep_floor, since, until)
     candidates = db.execute(
-        "SELECT d.key, d.mac, d.ssid, COUNT(o.rssi) AS n "
+        "SELECT d.key, d.mac, d.ssid, COUNT(%s) AS n "
         "FROM devices d JOIN observations o ON o.key = d.key "
-        "WHERE d.type = 'ap' AND o.rssi IS NOT NULL "
-        "GROUP BY d.key HAVING n >= ? ORDER BY n DESC", (args.min_obs,)).fetchall()
+        "WHERE d.type = 'ap' AND %s IS NOT NULL%s "
+        "GROUP BY d.key HAVING n >= ? ORDER BY n DESC" % (scope.rssi, scope.rssi, scope.where),
+        scope.args + [args.min_obs]).fetchall()
     skipped = db.execute(
         "SELECT COUNT(*) FROM (SELECT key FROM observations o JOIN devices d USING(key) "
-        "WHERE d.type = 'ap' AND o.rssi IS NOT NULL GROUP BY key)").fetchone()[0] - len(candidates)
+        "WHERE d.type = 'ap' AND %s IS NOT NULL%s GROUP BY key)" % (scope.rssi, scope.where),
+        scope.args).fetchone()[0] - len(candidates)
+    # floor share per AP over all its readings in the window (valid + floor)
+    floors = {}
+    if not args.keep_floor:
+        for key, nf, nall in db.execute(
+                "SELECT o.key, SUM(%s), COUNT(*) FROM observations o JOIN devices d USING(key) "
+                "WHERE d.type = 'ap' AND %s%s GROUP BY o.key" % (scope.is_floor, scope.present, scope.where),
+                scope.args):
+            floors[key] = (nf or 0) / float(nall)
 
     aps = []
+    args.floor_removed = 0
     for dev in candidates:                 # one AP in memory at a time
-        obs = load_ap(db, dev["key"])
+        if args.max_floor_share is not None and floors.get(dev["key"], 0.0) > args.max_floor_share:
+            args.floor_removed += 1
+            continue
+        obs = load_ap(db, dev["key"], scope)
         a = analyze_ap(dev, obs, args, thresholds)
         if a["ndays"] < args.min_days:
             skipped += 1
             continue
         aps.append(a)
+    floors = {a["key"]: floors[a["key"]] for a in aps if a["key"] in floors}
 
-    show_dataset(db, aps, skipped, args)
+    show_dataset(db, aps, skipped, args, scope, floors)
     if not aps:
         print("\n  no AP qualifies yet - lower --min-obs/--min-days or let the sensor run longer")
         return

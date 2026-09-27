@@ -23,6 +23,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_common as pc  # noqa: E402
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "collector"))
+from dataset_rules import rssi_value  # noqa: E402  (floors are censored)
+
 
 def load(path):
     recs = []
@@ -37,7 +40,7 @@ def load(path):
         recs.append({"ts": ts, "mac": pc.h(d[10:16]), "la": bool(d[10] & 2),
                      "seq": struct.unpack_from("<H", d, 22)[0] >> 4, "fpo": fpo, "fpc": fpc,
                      "ssid": pc.h(ssid) if ssid else None, "freq": rt.get("freq"),
-                     "sig": rt["signals"][0] if rt["signals"] else None, "ds": ds,
+                     "sig": rssi_value(rt["signals"][0]) if rt["signals"] else None, "ds": ds,
                      "ies": sorted({pc.ie_label(k) for k, _ in ies})})
     recs.sort(key=lambda r: r["ts"])
     macs = collections.defaultdict(list)

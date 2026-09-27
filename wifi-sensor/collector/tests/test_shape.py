@@ -180,6 +180,19 @@ class ShapeClientTest(unittest.TestCase):
         self.assertIsNone(r["rssi_min"])
         self.assertEqual(r["rssi_max"], -60)
 
+    def test_signal_floor_is_censored(self):
+        raw = dict(CLIENT_RAW, sig_last=-106, sig_min=-120, sig_max=-60)
+        r = shape_device(raw, TS)
+        self.assertIsNone(r["rssi"])
+        self.assertEqual(r["rssi_floor"], 1)
+        self.assertIsNone(r["rssi_min"])
+        self.assertEqual(r["rssi_max"], -60)
+
+    def test_values_next_to_the_floor_are_levels(self):
+        for v in (-105, -107, -104):
+            r = shape_device(dict(CLIENT_RAW, sig_last=v), TS)
+            self.assertEqual((r["rssi"], r["rssi_floor"]), (v, None))
+
     def test_signal_object_missing(self):
         raw = {k: v for k, v in CLIENT_RAW.items() if not k.startswith("sig_")}
         r = shape_device(raw, TS)

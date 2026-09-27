@@ -25,6 +25,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_common as pc  # noqa: E402
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "collector"))
+from dataset_rules import is_rssi_floor, rssi_value  # noqa: E402  (floors are censored)
+
 BAND_SPECIFIC = ("45", "191", "E35", "E108", "E59")  # HT/VHT/HE/EHT caps
 
 
@@ -51,7 +54,9 @@ def load(path):
         sa = d[10:16]
         fp_order, fp_content = pc.fingerprints(ies)
         recs.append({
-            "ts": ts, "tsft": rt.get("tsft"), "sig": rt["signals"][0] if rt["signals"] else None,
+            "ts": ts, "tsft": rt.get("tsft"),
+            "sig": rssi_value(rt["signals"][0]) if rt["signals"] else None,
+            "sig_floor": bool(rt["signals"]) and is_rssi_floor(rt["signals"][0]),
             "freq": rt.get("freq"), "mac": pc.h(sa), "la": bool(sa[0] & 2), "mc": bool(sa[0] & 1),
             "da_bcast": d[4:10] == b"\xff" * 6, "bssid_bcast": d[16:22] == b"\xff" * 6,
             "seq": struct.unpack_from("<H", d, 22)[0] >> 4, "frag": d[22] & 0xF,
@@ -119,6 +124,7 @@ def main(path):
     R["radiotap_flags_values"] = {("None" if k is None else hex(k)): c for k, c in rts["flags"].items()}
     R["radiotap_unparsed"] = rts["unparsed"][True]
     sigs = [r["sig"] for r in recs if r["sig"] is not None]
+    R["dbm_signal_floor_frames"] = sum(r["sig_floor"] for r in recs)   # censored, not in the stats
     if len(sigs) > 1:
         q = statistics.quantiles(sigs, n=10)
         R["dbm_signal"] = {"min": min(sigs), "p10": q[0], "median": statistics.median(sigs),

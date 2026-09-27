@@ -25,6 +25,12 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "collector"))
+from dataset_rules import sql_rssi  # noqa: E402  (RSSI floors are censored, not levels)
+
+RSSI = sql_rssi("o.rssi")
+RSSI_BARE = sql_rssi("rssi")
+
 DEFAULT_CONF = "/etc/wifi-sensor/collector.conf"
 DEFAULT_DB = "/var/lib/wifi-sensor/buffer.db"
 CONFIG_COLS = ("ssid", "cloaked", "crypt", "crypt_bits", "mfp_sup", "mfp_req",
@@ -248,10 +254,10 @@ def show_rssi(db, top, hist):
     section("PER-AP RSSI (top %d APs by observation count)" % top)
     aps = db.execute(
         "SELECT d.key, d.mac, d.ssid, d.manuf, d.adv_channel, d.crypt, "
-        "COUNT(o.rssi) AS n, MIN(o.ts) AS first, MAX(o.ts) AS last "
+        "COUNT(%s) AS n, MIN(o.ts) AS first, MAX(o.ts) AS last "
         "FROM devices d JOIN observations o ON o.key = d.key "
-        "WHERE d.type = 'ap' AND o.rssi IS NOT NULL "
-        "GROUP BY d.key ORDER BY n DESC LIMIT ?", (top,)).fetchall()
+        "WHERE d.type = 'ap' AND %s IS NOT NULL "
+        "GROUP BY d.key ORDER BY n DESC LIMIT ?" % (RSSI, RSSI), (top,)).fetchall()
     if not aps:
         print("  no AP observations with RSSI")
         return
@@ -260,8 +266,8 @@ def show_rssi(db, top, hist):
     detail = []
     for a in aps:
         vals = [r[0] for r in db.execute(
-            "SELECT rssi FROM observations WHERE key = ? AND rssi IS NOT NULL ORDER BY ts",
-            (a["key"],))]
+            "SELECT %s FROM observations WHERE key = ? AND %s IS NOT NULL ORDER BY ts"
+            % (RSSI_BARE, RSSI_BARE), (a["key"],))]
         polls_in_window = one(db, "SELECT COUNT(*) FROM polls WHERE ok = 1 AND ts BETWEEN ? AND ?",
                               a["first"], a["last"]) or 1
         mean = statistics.fmean(vals)
@@ -291,10 +297,9 @@ def show_rssi(db, top, hist):
             bar = "#" * max(1, int(40.0 * n / peak))
             print("    %4d..%4d dBm  %6d  %s" % (b, b + 4, n, bar))
         days = db.execute(
-            "SELECT %s AS d, COUNT(rssi), MIN(rssi), MAX(rssi), AVG(rssi), "
-            "AVG(rssi * rssi) - AVG(rssi) * AVG(rssi) AS var "
-            "FROM observations WHERE key = ? AND rssi IS NOT NULL GROUP BY d ORDER BY d"
-            % date_expr("ts"), (a["key"],)).fetchall()
+            "SELECT %s AS d, COUNT(r), MIN(r), MAX(r), AVG(r), AVG(r * r) - AVG(r) * AVG(r) AS var "
+            "FROM (SELECT ts, %s AS r FROM observations WHERE key = ?) WHERE r IS NOT NULL "
+            "GROUP BY d ORDER BY d" % (date_expr("ts"), RSSI_BARE), (a["key"],)).fetchall()
         table(["day", "n", "min", "max", "avg", "sd"],
               [(r[0], r[1], r[2], r[3], "%.1f" % r[4], "%.1f" % (max(r[5], 0.0) ** 0.5))
                for r in days], align_right={1, 2, 3, 4, 5})
