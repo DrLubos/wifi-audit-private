@@ -328,8 +328,13 @@ counted in the report's eligibility line and in `info`:
   advertised-channel changes (view `ap_channel_changes`, built from
   `device_config_history`) is dropped before episodes are built; the count is in
   `info.windows_channel_guarded`. Campus APs change channel by themselves
-  (dynamic channel selection) and their level changes with it; a per-channel
-  baseline is left for later.
+  (dynamic channel selection, 15-19 times a day). Measured (findings §10,
+  second pass): without the guard 40 detections / 5 high, with 3600 s 24 / 0
+  high - but the ±1 h zones cover 41 % of campus AP time and deviations are
+  only 1.4× more frequent inside them, so the guard mostly works by not
+  looking. Per-channel medians of most campus BSSIDs differ by ~3 dB (15 of 89
+  by ≥ 6 dB). Candidate replacement, to be measured first: a per-(AP,
+  advertised channel) baseline plus a short guard for the transition itself.
 
 ### Signal (a) algorithm
 
