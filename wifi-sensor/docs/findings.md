@@ -9,7 +9,8 @@ Sections 1-4 predate the data gaps listed in section 6; any later re-run must
 account for them (e.g. exclude the gap from coverage and rate figures).
 Section 7 lists sensor configuration changes that alter what is captured (e.g.
 the channel-hop list, 2026-09-26): compare per-channel figures only within one
-configuration period. Section 8 is the probe-request feasibility study.
+configuration period. Section 8 is the probe-request feasibility study,
+section 9 the channel-plan analysis and the capture-helper crash causes.
 
 | Script | Invocation |
 |---|---|
@@ -302,3 +303,95 @@ rate); compact per-probe records ~2-3 MB/day; budget <= 10 MB/day for peaks.
 5. Weak sample (15 min, night, one site, dominated by one device).
 6. Data protection: keyed hashes are still pseudonymous personal data and
    directed SSIDs are sensitive - an ethics/GDPR note is needed.
+
+## 9. Channel plan analysis (2026-09-27) - analysis only, no config change
+
+Question: the detectors (deauth_flood, evil_twin) and the probe study need
+management frames, which are sent at 20 MHz on the primary channel. Would a
+20 MHz-only hop list, or dropping DFS channels without APs, lose anything, and
+what would it gain in revisit time? Nothing was changed on the sensor.
+
+**Wide dwells hear management frames only on their primary channel.** 150 s on
+2026-09-27 ~13:40 UTC, the tuned setting from `iw` polling matched to 5,448
+frames of the Kismet stream: in 40 MHz dwells 371 of 392 beacons were on the
+primary channel, in 80 MHz dwells 331 of 339, and **0 beacons on a secondary
+20 MHz subchannel**. The remaining ~5 % of frames at +-20-60 MHz occur just as
+often in plain 20 MHz dwells, i.e. frames attributed to the wrong dwell by the
+timestamp lag at hop boundaries. So for beacons, probe requests/responses and
+deauths an HT40/VHT80 hop entry is simply another visit to its primary channel.
+
+**What a 20 MHz-only list would lose:** data (and wide control) frames of 40/80 MHz
+BSSs - 90 of the 385 APs with a known HT mode (HT40+-: 16, HT80: 74; mostly 5 GHz,
+e.g. 30 APs on 44/HT80, plus ~11 HT40 APs on 2.4 GHz). That changes `pk_data`,
+client inference from data frames, and the evil_twin RSSI series
+(`observations.rssi` = Kismet `sig_last`, the last frame of any type): for wide
+5 GHz APs it would become beacon-only - a baseline boundary that needs
+re-baselining.
+
+**AP inventory by primary channel** (569 APs first seen before 2026-09-26 22:45,
+i.e. with the full 91-entry list; 152 sustained = >= 100 observations):
+
+| Band | APs (sustained) | Notes |
+|---|---|---|
+| 2.4 GHz | 302 (79) | busiest primaries 6 (99), 1 (74), 11 (31); every channel 1-13 in use |
+| 5 GHz 36-48 | 50 (15) | all four channels in use; 44 carries 30 HT80 APs |
+| DFS 52-64 | 6 (6) | APs only on 52 and 64 |
+| DFS 100-144 | 20 (19) | APs only on 104, 112, 120, 128 (all wide) |
+| 149-165 | 4 (2) | only 149 |
+| unknown channel | 187 (31) | no advertised channel in the buffer |
+
+DFS primaries without any AP in 11 days: 56, 60, 100, 108, 116, 124, 132, 136, 140,
+144. In the probe study (section 8, 355 frames) 27 probe frames (7.6 %) were
+received on exactly those channels (116: 7, 60: 5, 56: 3, others 1-2) and 24
+(6.8 %) on 165; whether the same bursts were also caught elsewhere is unknown
+(capture deleted) - record it in the daytime repeat.
+
+**Revisit time per primary channel** (dwell 0.215 s; the helper's hop stride
+replayed exactly as it chooses it, see section 7):
+
+| Hop list | Entries (stride) | Cycle | 2.4 GHz share | Revisit ch 1 / 3 / 6 / 13 | 5 GHz primaries |
+|---|---|---|---|---|---|
+| current (since 2026-09-27 13:04:57) | 89 (4) | 19.1 s | 19 % | 9.6 / 19.1 / 6.4 / 19.1 s | 6.4 s (165: 19.1 s) |
+| 20 MHz only | 38 (4) | - | - | **only 19 of 38 visited** (gcd 2) | - |
+| 20 MHz only without 144 | 37 (4) | 8.0 s | 35 % | 8.0 s each | 8.0 s |
+| 20 MHz only + `6HT40-` | 39 (4) | 8.4 s | 36 % | 8.4 / 8.4 / 4.2 / 8.4 s | 8.4 s |
+| current without empty DFS | 60 (7) | 12.9 s | 28 % | 6.4 / 12.9 / 4.3 / 12.9 s | 4.3 s |
+| 20 MHz only without empty DFS | 28 (5) | 6.0 s | 46 % | 6.0 s each | 6.0 s |
+
+Reading: 20 MHz-only (37 or 39 entries) brings the rarely visited 2.4 GHz channels
+(3-5, 7-10, 12, 13) from 19.1 s to ~8 s and nearly doubles the 2.4 GHz listen time
+(where 63 % of the study's probes and most APs are), at the price of slightly
+slower 5 GHz primaries (6.4 -> 8.0 s), the loss of wide-BSS data frames and an
+RSSI baseline boundary. Dropping empty DFS channels saves a third of the cycle
+but creates a WIDS blind spot on 10 channels and cost ~7.6 % of the study's probe
+frames.
+
+- **Any channel-plan change (e.g. 20 MHz-only) should be made once, before the
+  multi-day probe study starts, followed by re-baselining** (evil_twin RSSI
+  baselines, per-channel rates), so that the study runs on one stable plan. Every
+  change gets a section 7 row, and the list length must be coprime with the
+  helper's stride (a prime length is always safe; the installer checks it).
+- **Hypothesis - to be tested, not assumed:** fewer bandwidth switches (a 20 MHz-
+  only list never re-tunes to HT40/VHT80) might reduce the capture helper's PING
+  timeouts, if those come from slow rtw88 channel/width switches (below). Test:
+  helper crashes per day under each plan over the same number of days, from the
+  persistent journal and `polls.ds_hop_*`.
+
+**Why the capture helper dies** (persistent journal 2026-09-26 22:40 -
+2026-09-27 13:30; power fine: `vcgencmd get_throttled` 0x0, no under-voltage, USB
+autosuspend off):
+
+1. *PING timeout* (2026-09-26 23:09:14, 23:29:21, 23:54:22, 2026-09-27 00:11:05):
+   the helper logs "did not get PING from Kismet for over 15 seconds; shutting
+   down" (`capture_framework.c`: its main loop compares `time(NULL)` with the last
+   ping). Kismet's REST side answered normally around each event (collector polls
+   ~250 ms) and chrony stepped the clock only at boot, so the helper's own loop was
+   blocked for >= 15 s. All four happened while hopping; none in the 11 h 18 min
+   the list had collapsed to one channel. Hypothesis: an rtw88 channel switch over
+   USB occasionally blocks > 15 s while the helper holds its lock - not proven.
+2. *USB adapter drops off the bus* (7 disconnects: 11:29:36, 11:30:06,
+   12:17:19-12:17:47): re-enumeration, `failed to do USB write, ret=-19`, and a
+   re-opened source that captured nothing until the watchdog restarted Kismet
+   (section 6). The adapter shares the Pi 3B+'s internal hub with the Ethernet
+   chip (lan78xx). Candidates: an RTL8821CU firmware/USB reset, or cable/port -
+   a powered hub or short cable is the hardware test.
