@@ -10,7 +10,9 @@ account for them (e.g. exclude the gap from coverage and rate figures).
 Section 7 lists sensor configuration changes that alter what is captured (e.g.
 the channel-hop list, 2026-09-26): compare per-channel figures only within one
 configuration period. Section 8 is the probe-request feasibility study,
-section 9 the channel-plan analysis and the capture-helper crash causes.
+section 9 the channel-plan analysis and the capture-helper crash causes,
+section 10 the first false-positive characterisation of the server-side
+evil_twin detector.
 
 | Script | Invocation |
 |---|---|
@@ -147,6 +149,10 @@ in section 7.
 
 | From (UTC) | To (UTC) | Length | Cause |
 |---|---|---|---|
+| 2026-09-17 19:36:17 (last ok poll) | 2026-09-17 19:38:27 (next ok poll) | 2 m 10 s | Not investigated (found in the server's `polls` on 2026-09-27) |
+| 2026-09-17 21:37:57 (last ok poll) | 2026-09-17 21:49:50 (next ok poll) | 11 m 53 s | Not investigated (server `polls`) |
+| 2026-09-19 12:18:01 (last ok poll) | 2026-09-19 12:25:01 (next ok poll) | 7 m | Not investigated (server `polls`) |
+| 2026-09-21 16:26:28 (last ok poll) | 2026-09-21 21:47:58 (next ok poll) | 5 h 21 m | Hung Kismet after a glibc heap abort (`CLAUDE.md`, "Hung-server incident"); stop blocked by `TimeoutStopSec=infinity` |
 | 2026-09-22 13:43:21 (last ok poll) | 2026-09-23 09:26:58 (first ok poll) | 19 h 44 m | Root filesystem full (Kismet logs) |
 | 2026-09-26 22:46:43 (last ok poll) | 2026-09-26 22:48:23 (first ok poll) | 1 m 40 s | Controlled reboot after the hop-list/journal install (`sudo reboot` 22:46:55, Kismet up 22:47:52; one failed poll at 22:47:53) |
 | 2026-09-27 11:30:14 (source "re-opened" after a capture-helper crash; counter frozen from the 11:29:54 poll) | 2026-09-27 11:34:25 (watchdog restarted Kismet; frames again at the 11:34:54 poll) | ~4 m | Polls ok, no frames: helper crashes at 11:29:37 and 11:30:07, Kismet's re-open with the broken definition (section 7) captured nothing until the watchdog's second strike |
@@ -395,3 +401,81 @@ autosuspend off):
    (section 6). The adapter shares the Pi 3B+'s internal hub with the Ethernet
    chip (lan78xx). Candidates: an RTL8821CU firmware/USB reset, or cable/port -
    a powered hub or short cable is the hardware test.
+
+## 10. evil_twin false-positive characterisation (2026-09-27) - first pass
+
+Detector `server/detection/evil_twin.py` (signal (b), RSSI deviation of a known
+BSSID from its baseline; commit 98677f3, streaming), run read-only (`--dry-run`
+plus the same pure functions in an analysis script) on the server database over
+**2026-09-15 .. 2026-09-28** (data 2026-09-15 14:55 -> 2026-09-27 14:27 UTC),
+default parameters (W 10, k 6, floor 8 dB, persistence 6 windows in 900 s).
+118 APs with a baseline, 317 episodes -> **82 detections (b)**; signal (a) is
+inactive (no operator whitelist). No rogue AP was present, so **every detection
+is a false positive**. The stored baselines were fitted on the same span
+(`ap_baselines` window 09-15 14:55 .. 09-27 14:27): the evaluation is circular -
+see the split-baseline comparison at the end. APs are named by vendor/role only;
+personal hotspot names are not reproduced.
+
+**Breakdown**
+
+| Dimension | Counts |
+|---|---|
+| Severity | low 21, medium 38, **high 23**, critical 0 |
+| Facet | both 59, median_shift 12, spread_inflation 11 |
+| Direction | stronger 50, weaker 32 |
+| AP kind | randomised-BSSID personal hotspots 28, campus Ruckus (`EC:58:EA`) 28, one MikroTik (`FRI_wifi`) 14, one D-Link home router 10, others 2 |
+| Distinct APs | 18 (top 6 = 56 of 82) |
+| Day (UTC, first ts) | 15: 1, 16: 7, 17: 10, 18: 4, 19: 7, 20: 6, 21: 10, 22: 2, 23: 5, 24: 6, 25: 13, 26: 9, 27: 2 |
+| Hour band (UTC; local = UTC+2) | 00-06: 10, 06-12: 19, 12-18: 18, **18-24: 35** |
+
+**By mechanism** (each detection assigned to the first matching class, in this
+order):
+
+| Mechanism | n | low/med/high | stronger/weaker | Evidence |
+|---|---|---|---|---|
+| Inside a degraded window (section 6/7) | 2 | 0/1/1 | 2/0 | both in the 45/90 half coverage, one also in the channel-1 collapse (a channel-1 AP heard more often); 1 more starts < 1 h after the 2026-09-19 12:18 gap |
+| **Floor baseline**: baseline median at the -106 dBm sentinel (robust sd 0) | **31** | 4/19/8 | 31/0 | 4 APs (3 personal hotspots, 1 home router) whose readings are 54-99 % exactly -106; any real reading (-88..-98 dBm) is an 18-20 dB "stronger" deviation. Evening-heavy (14 in 18-24 UTC): the devices come into range, not a twin |
+| **AP channel change** within +-1 h (`device_config_history`) | **25** | 14/4/7 | 15/10 | campus Ruckus BSSIDs that change their advertised channel (1/2 -> 12/13, 48 -> 64; dynamic channel selection); 12 of 25 in 18-24 UTC |
+| Level change, cause open | 15 | 2/13/0 | 0/15 | 14 on `FRI_wifi` (MikroTik, ch 5 HT40+, baseline -78 dBm): 2.5-14 min dips of exactly 18 dB to a discrete -96 dBm level, returning to -78 each time - looks like a second, lower source of readings for the same BSSID rather than a physical change |
+| **Sentinel burst** on a normal AP (window median reaches <= -103) | 7 | 0/0/7 | 0/7 | a mobile phone hotspot leaving range (medians fall to -106), and bursts of -106 readings on otherwise strong APs |
+| Campus radio: sibling BSSIDs of one radio together | 2 | 1/1/0 | 2/0 | the same radio's 3 BSSIDs deviate in the same 10 min |
+
+**The -106 dBm sentinel is the largest single cause (38 of 82 = 46 %).**
+81,120 of 2,229,938 RSSI readings (3.64 %) are exactly -106 (-105: 31, -107: 25),
+108 of 443 APs have more than half of their readings at -106, and 14 stored
+baselines sit on it. It is not a signal level but a floor/"no valid RSSI"
+value (the probe study saw -106 as the radiotap minimum). The collector maps
+only `0` to NULL. Consequences: `-106` must be treated as missing before any RSSI
+statistic (collector shape or detector/baseline query), then baselines refitted;
+the RSSI-stability figures in sections 2-3 include these values and should be
+re-checked. Separately, `observations.freq_khz` is not the frequency of the
+frame behind `sig_last` (a channel-12 BSSID shows the same -65 dBm at 2417,
+2437 and even 5260 MHz), so stored data cannot attribute a deviation to
+off-channel reception. And several APs write a `device_config_history` row on
+almost every poll (advertised channel/HT mode/beacon rate alternating between
+NULL and the real value, ~1,530 rows in 24 h for `FRI_wifi`) - a collector-side
+artefact to look into.
+
+**Circular vs split baseline** (the detection/README audit method, done
+read-only: split baselines computed with the same SQL as
+`refresh_ap_baselines()` but as a SELECT, nothing written; split point = middle
+of the data, 2026-09-21 14:41 UTC; evaluated on 2026-09-21 14:41 .. 09-28):
+
+| k (W 10) | circular baseline on the 2nd half: detections / APs / high | split baseline (fitted on the 1st half): detections / APs / high |
+|---|---|---|
+| 3 | 170 / 26 / 100 | 82 / 26 / 7 |
+| 4 | 65 / 15 / 13 | 69 / 19 / 7 |
+| 6 | 39 / 12 / 14 | **27 / 12 / 8** |
+
+Split baselines exist for 105 of the 118 APs (the rest lacked 200 readings on
+2 days in the first half). Circularity does not flatter the result here - the
+split baseline yields fewer detections at k 3 and 6 - because the floor and
+channel-change mechanisms above dominate either way. The README expectation "0
+high/critical" is **not met** (8 high at k 6, split).
+
+**What would remove most of them** (to be done and re-measured, not assumed):
+treat -106 as missing and refit (-> the floor-baseline and sentinel-burst
+classes, 38); segment or suppress (b) around an advertised-channel change of the
+AP (-> 25); exclude randomised-BSSID (mobile) APs from (b); investigate the
+`FRI_wifi` -96 dBm readings and the config-history flapping. Then repeat this
+audit with the split baseline.
