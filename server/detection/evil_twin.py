@@ -60,12 +60,13 @@ same memory as a 1-day one (a whole-window fetchall of ~2.5M rows drove the
 1 GB server into memory pressure and the query's backend died, 2026-09-27).
 """
 
+import bisect
 import itertools
 import json
 import resource
 import statistics
 import sys
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -88,7 +89,12 @@ SELECT d.device_key,
        upper(d.mac::text) AS bssid, d.ssid, d.manuf, d.crypt,
        trunc(d.mac)::text AS oui,
        (d.mac & macaddr '02:00:00:00:00:00') <> macaddr '00:00:00:00:00:00' AS random_bssid,
+       EXISTS (SELECT 1 FROM devices g
+               WHERE g.sensor_id = d.sensor_id AND g.type = 'ap'
+                 AND (g.mac & macaddr '02:00:00:00:00:00') = macaddr '00:00:00:00:00:00'
+                 AND substr(g.mac::text, 10) = substr(d.mac::text, 10)) AS global_sibling,
        b.rssi_median, b.rssi_robust_sd, b.n_obs AS base_n_obs, b.n_days AS base_n_days,
+       b.n_floor AS base_n_floor,
        b.window_start AS base_from, b.window_end AS base_to,
        coalesce(b.trusted, false) AS trusted
 FROM devices d
@@ -99,17 +105,25 @@ WHERE d.sensor_id = %(sid)s AND d.type = 'ap'
 # Signal (b), part 2: the RSSI readings of those APs, ordered by (device_key, ts)
 # (served in order by observations_device_ts_rssi) and STREAMED through a
 # server-side cursor - never fetched whole. rssi is Kismet sig_last (one frame
-# per poll), NULL when absent.
+# per poll), NULL when absent; the adapter's floor values are censored readings
+# and never a level (rssi_valid(), schema.sql).
 READINGS_SQL = """
-SELECT o.device_key, o.ts, o.rssi
+SELECT o.device_key, o.ts, rssi_valid(o.rssi) AS rssi
 FROM observations o
 JOIN devices d      ON d.sensor_id = o.sensor_id AND d.device_key = o.device_key
 JOIN ap_baselines b ON b.sensor_id = o.sensor_id AND b.device_key = o.device_key
-WHERE o.sensor_id = %(sid)s AND d.type = 'ap' AND o.rssi IS NOT NULL
+WHERE o.sensor_id = %(sid)s AND d.type = 'ap' AND rssi_valid(o.rssi) IS NOT NULL
   AND b.rssi_median IS NOT NULL AND b.rssi_robust_sd IS NOT NULL
   AND o.ts >= %(scan_from)s AND o.ts < %(scan_to)s
 ORDER BY o.device_key, o.ts"""
 READINGS_ITERSIZE = 5000        # rows per round trip of the server-side cursor
+
+# Advertised-channel changes of the APs (view ap_channel_changes, schema.sql:
+# unknown values from empty beacon records are skipped).
+CHANNEL_CHANGES_SQL = """
+SELECT device_key, ts FROM ap_channel_changes
+WHERE sensor_id = %(sid)s AND ts >= %(from_)s AND ts < %(to)s
+ORDER BY device_key, ts"""
 
 # Signal (a): every AP advertising a named SSID, with its in-window presence and
 # median RSSI. device_config_history SSIDs are unioned in analyse().
@@ -119,11 +133,11 @@ SELECT d.device_key, upper(d.mac::text) AS bssid, trunc(d.mac)::text AS oui, d.m
        (d.mac & macaddr '02:00:00:00:00:00') <> macaddr '00:00:00:00:00:00' AS random_bssid,
        coalesce(b.trusted, false) AS trusted,
        d.first_seen, d.last_seen,
-       count(o.rssi) FILTER (WHERE o.ts >= %(scan_from)s AND o.ts < %(scan_to)s) AS win_obs,
+       count(rssi_valid(o.rssi)) FILTER (WHERE o.ts >= %(scan_from)s AND o.ts < %(scan_to)s) AS win_obs,
        min(o.ts)     FILTER (WHERE o.ts >= %(scan_from)s AND o.ts < %(scan_to)s) AS win_first,
        max(o.ts)     FILTER (WHERE o.ts >= %(scan_from)s AND o.ts < %(scan_to)s) AS win_last,
-       percentile_cont(0.5) WITHIN GROUP (ORDER BY o.rssi)
-         FILTER (WHERE o.rssi IS NOT NULL AND o.ts >= %(scan_from)s AND o.ts < %(scan_to)s) AS win_median
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY rssi_valid(o.rssi))
+         FILTER (WHERE rssi_valid(o.rssi) IS NOT NULL AND o.ts >= %(scan_from)s AND o.ts < %(scan_to)s) AS win_median
 FROM devices d
 LEFT JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.device_key
 -- Only the scan window is joined: every aggregate above is window-filtered, so
@@ -167,6 +181,10 @@ class Params:
     baseline_hours: float = 24          # baseline-mode cutoff = --from + this
     persist_hours: float = 1.0          # (a) sustained if span >= this OR ...
     persist_obs: int = 20               # ... this many in-window observations
+    # (b) eligibility (docs/findings.md section 11)
+    include_random_bssid: bool = False  # randomised (locally administered) BSSIDs are mobile
+    max_floor_share: float = 0.35       # baseline n_floor / (n_obs + n_floor) above -> ineligible
+    channel_guard_s: float = 3600       # drop deviating windows within this of a channel change
     close_dbm: float = -60              # (a) 'close/strong' escalation
     strong_db: float = 10
 
@@ -176,7 +194,9 @@ class Params:
                    spread_k=args.spread_k, persistence=args.persistence,
                    persist_window_s=args.persist_window, med_dev_db=args.med_dev, high_dev_db=args.high_dev,
                    trusted_source=args.trusted_source, baseline_hours=args.baseline_hours,
-                   persist_hours=args.persist_hours, persist_obs=args.persist_obs)
+                   persist_hours=args.persist_hours, persist_obs=args.persist_obs,
+                   include_random_bssid=args.include_random_bssid, max_floor_share=args.max_floor_share,
+                   channel_guard_s=args.channel_guard)
 
     def as_dict(self):
         return {"gap_s": self.gap_s, "window_w": self.window_w, "k": self.k,
@@ -184,7 +204,9 @@ class Params:
                 "persistence": self.persistence, "persist_window_s": self.persist_window_s,
                 "med_dev_db": self.med_dev_db, "high_dev_db": self.high_dev_db,
                 "trusted_source": self.trusted_source, "baseline_hours": self.baseline_hours,
-                "persist_hours": self.persist_hours, "persist_obs": self.persist_obs}
+                "persist_hours": self.persist_hours, "persist_obs": self.persist_obs,
+                "include_random_bssid": self.include_random_bssid,
+                "max_floor_share": self.max_floor_share, "channel_guard_s": self.channel_guard_s}
 
 
 @dataclass
@@ -334,6 +356,54 @@ def scan_deviations(rows, meta, params):
                                           float(m["rssi_median"]), float(m["rssi_robust_sd"]),
                                           params, key)
     return deviations, aps
+
+
+def floor_share(ap):
+    """Share of censored floor readings in the AP's baseline window (None when
+    the baseline predates schema 4 and carries no n_floor)."""
+    n_floor = ap.get("base_n_floor")
+    n_obs = ap.get("base_n_obs") or 0
+    if n_floor is None or n_obs + n_floor == 0:
+        return None
+    return n_floor / float(n_obs + n_floor)
+
+
+def eligible_aps(aps, params):
+    """Split baselined APs into those eligible for signal (b) and the reasons for
+    the rest: a randomised BSSID without a globally administered sibling (a
+    phone/mobile hotspot, no fixed position), or a baseline whose floor share
+    exceeds max_floor_share (the median is censored/biased; findings section 11).
+    APS: {device_key: AP_META_SQL row}. Returns (eligible dict, Counter of reasons)."""
+    out, why = {}, Counter()
+    for key, ap in aps.items():
+        if not params.include_random_bssid and ap.get("random_bssid") and not ap.get("global_sibling"):
+            why["random_bssid"] += 1
+            continue
+        fs = floor_share(ap)
+        if fs is not None and fs > params.max_floor_share:
+            why["floor_share"] += 1
+            continue
+        out[key] = ap
+    return out, why
+
+
+def apply_channel_guard(deviations, changes, guard_s):
+    """Drop deviating windows that end within guard_s of one of their AP's
+    advertised-channel changes (an RSSI step at a channel change is the AP's own
+    reconfiguration). CHANGES: {device_key: sorted [ts]}. Returns (kept, n_dropped)."""
+    if guard_s <= 0 or not changes:
+        return list(deviations), 0
+    kept, dropped = [], 0
+    guard = timedelta(seconds=guard_s)
+    for d in deviations:
+        times = changes.get(d.device_key)
+        if times:
+            i = bisect.bisect_left(times, d.ts - guard)
+            if i < len(times) and times[i] <= d.ts + guard:
+                dropped += 1
+                continue
+        kept.append(d)
+    return kept, dropped
 
 
 def build_episodes(deviations, gap_s):
@@ -587,10 +657,17 @@ def analyse(conn, sensor, frm, to, params, quiet=False):
 
     # --- signal (b): windowed deviations of every baselined AP -------------------
     _log("scanning RSSI %s .. %s ..." % (fmt_ts(scan_from), fmt_ts(scan_to)), quiet)
-    ap_meta = {r["device_key"]: r for r in conn.execute(AP_META_SQL, {"sid": sid})}
+    baselined = {r["device_key"]: r for r in conn.execute(AP_META_SQL, {"sid": sid})}
+    ap_meta, excluded = eligible_aps(baselined, params)
     deviations, aps_scanned = scan_deviations(
         _stream_readings(conn, READINGS_SQL, {"sid": sid, "scan_from": scan_from, "scan_to": scan_to}),
         ap_meta, params)
+    guard = timedelta(seconds=params.channel_guard_s)
+    changes = defaultdict(list)
+    if params.channel_guard_s > 0:
+        for r in conn.execute(CHANNEL_CHANGES_SQL, {"sid": sid, "from_": scan_from - guard, "to": scan_to + guard}):
+            changes[r["device_key"]].append(r["ts"])
+    deviations, guarded = apply_channel_guard(deviations, changes, params.channel_guard_s)
     episodes = [e for e in build_episodes(deviations, params.gap_s) if e.overlaps(frm, to)]
 
     # --- signal (a): unknown BSSIDs for established SSIDs -------------------------
@@ -638,6 +715,8 @@ def analyse(conn, sensor, frm, to, params, quiet=False):
 
     info = {
         "scan_from": scan_from, "scan_to": scan_to,
+        "aps_baselined": len(baselined), "aps_excluded": dict(excluded),
+        "windows_channel_guarded": guarded,
         "aps_scanned": aps_scanned, "deviations": len(deviations),
         "episodes": len(episodes), "established_ssids": len(tsets),
         "unknown_candidates": len(unknowns),
@@ -683,6 +762,15 @@ def add_arguments(p):
                    help="signal a: sustained if present this long ... (default 1)")
     p.add_argument("--persist-obs", type=int, default=20, metavar="N",
                    help="... or this many in-window observations (default 20)")
+    p.add_argument("--include-random-bssid", action="store_true",
+                   help="also evaluate randomised (locally administered) BSSIDs in signal (b); default: "
+                        "excluded unless a globally administered sibling BSSID exists")
+    p.add_argument("--max-floor-share", type=float, default=0.35, metavar="F",
+                   help="(b) ineligible when the baseline's share of floor (censored) readings exceeds "
+                        "this (default 0.35, derived in findings section 11)")
+    p.add_argument("--channel-guard", type=float, default=3600, metavar="S",
+                   help="(b) drop deviating windows within S seconds of the AP's own advertised-channel "
+                        "change (default 3600; 0 = off)")
     p.add_argument("--dry-run", action="store_true", help="analyse and print, write nothing")
     p.add_argument("--verbose", "-v", action="store_true", help="print every episode/candidate")
     p.add_argument("--json", action="store_true",
@@ -724,6 +812,9 @@ def report(sensor, frm, to, params, episodes, unknowns, findings, info, args):
           % (fmt_ts(info["scan_from"]), fmt_ts(info["scan_to"]), info["aps_scanned"],
              info["deviations"], info["episodes"], info["findings_b"], info["established_ssids"],
              info["unknown_candidates"], info["findings_a"]), file=out)
+    print("  eligibility: %d baselined APs, excluded %s; %d deviating windows dropped by the "
+          "channel guard (%gs)" % (info["aps_baselined"], info["aps_excluded"] or "none",
+                                   info["windows_channel_guarded"], params.channel_guard_s), file=out)
     print("  peak RSS of this process: %.0f MB" % info["peak_rss_mb"], file=out)
     print(file=out)
     rows = []

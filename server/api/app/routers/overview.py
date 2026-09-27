@@ -47,7 +47,8 @@ def overview(sensor=Depends(get_sensor)):
             "SELECT count(*) AS total, max(ts) AS last_ts FROM alerts WHERE sensor_id = %s",
             (sid,)).fetchone()
         baselines = conn.execute(
-            "SELECT count(*) AS n FROM ap_baselines WHERE sensor_id = %s", (sid,)).fetchone()
+            "SELECT count(*) AS n FROM ap_baselines WHERE sensor_id = %s AND rssi_median IS NOT NULL",
+            (sid,)).fetchone()
         detections = conn.execute(
             "SELECT count(*) AS total, count(*) FILTER (WHERE NOT acked) AS open, max(ts) AS last_ts "
             "FROM detections WHERE sensor_id = %s", (sid,)).fetchone()

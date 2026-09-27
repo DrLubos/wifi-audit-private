@@ -68,10 +68,13 @@ python3 seed/import_snapshot.py buffer-snapshot.db --sensor pi-fri \
   a per-table row count for the sensor.
 - After loading, `refresh_ap_baselines(sensor_id, 200, 2)` is called (skip with
   `--no-baselines`, tune with `--min-obs/--min-days`).
-- Buffer schema v2, v3 and v4 snapshots are accepted. v3 (collector deployed
+- Buffer schema v2 to v5 snapshots are accepted. v3 (collector deployed
   2026-09-22 or later) carries `observations.disconnects_last`, v4 (2026-09-27 or
-  later) `polls.ds_hop_n / ds_hop_visited / ds_hop_ok` (hop-list coverage); from
-  older snapshots those columns are imported as NULL. Apply the current
+  later) `polls.ds_hop_n / ds_hop_visited / ds_hop_ok` (hop-list coverage), v5
+  `observations.rssi_floor` (the RSSI was an adapter floor value, stored as NULL
+  in `rssi`); from older snapshots those columns are imported as NULL. Older
+  snapshots carry the floor values -106/-120 raw in `rssi`; the server does not
+  rewrite them, every reader applies `rssi_valid()` (`schema.sql`, schema 4). Apply the current
   `schema.sql` (step 2) before importing a newer snapshot, otherwise the INSERT
   fails on the unknown columns.
 
@@ -90,11 +93,15 @@ SELECT count(*) FILTER (WHERE ok) * 100.0 / count(*) AS coverage_pct FROM polls;
 SELECT type, count(*) FROM devices GROUP BY type ORDER BY 2 DESC;
 SELECT count(*), percentile_cont(0.5) WITHIN GROUP (ORDER BY rssi_sd) AS median_sd,
        percentile_cont(0.5) WITHIN GROUP (ORDER BY rssi_robust_sd) AS median_robust_sd
-FROM ap_baselines;                                       -- ~106 APs, ~2.3 dB / ~1.5 dB
+FROM ap_baselines WHERE rssi_median IS NOT NULL;         -- APs that qualify now
 SELECT header, count(*) FROM alerts GROUP BY header;
 SELECT ssid, bssid, oui, random_bssid, lifetime, rssi_median FROM ap_inventory
  WHERE NOT hidden ORDER BY lifetime DESC LIMIT 20;
 ```
 
 The expected figures are those of `wifi-sensor/docs/findings.md` for the
-snapshot of 2026-09-19; a later snapshot shifts them.
+snapshot of 2026-09-19; a later snapshot shifts them, and since schema 4 the
+baselines exclude the RSSI floor values (findings sections 2 and 11: about 95 APs,
+median sd ~2.4 dB for that window). `refresh_ap_baselines()` clears the
+statistics of an AP that no longer qualifies (the row stays, for its `trusted`
+flag), hence the `rssi_median IS NOT NULL` filter.

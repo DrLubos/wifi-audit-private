@@ -1,0 +1,14 @@
+# Documented windows of degraded sensor data (wifi-sensor/docs/findings.md sections 6 and 7).
+# Used by fp_audit to attribute detections; times UTC. kind: gap = no usable polls,
+# no_frames = polls ok but no frames, coverage = frames but reduced channel coverage.
+sensor,start_utc,end_utc,kind,label
+pi-fri,2026-09-17 19:36:17,2026-09-17 19:38:27,gap,short gap (not investigated)
+pi-fri,2026-09-17 21:37:57,2026-09-17 21:49:50,gap,short gap (not investigated)
+pi-fri,2026-09-19 12:18:01,2026-09-19 12:25:01,gap,short gap (not investigated)
+pi-fri,2026-09-21 16:26:28,2026-09-21 21:47:58,gap,hung Kismet
+pi-fri,2026-09-22 13:43:21,2026-09-23 09:26:58,gap,disk full
+pi-fri,2026-09-26 22:45:26,2026-09-27 13:04:57,coverage,45 of 90 hop entries (stride 4 vs 90)
+pi-fri,2026-09-26 22:46:43,2026-09-26 22:48:23,gap,controlled reboot
+pi-fri,2026-09-26 23:09:14,2026-09-27 11:34:24,coverage,channel-1 collapse after helper crash
+pi-fri,2026-09-27 11:30:14,2026-09-27 11:34:25,no_frames,helper crash / broken re-open
+pi-fri,2026-09-27 12:17:20,2026-09-27 12:22:55,coverage,channel-1 collapse / no frames

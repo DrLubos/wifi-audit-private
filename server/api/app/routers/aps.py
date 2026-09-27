@@ -48,12 +48,15 @@ def get_ap(device_key: str = Path(pattern=DEVICE_KEY_RE), sensor=Depends(get_sen
             raise HTTPException(status_code=404, detail="unknown access point")
         baseline = conn.execute(
             "SELECT rssi_median, rssi_mean, rssi_sd, rssi_robust_sd, rssi_p5, rssi_p95, "
-            "main_freq_khz, n_obs, n_days, window_start, window_end, computed_at, trusted, "
+            "main_freq_khz, n_obs, n_floor, n_days, window_start, window_end, computed_at, trusted, "
             "trusted_at, note FROM ap_baselines WHERE sensor_id = %s AND device_key = %s",
             (sid, device_key)).fetchone()
         obs = conn.execute(
-            "SELECT count(*) AS n_obs, count(rssi) AS n_rssi, min(ts) AS first_obs, "
-            "max(ts) AS last_obs FROM observations WHERE sensor_id = %s AND device_key = %s",
+            # floor readings (-106/-120 dBm) are censored, not levels: counted apart
+            "SELECT count(*) AS n_obs, count(rssi_valid(rssi)) AS n_rssi, "
+            "count(*) FILTER (WHERE rssi_is_floor(rssi, rssi_floor)) AS n_floor, "
+            "min(ts) AS first_obs, max(ts) AS last_obs "
+            "FROM observations WHERE sensor_id = %s AND device_key = %s",
             (sid, device_key)).fetchone()
         hist_total = conn.execute(
             "SELECT count(*) AS n FROM device_config_history "
@@ -83,7 +86,7 @@ def ap_rssi(device_key: str = Path(pattern=DEVICE_KEY_RE),
     baseline so the chart can draw the reference line without a second call.
     """
     sid = sensor["id"]
-    where = ["sensor_id = %s", "device_key = %s", "rssi IS NOT NULL"]
+    where = ["sensor_id = %s", "device_key = %s", "(rssi IS NOT NULL OR rssi_floor)"]
     params = [bucket, sid, device_key]
     if since is not None:
         where.append("ts >= %s")
@@ -92,9 +95,12 @@ def ap_rssi(device_key: str = Path(pattern=DEVICE_KEY_RE),
         where.append("ts < %s")
         params.append(until)
     sql = ("SELECT date_bin(make_interval(secs => %s), ts, '2000-01-01') AS t, "
-           "count(rssi) AS n, "
-           "percentile_cont(0.5) WITHIN GROUP (ORDER BY rssi) AS median, "
-           "min(rssi) AS min, max(rssi) AS max "
+           # rssi_valid(): the adapter's floor values are censored readings, never
+           # a level (schema.sql); they are counted per bucket as n_floor
+           "count(rssi_valid(rssi)) AS n, "
+           "count(*) FILTER (WHERE rssi_is_floor(rssi, rssi_floor)) AS n_floor, "
+           "percentile_cont(0.5) WITHIN GROUP (ORDER BY rssi_valid(rssi)) AS median, "
+           "min(rssi_valid(rssi)) AS min, max(rssi_valid(rssi)) AS max "
            "FROM observations WHERE " + " AND ".join(where) + " GROUP BY 1 ORDER BY 1")
     with db.pool.connection() as conn:
         exists = conn.execute(
@@ -115,4 +121,5 @@ def ap_rssi(device_key: str = Path(pattern=DEVICE_KEY_RE),
         "min": [r["min"] for r in rows],
         "max": [r["max"] for r in rows],
         "n": [r["n"] for r in rows],
+        "n_floor": [r["n_floor"] for r in rows],
     }

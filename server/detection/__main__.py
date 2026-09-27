@@ -6,11 +6,12 @@
 import argparse
 import sys
 
-from . import deauth_flood, evil_twin
+from . import deauth_flood, evil_twin, fp_audit
 
 DETECTORS = {
     "deauth-flood": deauth_flood,
     "evil-twin": evil_twin,
+    "fp-audit": fp_audit,           # read-only audit of evil-twin (b), writes nothing
 }
 
 

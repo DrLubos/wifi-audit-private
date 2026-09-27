@@ -86,6 +86,27 @@ Conventions for the stack:
   even though there is one sensor today (the thesis framing is an overlay of sensors).
 - Seed path in `server/seed/` (export a Pi snapshot -> import with psql). Idempotent
   and accumulating, so the server keeps history the Pi's 14-day retention discards.
+- **Dataset rules (schema 4, 2026-09-27; `../wifi-sensor/docs/findings.md` §11):**
+  - **RSSI floors -106/-120 dBm are censored values, not levels** (rtw88 CCK/OFDM
+    clamps of the capture adapter; 3.6 % of all readings). Every RSSI reader goes
+    through `rssi_valid(rssi)` (floor -> NULL) and counts floors with
+    `rssi_is_floor(rssi, rssi_floor)`; never compute a median/MAD/threshold on raw
+    `observations.rssi`. Raw history is **not** rewritten (rows before buffer v5
+    carry the raw value; from v5 the collector stores NULL + `rssi_floor`).
+    `ap_baselines.n_floor` keeps the censoring; an AP whose floor share exceeds
+    0.35 is not eligible for evil_twin (b) - never just drop floors from a weak
+    AP's median (biased upward). The floor list lives once in `schema.sql`; a
+    collector test keeps it equal to `wifi-sensor/collector/dataset_rules.py`.
+  - **`device_config_history` before the v5 collector is ~42 % artefact**
+    (alternating empty/real beacon record: NULL <-> real channel/HT/beacon rate).
+    Use the view `ap_channel_changes` (non-NULL advertised channel changes only)
+    for channel timelines, not raw history rows.
+  - **`observations.freq_khz` is not the reception channel of `rssi`** (Kismet's
+    device frequency, updated from other frames) and not reliably the AP's
+    channel; use `devices.adv_channel`.
+  - Read-only evil_twin FP audit: `python -m detection fp-audit` (never
+    `refresh_ap_baselines()` with a split window for an audit - it rewrites
+    `ap_baselines`). Documented sensor gaps for it: `detection/degraded_windows.csv`.
 
 ## Privacy (same rule as the sensor)
 

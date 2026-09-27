@@ -33,6 +33,8 @@ page (row expand = the evidence); Overview carries an "open detections" tile.
 | `detections.py` | the sink: matches an episode to its stored row and inserts or refreshes it |
 | `deauth_flood.py` | the deauth/disassoc flood detector (below) |
 | `evil_twin.py` | the RSSI-baseline / evil-twin detector (below) |
+| `fp_audit.py` | `fp-audit`: read-only false-positive audit of evil_twin (b) and the floor-share derivation (never writes, not a detector) |
+| `degraded_windows.csv` | documented sensor gaps / coverage losses (from `wifi-sensor/docs/findings.md` §6/§7), used by `fp-audit` to attribute detections |
 | `tests/` | synthetic-timeline tests of the pure logic |
 
 Every detector runs its analysis in a `READ ONLY` transaction and its writes in
@@ -289,8 +291,8 @@ from three mistakes, each dropped here:
 
 ### Signal (b) algorithm
 
-Per AP with a qualifying baseline (`ap_baselines`, `n_obs ≥ 200`, `n_days ≥ 2`):
-a sliding window of `W` observations deviates when its **median** leaves
+Per AP with a qualifying baseline (`ap_baselines`, `n_obs ≥ 200`, `n_days ≥ 2`)
+that is **eligible** (below): a sliding window of `W` observations deviates when its **median** leaves
 `rssi_median` by more than `max(k·rssi_robust_sd, --floor-db)` (`median_shift`)
 or its **MAD** exceeds `max(spread_k·robust_sd, spread_floor)` (`spread_inflation`
 — a BSSID heard from two positions is bimodal even when the medians cross).
@@ -299,6 +301,35 @@ deviating windows within `--persist-window`. `direction` is the sign of the
 deviation; *stronger* + sustained on a `trusted` AP is the twin signature and
 grades up. Severity: magnitude `low`/`medium`/`high` by `--med-dev`/`--high-dev`,
 `+1` level for a stronger clone on a trusted AP or when (a) corroborates.
+
+**RSSI readings** go through `rssi_valid()` (`schema.sql`, schema 4): the
+capture adapter's floor values -106/-120 dBm are censored readings ("at or
+below the floor"), never levels, so they are excluded from the windows and from
+the baseline statistics; `ap_baselines.n_floor` counts them (raw history is not
+rewritten; the collector stores them as NULL + `rssi_floor` from buffer v5).
+Before this rule, floor readings caused 38 of the first 82 false positives
+(findings §10).
+
+**Eligibility for (b)** (first FP characterisation, findings §10-§11), each
+counted in the report's eligibility line and in `info`:
+- **Randomised BSSIDs are excluded** (locally administered bit): personal
+  hotspots move with their owner, so their "baseline" is not a place. Exception:
+  a randomised BSSID with a globally administered sibling (same last 3 octets) is
+  an infrastructure virtual AP and stays. `--include-random-bssid` restores the
+  old behaviour.
+- **Floor share** `n_floor / (n_obs + n_floor)` above `--max-floor-share`
+  (default **0.35**) makes the AP ineligible: dropping the floors biases a weak
+  AP's median upward (for f ≥ 0.5 the true median is itself censored). 0.35 was
+  derived from the data (`fp-audit --mode floor-share`; admissible interval
+  [0.322, 0.433) on 2026-09-27, it removes 7 of 112 qualifying APs, none of them
+  campus APs).
+- **Channel-change guard**: a deviating window that ends within
+  `--channel-guard` seconds (default 3600) of one of the AP's own
+  advertised-channel changes (view `ap_channel_changes`, built from
+  `device_config_history`) is dropped before episodes are built; the count is in
+  `info.windows_channel_guarded`. Campus APs change channel by themselves
+  (dynamic channel selection) and their level changes with it; a per-channel
+  baseline is left for later.
 
 ### Signal (a) algorithm
 
@@ -328,16 +359,29 @@ audit separate median-shift from spread-inflation.
 `--window/-W 10`, `--k 6`, `--floor-db 8`, `--spread-k 3`, `--persistence 6` in
 `--persist-window 900`, `--med-dev 12`, `--high-dev 20`, `--gap 300`,
 `--trusted-source whitelist|baseline`, `--baseline-hours 24`, `--persist-hours 1`,
-`--persist-obs 20`; `--dry-run`/`--verbose`/`--json` as elsewhere.
+`--persist-obs 20`, `--include-random-bssid` (off), `--max-floor-share 0.35`,
+`--channel-guard 3600` (0 = off); `--dry-run`/`--verbose`/`--json` as elsewhere.
 
 **Seeded false-positive audit** (no rogue present, so every detection is a false
-positive): fit baselines on the first half of the span and evaluate on the
-second so the baseline never saw the test data —
-`SELECT refresh_ap_baselines(<sid>,200,2,'<t0>','<t_mid>')` (the `p_from`/`p_until`
-params exist for this; the 50/50 midpoint ≈ 2026-09-18 01:45 UTC leaves 98 of 108
-qualifying APs) then `evil-twin --from <t_mid> --to <t_end> --dry-run` at `--k 3`,
-`4`, `6`, tabulating the FP count per `k`/`W` and **split by facet** (from the
-evidence). Expect **0 high/critical**. For (a): `--trusted-source baseline` on the
+positive) - `python -m detection fp-audit` (`fp_audit.py`), **read-only**: it
+runs in a READ ONLY transaction and never calls `refresh_ap_baselines()` (the
+earlier method of this README did, which rewrites `ap_baselines`). It evaluates
+(1) the stored, circular baselines on the whole span, (2) the same on the
+second half, and (3) split baselines fitted on the first half with the same SQL
+as `refresh_ap_baselines()` (as a SELECT) and evaluated on the second half, at
+`--ks 3,4,6` (split point `--split-at`, default the middle of the data), with
+the evil_twin options above. Every detection is attributed to a cause - a
+documented degraded window (`degraded_windows.csv`, from findings §6/§7; add a
+row when a new gap or coverage loss is documented), an advertised-channel
+change of the AP within an hour, else "open" - and an AP kind (campus /
+randomised / other). Expect **0 high/critical**. `--mode floor-share` prints the
+per-AP floor share and censoring bias and the admissible `--max-floor-share`
+interval (JSON lines with `--json`).
+
+```
+docker compose run --rm detect fp-audit --from 2026-09-15 --to 2026-09-28
+docker compose run --rm detect fp-audit --from 2026-09-15 --to 2026-09-28 --mode floor-share
+``` For (a): `--trusted-source baseline` on the
 seeded window → 0 sustained-unknown on `IK-WIFI`/`FRI_wifi` (findings §4: 0 later
 BSSIDs, 0 sustained-close newcomers). No physical rogue trial yet (adapter
 unavailable); the detector is exercised by `tests/test_evil_twin.py` (stdlib) and

@@ -31,7 +31,9 @@ _SUMMARY = """
            percentile_cont(0.75) WITHIN GROUP (ORDER BY rssi_robust_sd) AS rsd_q3,
            percentile_cont(0.9)  WITHIN GROUP (ORDER BY rssi_robust_sd) AS rsd_p90,
            """ + _within + """
-    FROM ap_baselines WHERE sensor_id = %s"""
+    FROM ap_baselines WHERE sensor_id = %s AND rssi_median IS NOT NULL"""
+# (refresh_ap_baselines() clears the statistics of APs that no longer qualify,
+#  schema 4; those rows are not baselines)
 
 _BY_BAND = """
     SELECT CASE WHEN main_freq_khz < 3000000 THEN '2.4'

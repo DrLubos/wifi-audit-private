@@ -30,9 +30,10 @@ Everything runs between BEGIN and COMMIT, so a failure (bad MAC, FK violation,
 lost connection) leaves the database untouched. psql's own "COPY n" / "INSERT 0 n"
 command tags show what was staged and what was actually inserted.
 
-Column and semantics reference: wifi-sensor/collector/store.py (buffer schema v2,
-v3 or v4; v3 added observations.disconnects_last, v4 polls.ds_hop_*; older
-snapshots import them as NULL) and server/schema.sql.
+Column and semantics reference: wifi-sensor/collector/store.py (buffer schema v2
+to v5; v3 added observations.disconnects_last, v4 polls.ds_hop_*, v5
+observations.rssi_floor; older snapshots import them as NULL - their floor
+readings stay raw in rssi and are read through rssi_valid()) and server/schema.sql.
 """
 
 import argparse
@@ -43,7 +44,7 @@ import sys
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-EXPECTED_SCHEMA_VERSIONS = ("2", "3", "4")
+EXPECTED_SCHEMA_VERSIONS = ("2", "3", "4", "5")
 
 _MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
 # COPY text format: backslash, tab, newline and carriage return are escaped;
@@ -155,21 +156,22 @@ TABLES = [
         "order": " ORDER BY ts, key",
         "stage": [("ts", "bigint"), ("device_key", "text", "key"), ("last_time", "bigint"),
                   ("freq_khz", "integer"), ("channel", "text"), ("rssi", "smallint"),
-                  ("rssi_min", "smallint"), ("rssi_max", "smallint"), ("pk_total", "bigint"),
+                  ("rssi_min", "smallint"), ("rssi_max", "smallint"), ("rssi_floor", "integer"),
+                  ("pk_total", "bigint"),
                   ("pk_tx", "bigint"), ("pk_rx", "bigint"), ("pk_data", "bigint"),
                   ("bytes", "bigint"), ("n_clients", "integer"), ("disconnects", "integer"),
                   ("disconnects_last", "bigint"),
                   ("qbss_stations", "integer"), ("util_pct", "real"), ("bss_timestamp", "bigint"),
                   ("ie_checksum", "bigint"), ("beacon_fp", "bigint"), ("bssid", "text")],
-        "optional": ("disconnects_last",),        # buffer v3
+        "optional": ("disconnects_last", "rssi_floor"),   # buffer v3, v5
         "macs": ("bssid",),
         "insert": (
             "INSERT INTO observations (ts, sensor_id, device_key, last_time, freq_khz, channel, "
-            "rssi, rssi_min, rssi_max, pk_total, pk_tx, pk_rx, pk_data, bytes, n_clients, "
+            "rssi, rssi_min, rssi_max, rssi_floor, pk_total, pk_tx, pk_rx, pk_data, bytes, n_clients, "
             "disconnects, disconnects_last, qbss_stations, util_pct, bss_timestamp, ie_checksum, "
             "beacon_fp, bssid)\n"
             "SELECT to_timestamp(ts), :sid, device_key, to_timestamp(last_time), freq_khz, channel, "
-            "rssi, rssi_min, rssi_max, pk_total, pk_tx, pk_rx, pk_data, bytes, n_clients, "
+            "rssi, rssi_min, rssi_max, rssi_floor::boolean, pk_total, pk_tx, pk_rx, pk_data, bytes, n_clients, "
             "disconnects, to_timestamp(disconnects_last), qbss_stations, util_pct, bss_timestamp, "
             "ie_checksum, beacon_fp, bssid::macaddr\n"
             "FROM stage_observations\n"

@@ -374,6 +374,58 @@ class StreamingEquivalenceTest(unittest.TestCase):
         self.assertLess(peaks[1], 2 * peaks[0] + 16 * 1024)
 
 
+class EligibilityTest(unittest.TestCase):
+    def ap(self, **kw):
+        base = {"rssi_median": -70.0, "rssi_robust_sd": 2.0, "base_n_obs": 900, "base_n_floor": 0,
+                "random_bssid": False, "global_sibling": False}
+        base.update(kw)
+        return base
+
+    def test_random_bssid_excluded_unless_global_sibling(self):
+        aps = {"fixed": self.ap(), "phone": self.ap(random_bssid=True),
+               "vap": self.ap(random_bssid=True, global_sibling=True)}
+        ok, why = et.eligible_aps(aps, Params())
+        self.assertEqual(set(ok), {"fixed", "vap"})
+        self.assertEqual(dict(why), {"random_bssid": 1})
+        ok, _ = et.eligible_aps(aps, Params(include_random_bssid=True))
+        self.assertEqual(set(ok), {"fixed", "phone", "vap"})
+
+    def test_floor_share_threshold(self):
+        aps = {"clean": self.ap(base_n_floor=0),
+               "some": self.ap(base_n_obs=650, base_n_floor=350),     # 0.35: at the limit -> kept
+               "censored": self.ap(base_n_obs=600, base_n_floor=400),  # 0.40 -> out
+               "old": self.ap(base_n_floor=None)}                      # baseline before schema 4
+        self.assertAlmostEqual(et.floor_share(aps["some"]), 0.35)
+        self.assertIsNone(et.floor_share(aps["old"]))
+        ok, why = et.eligible_aps(aps, Params())
+        self.assertEqual(set(ok), {"clean", "some", "old"})
+        self.assertEqual(dict(why), {"floor_share": 1})
+
+
+class ChannelGuardTest(unittest.TestCase):
+    def dev(self, key, sec):
+        return Deviation(ts=at(sec), device_key=key, window_median=-50, window_mad=1, dev_db=10,
+                         facet="median_shift")
+
+    def test_windows_near_a_change_are_dropped(self):
+        devs = [self.dev("A", s) for s in (0, 3000, 3700, 7300)] + [self.dev("B", 3600)]
+        kept, dropped = et.apply_channel_guard(devs, {"A": [at(3600)]}, 3600)
+        self.assertEqual([(d.device_key, d.ts) for d in kept], [("A", at(7300)), ("B", at(3600))])
+        self.assertEqual(dropped, 3)
+
+    def test_guard_off_or_no_changes_keeps_everything(self):
+        devs = [self.dev("A", s) for s in (0, 30)]
+        self.assertEqual(et.apply_channel_guard(devs, {"A": [at(0)]}, 0), (devs, 0))
+        self.assertEqual(et.apply_channel_guard(devs, {}, 3600), (devs, 0))
+
+    def test_guard_off_keeps_streaming_equivalence(self):
+        meta, rows = _synthetic()
+        p = Params(channel_guard_s=0)
+        devs, _ = scan_deviations(_cursor(rows, 7), meta, p)
+        kept, dropped = et.apply_channel_guard(devs, {"AP-B": [at(0)]}, p.channel_guard_s)
+        self.assertEqual((kept, dropped), (devs, 0))
+
+
 class ParamsTest(unittest.TestCase):
     def test_from_args(self):
         p = argparse.ArgumentParser()

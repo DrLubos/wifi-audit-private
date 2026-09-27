@@ -22,7 +22,11 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   value text NOT NULL);
 -- 2: observations.disconnects_last (buffer v3)
 -- 3: polls.ds_hop_n / ds_hop_visited / ds_hop_ok (buffer v4)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '3')
+-- 4: RSSI floors as censored values: rssi_valid(), rssi_is_floor(),
+--    observations.rssi_floor (buffer v5), ap_baselines.n_floor; view
+--    ap_channel_changes; refresh_ap_baselines() clears baselines that no
+--    longer qualify
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '4')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- sensors ------------------------------------------------------------------
@@ -120,9 +124,10 @@ CREATE TABLE IF NOT EXISTS observations (
   sensor_id  integer NOT NULL,
   device_key text NOT NULL,
   last_time  timestamptz NOT NULL,           -- Kismet last_time
-  freq_khz   integer,                        -- heard frequency
+  freq_khz   integer,                        -- Kismet device frequency: NOT the frame behind rssi (see below)
   channel    text,                           -- Kismet last known channel
-  rssi       smallint,                       -- Kismet sig_last (one frame), NULL when no reading
+  rssi       smallint,                       -- Kismet sig_last (one frame), NULL when no reading;
+                                             -- may hold a raw floor value (read via rssi_valid())
   rssi_min   smallint,                       -- Kismet lifetime extremes
   rssi_max   smallint,
   pk_total   bigint,                         -- cumulative counters as Kismet reports them
@@ -146,6 +151,13 @@ CREATE TABLE IF NOT EXISTS observations (
 -- Schema 2: the column above on a table created by schema 1 (metadata only, rows
 -- seeded from a v2 buffer keep NULL and the detectors fall back to `disconnects`).
 ALTER TABLE observations ADD COLUMN IF NOT EXISTS disconnects_last timestamptz;
+-- Schema 4: buffer v5 stores the adapter's floor readings (-106/-120) as
+-- rssi NULL + rssi_floor true; rows imported from older buffers keep the raw
+-- value in rssi and NULL here. Never rewritten - read through rssi_valid() /
+-- rssi_is_floor().
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS rssi_floor boolean;
+COMMENT ON COLUMN observations.freq_khz IS
+  'Kismet kismet.device.base.frequency: frequency of the frame that last updated the device frequency (Kismet prefers the frame''s own channel info, else the tuned channel, and updates it from other frames than the signal). Not the reception channel of rssi and not reliably the AP''s channel - use devices.adv_channel.';
 -- The per-device time-series index (the PK is time-leading for the hypertable).
 -- It covers rssi so the bucket query of /api/aps/{key}/rssi runs as an
 -- index-only scan: without INCLUDE (rssi) it touched ~14k heap pages per AP
@@ -230,13 +242,16 @@ CREATE TABLE IF NOT EXISTS ap_baselines (
   rssi_p5        smallint,
   rssi_p95       smallint,
   main_freq_khz  integer,                    -- most frequent heard frequency
-  n_obs          integer,                    -- readings with an RSSI
+  n_obs          integer,                    -- valid RSSI readings (floor values excluded)
+  n_floor        integer,                    -- floor readings (censored) in the same window (schema 4)
   n_days         integer,                    -- distinct days (in sensors.tz) with a reading
   window_start   timestamptz,
   window_end     timestamptz,
   computed_at    timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (sensor_id, device_key),
   FOREIGN KEY (sensor_id, device_key) REFERENCES devices (sensor_id, device_key));
+-- Schema 4: censored floor readings counted next to the valid ones.
+ALTER TABLE ap_baselines ADD COLUMN IF NOT EXISTS n_floor integer;
 CREATE INDEX IF NOT EXISTS ap_baselines_ssid  ON ap_baselines (sensor_id, ssid);
 CREATE INDEX IF NOT EXISTS ap_baselines_bssid ON ap_baselines (sensor_id, bssid);
 COMMENT ON TABLE ap_baselines IS
@@ -272,9 +287,30 @@ COMMENT ON TABLE detections IS
 
 -- --- helpers ------------------------------------------------------------------------------
 
+-- RSSI floors of the capture adapter (RTL8821CU / rtw88_8821cu): -106 dBm is the
+-- smallest value its CCK power estimate can produce (lna_gain_table_1: -44 - 2*31;
+-- every 2.4 GHz beacon is CCK) and -120 the OFDM clamp (max(PWDB - 110, -120)).
+-- A floor means "at or below the floor", i.e. a censored reading, never a level:
+-- statistics use rssi_valid(), and the share of floors per AP (n_floor) gates
+-- eligibility. Raw rows are never rewritten. The same list is
+-- wifi-sensor/collector/dataset_rules.py RSSI_FLOOR_DBM (a collector test keeps
+-- them equal); a different capture adapter needs its floors re-derived.
+CREATE OR REPLACE FUNCTION rssi_valid(r smallint) RETURNS smallint
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN r IN (-106, -120) THEN NULL ELSE r END
+$$;
+
+-- A floor reading: a raw floor value (rows from buffers before v5) or the v5 flag.
+CREATE OR REPLACE FUNCTION rssi_is_floor(r smallint, flag boolean) RETURNS boolean
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT coalesce(flag, false) OR coalesce(r IN (-106, -120), false)
+$$;
+
 -- Recompute the RSSI baselines of one sensor from its observations.
 -- Defaults match analysis/rssi_stability.py: an AP qualifies with >= 200
--- readings on >= 2 distinct days. p_from / p_until restrict the readings used
+-- valid readings on >= 2 distinct days. Floor readings are excluded from every
+-- statistic and counted in n_floor (floor share = n_floor / (n_obs + n_floor));
+-- baselines of APs that no longer qualify are cleared (statistics NULL). p_from / p_until restrict the readings used
 -- (NULL = unbounded) so a baseline can be fitted on an earlier window.
 -- A trusted row keeps its ssid/crypt (the operator-approved identity); only
 -- the statistics are refreshed. Returns the number of rows upserted.
@@ -296,45 +332,50 @@ BEGIN
   END IF;
 
   WITH obs AS (
-    SELECT o.device_key, o.ts, o.rssi, o.freq_khz,
+    SELECT o.device_key, o.ts, rssi_valid(o.rssi) AS rssi, o.freq_khz,
+           rssi_is_floor(o.rssi, o.rssi_floor) AS is_floor,
            (o.ts AT TIME ZONE v_tz)::date AS obs_day
     FROM observations o
     JOIN devices d ON d.sensor_id = o.sensor_id AND d.device_key = o.device_key
     WHERE o.sensor_id = p_sensor_id
       AND d.type = 'ap'
-      AND o.rssi IS NOT NULL
+      AND (o.rssi IS NOT NULL OR o.rssi_floor)
       AND (p_from  IS NULL OR o.ts >= p_from)
       AND (p_until IS NULL OR o.ts <  p_until)
   ), stats AS (
+    -- statistics over valid readings only; floors are counted, never averaged
     SELECT device_key,
-           count(*)::integer                AS n_obs,
-           count(DISTINCT obs_day)::integer AS n_days,
-           percentile_cont(0.5)  WITHIN GROUP (ORDER BY rssi) AS med,
-           avg(rssi)                        AS mean,
-           stddev_pop(rssi)                 AS sd,
-           percentile_cont(0.05) WITHIN GROUP (ORDER BY rssi) AS p5,
-           percentile_cont(0.95) WITHIN GROUP (ORDER BY rssi) AS p95,
-           mode() WITHIN GROUP (ORDER BY freq_khz) AS main_freq,
-           min(ts) AS w_start,
-           max(ts) AS w_end
+           count(rssi)::integer                                  AS n_obs,
+           count(*) FILTER (WHERE is_floor)::integer             AS n_floor,
+           count(DISTINCT obs_day) FILTER (WHERE rssi IS NOT NULL)::integer AS n_days,
+           percentile_cont(0.5)  WITHIN GROUP (ORDER BY rssi)    AS med,
+           avg(rssi)                                             AS mean,
+           stddev_pop(rssi)                                      AS sd,
+           percentile_cont(0.05) WITHIN GROUP (ORDER BY rssi)    AS p5,
+           percentile_cont(0.95) WITHIN GROUP (ORDER BY rssi)    AS p95,
+           mode() WITHIN GROUP (ORDER BY freq_khz) FILTER (WHERE rssi IS NOT NULL) AS main_freq,
+           min(ts) FILTER (WHERE rssi IS NOT NULL)               AS w_start,
+           max(ts) FILTER (WHERE rssi IS NOT NULL)               AS w_end
     FROM obs
     GROUP BY device_key
-    HAVING count(*) >= p_min_obs AND count(DISTINCT obs_day) >= p_min_days
+    HAVING count(rssi) >= p_min_obs
+       AND count(DISTINCT obs_day) FILTER (WHERE rssi IS NOT NULL) >= p_min_days
   ), mad AS (
     SELECT o.device_key,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY abs(o.rssi - s.med)) AS mad
     FROM obs o
     JOIN stats s ON s.device_key = o.device_key
+    WHERE o.rssi IS NOT NULL
     GROUP BY o.device_key
   )
   INSERT INTO ap_baselines (
       sensor_id, device_key, bssid, ssid, crypt,
       rssi_median, rssi_mean, rssi_sd, rssi_robust_sd, rssi_p5, rssi_p95,
-      main_freq_khz, n_obs, n_days, window_start, window_end, computed_at)
+      main_freq_khz, n_obs, n_floor, n_days, window_start, window_end, computed_at)
   SELECT p_sensor_id, s.device_key, d.mac, d.ssid, d.crypt,
          s.med, s.mean, s.sd, 1.4826 * m.mad,
          round(s.p5)::smallint, round(s.p95)::smallint,
-         s.main_freq, s.n_obs, s.n_days, s.w_start, s.w_end, now()
+         s.main_freq, s.n_obs, s.n_floor, s.n_days, s.w_start, s.w_end, now()
   FROM stats s
   JOIN mad m ON m.device_key = s.device_key
   JOIN devices d ON d.sensor_id = p_sensor_id AND d.device_key = s.device_key
@@ -350,11 +391,24 @@ BEGIN
       rssi_p95       = EXCLUDED.rssi_p95,
       main_freq_khz  = EXCLUDED.main_freq_khz,
       n_obs          = EXCLUDED.n_obs,
+      n_floor        = EXCLUDED.n_floor,
       n_days         = EXCLUDED.n_days,
       window_start   = EXCLUDED.window_start,
       window_end     = EXCLUDED.window_end,
       computed_at    = EXCLUDED.computed_at;
   GET DIAGNOSTICS v_n = ROW_COUNT;
+
+  -- Schema 4: a baseline row this call did not refresh (the AP no longer
+  -- qualifies on valid readings in the window) loses its statistics, so no
+  -- consumer keeps using a stale or floor-dominated baseline. The row itself,
+  -- with trusted/note, stays.
+  UPDATE ap_baselines SET
+      rssi_median = NULL, rssi_mean = NULL, rssi_sd = NULL, rssi_robust_sd = NULL,
+      rssi_p5 = NULL, rssi_p95 = NULL, main_freq_khz = NULL,
+      n_obs = NULL, n_floor = NULL, n_days = NULL, window_start = NULL, window_end = NULL,
+      computed_at = now()
+  WHERE sensor_id = p_sensor_id AND computed_at < now();
+
   RETURN v_n;
 END
 $$;
@@ -381,10 +435,34 @@ SELECT d.sensor_id,
        b.rssi_median, b.rssi_robust_sd, b.rssi_sd,
        b.n_obs                                 AS baseline_n_obs,
        b.n_days                                AS baseline_n_days,
-       b.computed_at                           AS baseline_at
+       b.computed_at                           AS baseline_at,
+       b.n_floor                               AS baseline_n_floor,
+       b.n_floor::real / nullif(b.n_obs + b.n_floor, 0) AS baseline_floor_share
 FROM devices d
 LEFT JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.device_key
 WHERE d.type = 'ap';
+
+-- Changes of an AP's advertised channel. device_config_history holds the
+-- REPLACED configuration at the poll ts where the new one was first seen.
+-- Before collector buffer v5 an empty beacon record (channel/HT/beacon rate
+-- unknown) also wrote a row on almost every poll; unknown values are therefore
+-- skipped and a change is a known channel followed by a different known one
+-- (the next known replaced value, else the device's current channel).
+CREATE OR REPLACE VIEW ap_channel_changes AS
+WITH k AS (
+  SELECT h.sensor_id, h.device_key, h.ts, h.adv_channel AS before_ch
+  FROM device_config_history h
+  WHERE h.adv_channel IS NOT NULL
+), seq AS (
+  SELECT k.sensor_id, k.device_key, k.ts, k.before_ch,
+         coalesce(lead(k.before_ch) OVER (PARTITION BY k.sensor_id, k.device_key ORDER BY k.ts),
+                  d.adv_channel) AS after_ch
+  FROM k
+  JOIN devices d ON d.sensor_id = k.sensor_id AND d.device_key = k.device_key
+)
+SELECT sensor_id, device_key, ts, before_ch AS from_channel, after_ch AS to_channel
+FROM seq
+WHERE after_ch IS NOT NULL AND after_ch <> before_ch;
 
 COMMIT;
 
