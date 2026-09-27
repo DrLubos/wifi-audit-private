@@ -7,16 +7,19 @@ single noisy reading must never fire signal (b)."""
 
 import argparse
 import os
+import random
 import sys
+import tracemalloc
 import unittest
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from detection import evil_twin as et                       # noqa: E402
-from detection.evil_twin import (Params, Unknown, assess, assess_unknown,      # noqa: E402
-                                 build_episodes, classify_unknowns, grade_a, grade_b,
-                                 windowed_deviations)
+from detection.evil_twin import (Deviation, Params, Unknown, assess,      # noqa: E402
+                                 assess_unknown, build_episodes, classify_unknowns, grade_a,
+                                 grade_b, scan_deviations, windowed_deviations)
 
 UTC = timezone.utc
 T0 = datetime(2026, 9, 20, 12, 0, 0, tzinfo=UTC)
@@ -213,6 +216,162 @@ class TrustedSetTest(unittest.TestCase):
                        first_seen=frm + timedelta(hours=48))]   # appears well after the cutoff
         sets = et._trusted_sets(inv, p, frm)
         self.assertEqual(sets["IK-WIFI"]["bssids"], {"EC:58:EA:55:89:DC"})
+
+
+# --- streaming (bounded memory) vs the former whole-window processing ---------------
+
+def _old_windowed_deviations(readings, base_median, base_robust_sd, params, device_key="?"):
+    """The list-slicing implementation used until 2026-09-27 (reference)."""
+    sigma = max(float(base_robust_sd), params.sd_floor_db)
+    shift_th = max(params.k * sigma, params.floor_db)
+    spread_th = max(params.spread_k * sigma, params.spread_floor_db)
+    out = []
+    vals = [r[1] for r in readings]
+    for i in range(params.window_w - 1, len(readings)):
+        win = vals[i - params.window_w + 1:i + 1]
+        wmed = et._median(win)
+        wmad = et._mad(win, wmed)
+        dev = wmed - base_median
+        shift = abs(dev) >= shift_th
+        spread = wmad >= spread_th
+        if not (shift or spread):
+            continue
+        facet = "both" if shift and spread else ("median_shift" if shift else "spread_inflation")
+        out.append(Deviation(ts=readings[i][0], device_key=device_key, window_median=wmed,
+                             window_mad=wmad, dev_db=dev, facet=facet))
+    return out
+
+
+def _whole_window_deviations(rows, meta, params):
+    """The former analyse(): all rows fetched, grouped into per-AP lists."""
+    per_ap = defaultdict(list)
+    for key, ts, rssi in rows:
+        per_ap[key].append((ts, rssi))
+    out = []
+    for key, readings in per_ap.items():
+        m = meta[key]
+        out += _old_windowed_deviations(readings, float(m["rssi_median"]),
+                                        float(m["rssi_robust_sd"]), params, key)
+    return out, len(per_ap)
+
+
+def _cursor(rows, itersize):
+    """Rows the way a named cursor delivers them: fetched in chunks of itersize."""
+    it = iter(rows)
+    while True:
+        chunk = [r for _, r in zip(range(itersize), it)]
+        if not chunk:
+            return
+        yield from chunk
+
+
+def _synthetic():
+    """~8 APs over 6 h of 30 s polls: clean, sustained stronger/weaker shifts, a
+    bimodal spread, a sub-persistence blip, two shifts split by a silence longer
+    than gap_s, an AP with fewer than W readings, and one baselined AP without
+    readings. Rows ordered by (device_key, ts) like READINGS_SQL."""
+    rnd = random.Random(20260927)
+    meta, rows = {}, []
+
+    def ap(key, med, sd, values, start=0, holes=()):
+        meta[key] = {"device_key": key, "rssi_median": med, "rssi_robust_sd": sd,
+                     "bssid": key, "ssid": "SSID-" + key, "trusted": key in ("AP-B", "AP-E"),
+                     "base_n_obs": 900, "base_n_days": 3, "base_from": at(-86400), "base_to": at(0)}
+        t = start
+        for i, v in enumerate(values):
+            if i in holes:
+                t += 1500                       # 25 min silence > gap_s (300 s)
+            rows.append((key, at(t), v))
+            t += 30
+
+    def jitter(n, med, sd=2):
+        return [round(med + rnd.gauss(0, sd)) for _ in range(n)]
+
+    ap("AP-A", -60.0, 2.0, jitter(720, -60))                                       # clean
+    ap("AP-B", -55.0, 2.0, jitter(300, -55) + jitter(40, -37) + jitter(380, -55))  # stronger twin
+    ap("AP-C", -70.0, 1.5, jitter(250, -70) + [-70, -50] * 15 + jitter(440, -70))  # bimodal
+    ap("AP-D", -65.0, 2.0, jitter(400, -65) + [-40] * 4 + [-65, -40] + jitter(314, -65))  # 5 windows < persistence
+    ap("AP-E", -58.0, 2.0, jitter(100, -58) + jitter(30, -38) + jitter(60, -58)
+       + jitter(30, -38) + jitter(100, -58), holes=(190,))                          # 2 episodes
+    ap("AP-F", -62.0, 2.0, [-40] * 5)                                              # < W readings
+    ap("AP-G", -48.0, 2.0, jitter(200, -48) + jitter(50, -70) + jitter(200, -48))  # weaker
+    ap("AP-H", -75.0, 3.0, jitter(720, -75, 3))                                    # clean, noisier
+    meta["AP-X"] = dict(meta["AP-A"], device_key="AP-X")                          # no readings
+    rows.sort(key=lambda r: (r[0], r[1]))
+    return meta, rows
+
+
+def _episode_view(deviations, meta, params):
+    eps = build_episodes(deviations, params.gap_s)
+    out = []
+    for e in eps:
+        m = meta[e.device_key]
+        assess(e, params, m, m["bssid"], m["ssid"], m["trusted"])
+        out.append((e.device_key, e.first_ts, e.last_ts, tuple(
+            (d.ts, d.window_median, d.window_mad, d.dev_db, d.facet) for d in e.deviations),
+            e.rule_b, e.severity, e.max_dev_db, e.direction, e.facet, e.max_in_window))
+    return out
+
+
+class StreamingEquivalenceTest(unittest.TestCase):
+    def setUp(self):
+        self.p = Params()
+        self.meta, self.rows = _synthetic()
+
+    def test_synthetic_data_exercises_the_paths(self):
+        devs, aps = _whole_window_deviations(self.rows, self.meta, self.p)
+        eps = _episode_view(devs, self.meta, self.p)
+        self.assertEqual(aps, 8)                                            # AP-X has no readings
+        self.assertEqual(sorted(e[0] for e in eps), ["AP-B", "AP-C", "AP-D", "AP-E", "AP-E", "AP-G"])
+        emitted = {e[0]: e[4] for e in eps}
+        self.assertFalse(emitted["AP-D"])                                   # below persistence
+        self.assertTrue(all(emitted[k] for k in ("AP-B", "AP-C", "AP-E", "AP-G")))
+        self.assertEqual({e[7] for e in eps if e[0] == "AP-G"}, {"weaker"})
+
+    def test_chunked_stream_equals_whole_window(self):
+        ref_devs, ref_aps = _whole_window_deviations(self.rows, self.meta, self.p)
+        ref = _episode_view(ref_devs, self.meta, self.p)
+        for itersize in (1, 7, 5000):
+            with self.subTest(itersize=itersize):
+                devs, aps = scan_deviations(_cursor(self.rows, itersize), self.meta, self.p)
+                self.assertEqual(devs, ref_devs)
+                self.assertEqual(aps, ref_aps)
+                self.assertEqual(_episode_view(devs, self.meta, self.p), ref)
+
+    def test_other_window_sizes_and_thresholds(self):
+        for p in (Params(window_w=5, k=4.0), Params(window_w=20, floor_db=6.0, spread_k=2.0)):
+            with self.subTest(window=p.window_w):
+                ref_devs, _ = _whole_window_deviations(self.rows, self.meta, p)
+                devs, _ = scan_deviations(_cursor(self.rows, 7), self.meta, p)
+                self.assertEqual(devs, ref_devs)
+
+    def test_generator_input_equals_list(self):
+        readings = [(ts, v) for key, ts, v in self.rows if key == "AP-B"]
+        self.assertEqual(windowed_deviations(iter(readings), -55.0, 2.0, self.p, "AP-B"),
+                         _old_windowed_deviations(readings, -55.0, 2.0, self.p, "AP-B"))
+
+    def test_rows_of_unknown_aps_are_skipped(self):
+        rows = [("AP-Z", at(i * 30), -40) for i in range(50)] + self.rows
+        rows.sort(key=lambda r: (r[0], r[1]))
+        devs, aps = scan_deviations(iter(rows), self.meta, self.p)
+        ref_devs, ref_aps = _whole_window_deviations(self.rows, self.meta, self.p)
+        self.assertEqual((devs, aps), (ref_devs, ref_aps))
+
+    def test_memory_does_not_grow_with_window_length(self):
+        meta = {"AP-A": {"rssi_median": -60.0, "rssi_robust_sd": 2.0}}
+
+        def lazy_rows(n):          # generated on the fly, like a server-side cursor
+            return (("AP-A", at(i * 30), -60 + (i % 3) - 1) for i in range(n))
+
+        peaks = []
+        for n in (10_000, 100_000):
+            tracemalloc.start()
+            devs, aps = scan_deviations(lazy_rows(n), meta, self.p)
+            peaks.append(tracemalloc.get_traced_memory()[1])
+            tracemalloc.stop()
+            self.assertEqual((devs, aps), ([], 1))
+        self.assertLess(peaks[1], 256 * 1024)          # a few KB, not O(rows)
+        self.assertLess(peaks[1], 2 * peaks[0] + 16 * 1024)
 
 
 class ParamsTest(unittest.TestCase):

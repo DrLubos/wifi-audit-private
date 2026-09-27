@@ -52,12 +52,20 @@ OUI and crypt match the trusted set, medium otherwise, +1 when close/strong or
 
 Everything is read-only (SET TRANSACTION READ ONLY); the only writes are the
 detections rows through detections.write().
+
+Memory is bounded independently of the window length: the observations are
+streamed through a server-side cursor ordered by (device_key, ts) and processed
+one AP at a time with a W-reading sliding window, so a 12-day window needs the
+same memory as a 1-day one (a whole-window fetchall of ~2.5M rows drove the
+1 GB server into memory pressure and the query's backend died, 2026-09-27).
 """
 
+import itertools
 import json
+import resource
 import statistics
 import sys
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -73,16 +81,27 @@ APSPOOF_HEADERS = ("APSPOOF",)
 # --- SQL ----------------------------------------------------------------------------
 # Every statement is a SELECT; writes go through detections.write().
 
-# Signal (b): observations of every AP that has a qualifying baseline, joined to
-# that baseline. rssi is Kismet sig_last (one frame per poll), NULL when absent.
-OBS_SQL = """
-SELECT o.device_key, o.ts, o.rssi,
+# Signal (b), part 1: one row per AP that has a qualifying baseline - the AP's
+# identity and that baseline (small: one row per AP, fetched whole).
+AP_META_SQL = """
+SELECT d.device_key,
        upper(d.mac::text) AS bssid, d.ssid, d.manuf, d.crypt,
        trunc(d.mac)::text AS oui,
        (d.mac & macaddr '02:00:00:00:00:00') <> macaddr '00:00:00:00:00:00' AS random_bssid,
        b.rssi_median, b.rssi_robust_sd, b.n_obs AS base_n_obs, b.n_days AS base_n_days,
        b.window_start AS base_from, b.window_end AS base_to,
        coalesce(b.trusted, false) AS trusted
+FROM devices d
+JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.device_key
+WHERE d.sensor_id = %(sid)s AND d.type = 'ap'
+  AND b.rssi_median IS NOT NULL AND b.rssi_robust_sd IS NOT NULL"""
+
+# Signal (b), part 2: the RSSI readings of those APs, ordered by (device_key, ts)
+# (served in order by observations_device_ts_rssi) and STREAMED through a
+# server-side cursor - never fetched whole. rssi is Kismet sig_last (one frame
+# per poll), NULL when absent.
+READINGS_SQL = """
+SELECT o.device_key, o.ts, o.rssi
 FROM observations o
 JOIN devices d      ON d.sensor_id = o.sensor_id AND d.device_key = o.device_key
 JOIN ap_baselines b ON b.sensor_id = o.sensor_id AND b.device_key = o.device_key
@@ -90,6 +109,7 @@ WHERE o.sensor_id = %(sid)s AND d.type = 'ap' AND o.rssi IS NOT NULL
   AND b.rssi_median IS NOT NULL AND b.rssi_robust_sd IS NOT NULL
   AND o.ts >= %(scan_from)s AND o.ts < %(scan_to)s
 ORDER BY o.device_key, o.ts"""
+READINGS_ITERSIZE = 5000        # rows per round trip of the server-side cursor
 
 # Signal (a): every AP advertising a named SSID, with its in-window presence and
 # median RSSI. device_config_history SSIDs are unioned in analyse().
@@ -106,7 +126,10 @@ SELECT d.device_key, upper(d.mac::text) AS bssid, trunc(d.mac)::text AS oui, d.m
          FILTER (WHERE o.rssi IS NOT NULL AND o.ts >= %(scan_from)s AND o.ts < %(scan_to)s) AS win_median
 FROM devices d
 LEFT JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.device_key
+-- Only the scan window is joined: every aggregate above is window-filtered, so
+-- this gives the same rows while reading a fraction of the history.
 LEFT JOIN observations o ON o.sensor_id = d.sensor_id AND o.device_key = d.device_key
+                        AND o.ts >= %(scan_from)s AND o.ts < %(scan_to)s
 WHERE d.sensor_id = %(sid)s AND d.type = 'ap' AND d.ssid IS NOT NULL AND d.ssid <> ''
 GROUP BY d.device_key, d.mac, d.manuf, d.ssid, d.crypt, b.trusted, d.first_seen, d.last_seen"""
 
@@ -263,7 +286,8 @@ def _mad(xs, med):
 
 
 def windowed_deviations(readings, base_median, base_robust_sd, params, device_key="?"):
-    """Deviating trailing windows of one AP. readings: [(ts, rssi)] sorted by ts.
+    """Deviating trailing windows of one AP. readings: iterable of (ts, rssi)
+    sorted by ts - a list or a stream; only the last W readings are held.
     A window ending at observation i covers the W readings up to i; it deviates
     when the window median leaves the baseline by more than max(k*sigma, floor)
     (median_shift) or the window MAD exceeds max(spread_k*sigma, spread_floor)
@@ -272,9 +296,12 @@ def windowed_deviations(readings, base_median, base_robust_sd, params, device_ke
     shift_th = max(params.k * sigma, params.floor_db)
     spread_th = max(params.spread_k * sigma, params.spread_floor_db)
     out = []
-    vals = [r[1] for r in readings]
-    for i in range(params.window_w - 1, len(readings)):
-        win = vals[i - params.window_w + 1:i + 1]
+    buf = deque(maxlen=params.window_w)
+    for ts, rssi in readings:
+        buf.append(rssi)
+        if len(buf) < params.window_w:
+            continue
+        win = list(buf)
         wmed = _median(win)
         wmad = _mad(win, wmed)
         dev = wmed - base_median
@@ -283,9 +310,30 @@ def windowed_deviations(readings, base_median, base_robust_sd, params, device_ke
         if not (shift or spread):
             continue
         facet = "both" if shift and spread else ("median_shift" if shift else "spread_inflation")
-        out.append(Deviation(ts=readings[i][0], device_key=device_key, window_median=wmed,
+        out.append(Deviation(ts=ts, device_key=device_key, window_median=wmed,
                              window_mad=wmad, dev_db=dev, facet=facet))
     return out
+
+
+def scan_deviations(rows, meta, params):
+    """Deviating windows of every AP from one pass over ROWS: an iterable of
+    (device_key, ts, rssi) ordered by (device_key, ts), e.g. a server-side
+    cursor. One AP is processed at a time and only its last W readings are held,
+    so memory does not grow with the number of rows. META maps device_key to
+    the AP row (rssi_median, rssi_robust_sd, ...); rows of other APs are
+    skipped. Returns (deviations, aps_scanned) - aps_scanned counts APs with at
+    least one reading."""
+    deviations = []
+    aps = 0
+    for key, group in itertools.groupby(rows, key=lambda r: r[0]):
+        m = meta.get(key)
+        if m is None:
+            continue
+        aps += 1
+        deviations += windowed_deviations(((r[1], r[2]) for r in group),
+                                          float(m["rssi_median"]), float(m["rssi_robust_sd"]),
+                                          params, key)
+    return deviations, aps
 
 
 def build_episodes(deviations, gap_s):
@@ -521,6 +569,16 @@ def _trusted_sets(inventory, params, frm):
     return sets
 
 
+def _stream_readings(conn, sql, args):
+    """(device_key, ts, rssi) rows through a server-side (named) cursor, fetched
+    READINGS_ITERSIZE at a time. Needs the caller's transaction (run() opens one)."""
+    from psycopg.rows import tuple_row               # lazy: tests need no driver
+    with conn.cursor(name="evil_twin_readings", row_factory=tuple_row) as cur:
+        cur.itersize = READINGS_ITERSIZE
+        cur.execute(sql, args)
+        yield from cur
+
+
 def analyse(conn, sensor, frm, to, params, quiet=False):
     """Read phase. Returns (episodes, unknowns, findings, info)."""
     sid = sensor["id"]
@@ -529,18 +587,10 @@ def analyse(conn, sensor, frm, to, params, quiet=False):
 
     # --- signal (b): windowed deviations of every baselined AP -------------------
     _log("scanning RSSI %s .. %s ..." % (fmt_ts(scan_from), fmt_ts(scan_to)), quiet)
-    rows = conn.execute(OBS_SQL, {"sid": sid, "scan_from": scan_from, "scan_to": scan_to}).fetchall()
-    per_ap = defaultdict(list)
-    ap_meta = {}
-    for r in rows:
-        per_ap[r["device_key"]].append((r["ts"], r["rssi"]))
-        if r["device_key"] not in ap_meta:
-            ap_meta[r["device_key"]] = r
-    deviations = []
-    for key, readings in per_ap.items():
-        m = ap_meta[key]
-        deviations += windowed_deviations(readings, float(m["rssi_median"]),
-                                          float(m["rssi_robust_sd"]), params, key)
+    ap_meta = {r["device_key"]: r for r in conn.execute(AP_META_SQL, {"sid": sid})}
+    deviations, aps_scanned = scan_deviations(
+        _stream_readings(conn, READINGS_SQL, {"sid": sid, "scan_from": scan_from, "scan_to": scan_to}),
+        ap_meta, params)
     episodes = [e for e in build_episodes(deviations, params.gap_s) if e.overlaps(frm, to)]
 
     # --- signal (a): unknown BSSIDs for established SSIDs -------------------------
@@ -588,11 +638,13 @@ def analyse(conn, sensor, frm, to, params, quiet=False):
 
     info = {
         "scan_from": scan_from, "scan_to": scan_to,
-        "aps_scanned": len(per_ap), "deviations": len(deviations),
+        "aps_scanned": aps_scanned, "deviations": len(deviations),
         "episodes": len(episodes), "established_ssids": len(tsets),
         "unknown_candidates": len(unknowns),
         "findings_b": sum(1 for e in episodes if e.finding),
         "findings_a": sum(1 for u in unknowns if u.finding),
+        # ru_maxrss is KiB on Linux: the peak of this whole process so far
+        "peak_rss_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0,
     }
     return episodes, unknowns, findings, info
 
@@ -672,6 +724,7 @@ def report(sensor, frm, to, params, episodes, unknowns, findings, info, args):
           % (fmt_ts(info["scan_from"]), fmt_ts(info["scan_to"]), info["aps_scanned"],
              info["deviations"], info["episodes"], info["findings_b"], info["established_ssids"],
              info["unknown_candidates"], info["findings_a"]), file=out)
+    print("  peak RSS of this process: %.0f MB" % info["peak_rss_mb"], file=out)
     print(file=out)
     rows = []
     for i, e in enumerate(e for e in episodes if e.finding):
