@@ -75,9 +75,37 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
 - Add the user to the `kismet` group.
 - Let Kismet manage the capture interface via its datasource (`source=wlanX`).
   Do not manually put the interface in monitor mode or fight Kismet over it.
-- Status: `install_sensor.sh` was run with `CAPTURE_IFACE=wlan1`. Kismet's web/REST
+- Status: `install_sensor.sh` was run with `CAPTURE_IFACE=wlan1` (on the Pi a
+  gitignored `sensor.conf` with that one line avoids the prompt; the prompt now
+  offers only USB adapters, monitor-capable first). Kismet's web/REST
   credentials live in `~/.kismet/kismet_httpd.conf` on the Pi (and, for local dev
   only, in a gitignored `.env` on the Mac) - never committed.
+- **Web UI / REST API on loopback only** (`httpd_bind_address`, installer config
+  `KISMET_HTTPD_BIND`, default `127.0.0.1`). Everything on the Pi uses
+  127.0.0.1 (collector, capture watchdog, installer verify, `analysis/probe_study`);
+  from the Mac use `ssh -L 2501:127.0.0.1:2501 pi` and `http://localhost:2501/`
+  (remote side 127.0.0.1, not localhost: on the Pi localhost resolves to ::1 first).
+  **Exposure until the fix (2026-09-27):** the installer did not set the option, so
+  Kismet used its default `0.0.0.0:2501` - reachable on eth0 (the campus address,
+  default route; no host firewall, nftables inactive) and over Tailscale; verified
+  reachable from the dev Mac on 2026-09-26. Basic auth went over plain HTTP. Kismet
+  2025-09 keeps no access log (no logins, auth failures or client addresses), so
+  outside access can be neither shown nor ruled out; the retained kismetdb logs
+  (from 2026-09-23) and the journal show no new-admin-login message, only the one
+  local datasource, and no persisted web sessions. The login was **kept**
+  (developer's decision, 2026-09-27): the password is unique (not reused
+  elsewhere) and the httpd is now loopback-only. The installer warns before "Keep
+  it?" when the previous config was exposed, and restarts the collector whenever
+  the login changes (it reads the credentials only at start; a 401 is a failed
+  poll, not a crash). Do not put the Pi's addresses into the repo.
+- **Listening sockets (audit 2026-09-27):** sshd on all addresses (expected; its
+  `sshd_config.d/50-cloud-init.conf` is root-only - confirm password login is off
+  with `sudo sshd -T`), tailscaled (WireGuard UDP on all addresses, peer API only
+  on the Tailscale addresses), DHCP client on eth0, chronyd and Kismet's
+  remote-capture listener (3501) on loopback only. avahi-daemon (mDNS, UDP 5353
+  plus two ephemeral ports on all addresses) is not needed by the sensor and
+  announces the hostname on the campus LAN - disabling it is the developer's call
+  (`sudo systemctl disable --now avahi-daemon.service avahi-daemon.socket`).
 - **Cold-boot robustness** (added after a power-cut boot left Kismet "running" with
   0 packets for hours): `sensor/kismet-prestart.sh` runs as `ExecStartPre` of
   `kismet.service` (waits for the USB adapter and chrony, bounded; rfkill unblock;
@@ -146,22 +174,28 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   dwelled 721 ms instead of 215 ms (a 0.5 s stall per ~20 s hop cycle) and the
   capture helper used ~4 % of a core, almost all kernel time. Fix: the installer
   writes an explicit hop list (`CAPTURE_CHANNELS`; default for `rtw88_8821cu`:
-  Kismet's 91-entry autodetected list minus `165HT40-`, same order; `auto` for
-  other drivers). **Do not use `block_channels`** in Kismet 2025-09-R1: it passes a
+  Kismet's 91-entry autodetected list minus the two invalid 40 MHz pairings
+  `165HT40-` and `140HT40-` (136+140, center 138; the standard 140/144 pair stays
+  as `144HT40-`), same order, **89 entries**; `auto` for other drivers).
+  **Do not use `block_channels`** in Kismet 2025-09-R1: it passes a
   `strcasecmp != 0` comparator to `string_vector_inline_filter` (`util.h`), which
   erases the first entry that does NOT match - `block_channels=165HT40-` would drop
   channel 1 instead. Any hop-list change alters per-channel dwell: record it with
   its effective time in `docs/findings.md` (section 7). Channel reweighting for the
   probe study is a separate, later decision.
-- **Open - hop coverage halved since 2026-09-26 22:45:26 UTC (Kismet 2025-09 bug):**
-  the capture helper hops through the shuffled list with a stride derived only from
-  the list length (`capture_framework.c`: first s with `N % (N / s) != 0` - not a
-  coprimality test; the server never sends a stride). For the 90-entry list it
-  picks 4, gcd(90, 4) = 2, so only 45 entries (every other list position) are ever
-  tuned (`dwell_poll.py --list`; `kismet.datasource.hop_shuffle_skip`). The old
-  91-entry list was fully covered by luck. Any hop list must be checked for
-  gcd(N, stride) = 1 - a prime N is safe for every stride. Fix pending (plan);
-  record its effective time in `docs/findings.md` section 7.
+- **Hop stride rule (Kismet 2025-09 bug) - coverage halved from 2026-09-26
+  22:45:26 UTC until the 89-entry list is deployed (pending):** the capture helper
+  hops through the shuffled list with a stride derived only from the list length:
+  the Linux Wi-Fi helper prefers 4 (`capture_linux_wifi.c`) and
+  `cf_handler_assign_hop_channels` (`capture_framework.c`) keeps the first s >= 4
+  with `N % (N / s) != 0` - not a coprimality test; the server never sends a
+  stride. 91 entries -> 4 (coprime, all visited, by luck); 90 entries -> 4,
+  gcd(90, 4) = 2, so only 45 entries (every other list position) were tuned
+  (`dwell_poll.py --list`; `kismet.datasource.hop_shuffle_skip`). Rule: a hop list
+  must satisfy gcd(N, stride) = 1 - a prime N is safe for every stride. The
+  installer replays the search (`hop_stride_ok`) and refuses a bad explicit list;
+  `verify_kismet()` checks the live stride (also for `auto`). Record the
+  deployment time in `docs/findings.md` section 7 and close this item.
 - **Open item - capture helper restarts:** Kismet's datasource reported
   `retry_attempts = 45` (`error_reason` "IPC connection closed") after 3.4 days of
   Kismet uptime, ~13 helper restarts/day, each a short capture gap. Cause unknown

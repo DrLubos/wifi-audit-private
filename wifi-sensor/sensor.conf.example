@@ -10,8 +10,10 @@ CAPTURE_IFACE=wlan1
 
 # Kismet hop list for the capture source: 'auto' (Kismet's autodetected list) or
 # a comma-separated Kismet channel list, e.g. 1,6,11,36,40,44,48.
-# Default: for the rtw88_8821cu driver a built-in list (Kismet's autodetected
-# list without 165HT40-, which triggers an rtw88 WARN storm); 'auto' otherwise.
+# Default: for the rtw88_8821cu driver a built-in 89-entry list (Kismet's
+# autodetected list without the invalid 40 MHz pairings 165HT40- and 140HT40-);
+# 'auto' otherwise. The installer refuses a list whose length makes Kismet's hop
+# stride skip entries (a prime number of entries is always safe).
 # Changing it changes per-channel dwell - note the date in docs/findings.md.
 #CAPTURE_CHANNELS=auto
 
@@ -35,6 +37,12 @@ CAPTURE_IFACE=wlan1
 
 # Kismet web UI / REST API port.
 #KISMET_HTTPD_PORT=2501
+
+# Address the web UI / REST API listens on. Keep it on loopback: the collector,
+# watchdog and scripts use 127.0.0.1; reach the UI with an SSH tunnel
+# (ssh -L 2501:127.0.0.1:2501 pi, then http://localhost:2501/ on the PC).
+# Allowed: 127.0.0.1, or 0.0.0.0 / :: (every interface - avoid).
+#KISMET_HTTPD_BIND=127.0.0.1
 
 # Where the helper scripts (kismet pre-start, capture watchdog, log retention) are installed.
 #INSTALL_DIR=/opt/wifi-sensor

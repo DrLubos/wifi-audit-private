@@ -43,6 +43,9 @@
 #   KISMET_LOG_DIR     Directory for kismetdb logs.   Default: /var/lib/kismet
 #   KISMET_LOG_TITLE   Log file name prefix.          Default: wifi-sensor
 #   KISMET_HTTPD_PORT  Web UI port.                   Default: 2501
+#   KISMET_HTTPD_BIND  Address the web UI / REST API listens on: 127.0.0.1
+#                      (default; reach the UI over an SSH tunnel), or 0.0.0.0 / ::
+#                      to expose it on every interface (basic auth over plain HTTP).
 #   KISMET_LOG_KEEP_DAYS    Delete kismetdb logs older than this.     Default: 3
 #   KISMET_LOG_MAX_MB       Size cap for all kismetdb logs together.  Default: 1024
 #   KISMET_LOG_MIN_FREE_MB  Delete old logs while the filesystem has
@@ -67,7 +70,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_VARS=(CAPTURE_IFACE CAPTURE_CHANNELS SENSOR_USER KISMET_LOG_DIR KISMET_LOG_TITLE
-           KISMET_HTTPD_PORT KISMET_HTTPD_USER KISMET_HTTPD_PASS INSTALL_DIR
+           KISMET_HTTPD_PORT KISMET_HTTPD_BIND KISMET_HTTPD_USER KISMET_HTTPD_PASS INSTALL_DIR
            KISMET_LOG_KEEP_DAYS KISMET_LOG_MAX_MB KISMET_LOG_MIN_FREE_MB)
 
 # Helper scripts (sensor/) and unit templates (systemd/) shipped in this repository.
@@ -75,6 +78,7 @@ SENSOR_SRC_DIR="$SCRIPT_DIR/sensor"
 UNIT_TEMPLATE_DIR="$SCRIPT_DIR/systemd"
 WATCHDOG_UNIT="wifi-sensor-capture-watchdog"
 RETENTION_UNIT="wifi-sensor-kismet-log-retention"
+COLLECTOR_UNIT="wifi-sensor-collector"
 
 # Locations defined by the Kismet / Debian packaging (not sensor-specific).
 KISMET_KEY_URL="https://www.kismetwireless.net/repos/kismet-release.gpg.key"
@@ -91,10 +95,17 @@ JOURNAL_DIR="/var/log/journal"
 JOURNAL_FLUSHED_FLAG="/run/systemd/journal/flushed"
 
 # Hop list for the RTL8821CU (rtw88_8821cu): Kismet 2025-09's autodetected list
-# (91 entries, same order) without 165HT40-. Channel 165 has no 40 MHz partner;
-# tuning to it (center 163) hits rtw_get_channel_group()'s default case, and the
-# driver logged ~456 WARN traces/min (rtw_get_tx_power_params, phy.c:1876/2193)
-# and stalled that hop for 721 ms instead of 215 ms (measured 2026-09-26).
+# (91 entries, same order) without the two invalid 40 MHz pairings, 89 entries:
+#  - 165HT40-: channel 165 has no 40 MHz partner; tuning to it (center 163) hits
+#    rtw_get_channel_group()'s default case - the driver logged ~456 WARN
+#    traces/min (rtw_get_tx_power_params, phy.c:1876/2193) and stalled that hop
+#    for 721 ms instead of 215 ms (measured 2026-09-26).
+#  - 140HT40-: 136+140 (center 138) is not an 802.11 40 MHz channel; the
+#    standard 140/144 pair stays as 144HT40-, and 140 / 140VHT80 stay.
+# The length must be coprime with the capture helper's hop stride (see
+# hop_stride_ok): with 90 entries Kismet hopped with stride 4 and visited only
+# 45 of them (2026-09-26 22:45 - 2026-09-27). 89 is prime, so every stride
+# covers every entry.
 # An explicit channels= list is used because block_channels is broken in
 # 2025-09-R1: it erases the first entry that does NOT match (kis_datasource.cc
 # passes a strcasecmp != 0 comparator to string_vector_inline_filter), so
@@ -104,7 +115,7 @@ RTW88_8821CU_CHANNELS="1,1HT40+,2,3,4,5,6,6HT40-,6HT40+,7,8,9,10,11,11HT40-,12,1
 52,52HT40+,52VHT80,56,56HT40-,56VHT80,60,60HT40+,60VHT80,64,64HT40-,64VHT80,\
 100,100HT40+,100VHT80,104,104HT40-,104VHT80,108,108HT40+,108VHT80,112,112HT40-,112VHT80,\
 116,116HT40+,116VHT80,120,120HT40-,120VHT80,124,124HT40+,124VHT80,128,128HT40-,128VHT80,\
-132,132HT40+,132VHT80,136,136HT40-,136VHT80,140,140HT40-,140VHT80,144,144HT40-,144VHT80,\
+132,132HT40+,132VHT80,136,136HT40-,136VHT80,140,140VHT80,144,144HT40-,144VHT80,\
 149,149HT40+,149VHT80,153,153HT40-,153VHT80,157,157HT40+,157VHT80,161,161HT40-,161VHT80,165"
 
 # ------------------------------------------------------------------ helpers --
@@ -201,19 +212,42 @@ wireless_ifaces() {
   done
 }
 
+iface_is_usb() {
+  [[ $(readlink -f "/sys/class/net/$1/device") == */usb[0-9]* ]]
+}
+
+# Monitor mode per 'iw phy'; unknown (false) when iw is not installed yet.
+iface_monitor_capable() {
+  local phy
+  command -v iw >/dev/null || return 1
+  phy=$(<"/sys/class/net/$1/phy80211/name") || return 1
+  iw phy "$phy" info 2>/dev/null \
+    | awk '/Supported interface modes:/ {f = 1; next} f && /^\t[^\t]/ {f = 0} f' \
+    | grep -q '\* monitor'
+}
+
 select_capture_iface() {
-  local ifc usb_devs
-  local candidates=()
-  for ifc in $(wireless_ifaces); do
-    # Skip protected interfaces and monitor VIFs that a running Kismet created.
-    if [[ -z ${PROTECTED[$ifc]:-} && $ifc != *mon ]]; then candidates+=("$ifc"); fi
-  done
+  local ifc usb_devs desc
+  local monitor=() other=() skipped=() candidates=()
   if [[ -n ${CAPTURE_IFACE:-} ]]; then
     log "capture interface from config: $CAPTURE_IFACE"
     return
   fi
+  for ifc in $(wireless_ifaces); do
+    # Skip protected interfaces and monitor VIFs that a running Kismet created.
+    if [[ -n ${PROTECTED[$ifc]:-} || $ifc == *mon ]]; then continue; fi
+    # Only a USB adapter can be the capture adapter (check_capture_iface).
+    if ! iface_is_usb "$ifc"; then
+      skipped+=("$ifc")
+    elif iface_monitor_capable "$ifc"; then
+      monitor+=("$ifc")
+    else
+      other+=("$ifc")
+    fi
+  done
+  candidates=("${monitor[@]}" "${other[@]}")
   if [[ ${#candidates[@]} -eq 0 ]]; then
-    warn "no unprotected wireless interface found (present: $(wireless_ifaces | tr '\n' ' '))"
+    warn "no unprotected USB wireless interface found (present: $(wireless_ifaces | tr '\n' ' ')${skipped[*]:+; not USB: ${skipped[*]}})"
     usb_devs=$(lsusb 2>/dev/null || true)
     if [[ $usb_devs == *"a69c:"* ]]; then
       warn "an AICSemi (AIC8800-family) dongle is attached in USB mass-storage mode;"
@@ -222,6 +256,12 @@ select_capture_iface() {
     die "plug in the USB capture adapter and re-run (check with: iw dev), or set CAPTURE_IFACE"
   fi
   [[ -t 0 ]] || die "CAPTURE_IFACE is not set and there is no terminal to prompt on"
+  for ifc in "${candidates[@]}"; do
+    desc="$(<"/sys/class/net/$ifc/address") $(basename "$(readlink -f "/sys/class/net/$ifc/device/driver")")"
+    if iface_monitor_capable "$ifc"; then desc+=", monitor"; fi
+    log "candidate: $ifc ($desc)"
+  done
+  if [[ ${#skipped[@]} -gt 0 ]]; then log "not offered (not USB): ${skipped[*]}"; fi
   read -r -p "Capture interface [${candidates[0]}] (candidates: ${candidates[*]}): " CAPTURE_IFACE
   CAPTURE_IFACE=${CAPTURE_IFACE:-${candidates[0]}}
 }
@@ -236,7 +276,7 @@ check_capture_iface() {
   fi
   [[ -e /sys/class/net/$ifc/phy80211 ]] || die "'$ifc' is not a wireless (cfg80211) interface"
   devpath=$(readlink -f "/sys/class/net/$ifc/device")
-  if [[ $devpath != */usb[0-9]* ]]; then
+  if ! iface_is_usb "$ifc"; then
     die "'$ifc' is not USB-attached ($devpath); the built-in radio must never be used for capture"
   fi
   CAPTURE_PHY=$(<"/sys/class/net/$ifc/phy80211/name")
@@ -256,10 +296,39 @@ check_monitor_mode() {
   log "monitor mode: supported (frame injection is not needed by a passive sensor and is not tested)"
 }
 
+# Kismet 2025-09's capture helper hops through the (shuffled) list with a stride
+# derived from the list length alone: the Linux Wi-Fi helper prefers 4
+# (capture_linux_wifi.c) and cf_handler_assign_hop_channels (capture_framework.c)
+# keeps the first s >= 4 with N % (N / s) != 0 - not a coprimality test - so
+# only N / gcd(N, s) entries are visited. Replays that search; sets HOP_STRIDE
+# and HOP_GCD and succeeds when every entry is visited.
+hop_stride_ok() {
+  local n=$1 s=4 a b t
+  if (( s > n )); then s=1; fi
+  while (( n % (n / s) == 0 )); do
+    if (( s >= n - 1 )); then
+      s=1
+      break
+    fi
+    s=$((s + 1))
+  done
+  a=$n
+  b=$s
+  while (( b > 0 )); do
+    t=$((a % b))
+    a=$b
+    b=$t
+  done
+  HOP_STRIDE=$s
+  HOP_GCD=$a
+  (( a == 1 ))
+}
+
 # Sets KISMET_SOURCE_OPTS (appended to the source= line) from CAPTURE_CHANNELS.
 # Needs CAPTURE_DRIVER, so it runs after check_capture_iface.
 resolve_capture_channels() {
-  local chans=${CAPTURE_CHANNELS:-} list
+  local chans=${CAPTURE_CHANNELS:-} list c n=0
+  local -A seen=()
   if [[ -z $chans ]]; then
     if [[ $CAPTURE_DRIVER == rtw88_8821cu ]]; then
       chans=$RTW88_8821CU_CHANNELS
@@ -276,12 +345,37 @@ resolve_capture_channels() {
   [[ $chans =~ ^[0-9A-Za-z+-]+(,[0-9A-Za-z+-]+)*$ ]] \
     || die "CAPTURE_CHANNELS must be 'auto' or a comma-separated Kismet channel list (got '$chans')"
   KISMET_SOURCE_OPTS=",channels=\"$chans\""
+  # Kismet merges the list case-insensitively; the helper hops the merged list.
   IFS=, read -ra list <<<"$chans"
-  log "hop list: ${#list[@]} channels"
+  for c in "${list[@]}"; do
+    if [[ -z ${seen[${c,,}]:-} ]]; then
+      seen[${c,,}]=1
+      n=$((n + 1))
+    fi
+  done
+  if ! hop_stride_ok "$n"; then
+    die "hop list has $n distinct entries: Kismet would hop with stride $HOP_STRIDE and visit only $((n / HOP_GCD)) of them - use a length coprime with the stride (a prime number of entries is always safe)"
+  fi
+  log "hop list: $n channels (helper stride $HOP_STRIDE, all visited)"
 }
 
 # ------------------------------------------------------------- credentials --
 KEEP_CREDS=0
+AUTH_CHANGED=0
+HTTPD_WAS_EXPOSED=0
+
+is_loopback() { [[ $1 == 127.* || $1 == ::1 ]]; }
+
+# True when an existing Kismet config left the web UI on the network: before
+# 2026-09-27 the installer did not set httpd_bind_address (Kismet default
+# 0.0.0.0), so the basic-auth login went over plain HTTP on every interface.
+httpd_was_exposed() {
+  local bind
+  [[ -f $KISMET_SITE_CONF ]] || return 1
+  bind=$(sed -n 's/^httpd_bind_address=//p' "$KISMET_SITE_CONF" | tail -n 1)
+  ! is_loopback "${bind:-0.0.0.0}"
+}
+
 collect_credentials() {
   local existing keep p1 p2
   if [[ -n ${KISMET_HTTPD_USER:-} && -n ${KISMET_HTTPD_PASS:-} ]]; then
@@ -292,6 +386,10 @@ collect_credentials() {
     existing=$(awk -F= '$1 == "httpd_username" {print $2; exit}' "$AUTH_FILE")
     if [[ -n $existing ]]; then
       keep=Y
+      if [[ $HTTPD_WAS_EXPOSED -eq 1 ]]; then
+        warn "the Kismet web UI was reachable on the network until now (not bound to loopback),"
+        warn "with its basic-auth login sent over plain HTTP - answer 'n' to set a new password"
+      fi
       if [[ -t 0 ]]; then
         read -r -p "Web UI login already exists (user '$existing'). Keep it? [Y/n] " keep
       fi
@@ -545,6 +643,12 @@ tracker_device_timeout=3600
 
 # --- web UI ----------------------------------------------------------------
 httpd_port=${KISMET_HTTPD_PORT}
+# Loopback only by default: the collector, the capture watchdog, the installer
+# and analysis/probe_study all use 127.0.0.1, and the UI is reached through an
+# SSH tunnel (basic auth over plain HTTP must not cross the campus network).
+# Until 2026-09-27 Kismet's default 0.0.0.0 applied (reachable on eth0 and
+# Tailscale).
+httpd_bind_address=${KISMET_HTTPD_BIND}
 # The login lives in ${AUTH_FILE} (mode 0600), never in a world-readable file.
 EOF
 
@@ -564,6 +668,7 @@ EOF
 httpd_username=${KISMET_HTTPD_USER}
 httpd_password=${KISMET_HTTPD_PASS}
 EOF
+    AUTH_CHANGED=$LAST_WRITE_CHANGED
   fi
 }
 
@@ -625,6 +730,13 @@ EOF
   else
     log "kismet.service already running with the current configuration"
   fi
+  # The collector reads the login only at start; with a new password every poll
+  # would fail (HTTP 401 -> ok = 0) until it is restarted. The watchdog re-reads
+  # the auth file on every run.
+  if [[ $AUTH_CHANGED -eq 1 ]]; then
+    systemctl try-restart "$COLLECTOR_UNIT.service"
+    log "web UI login changed: $COLLECTOR_UNIT.service restarted (if installed and running)"
+  fi
 }
 
 # Fill the __PLACEHOLDER__s of a unit template from the installer's settings.
@@ -650,7 +762,12 @@ install_timer() {
   write_if_changed "/etc/systemd/system/$unit.timer" 0644 root:root <"$timer_tpl"
   systemctl daemon-reload
   systemctl enable --now "$unit.timer" >/dev/null 2>&1
-  log "$unit.timer: $(systemctl is-active "$unit.timer"), next run $(systemctl show -p NextElapseUSecRealtime --value "$unit.timer" 2>/dev/null || echo '?')"
+  # The timers are monotonic (OnBootSec/OnUnitActiveSec): NextElapseUSecRealtime
+  # stays empty, list-timers shows the computed wall-clock time.
+  local next
+  next=$(systemctl list-timers --all --no-legend "$unit.timer" 2>/dev/null \
+         | awk 'NR == 1 && $1 != "-" && $1 != "n/a" {print $1, $2, $3, $4}' || true)
+  log "$unit.timer: $(systemctl is-active "$unit.timer"), next run ${next:-on its schedule (monotonic timer)}"
 }
 
 verify_kismet() {
@@ -686,7 +803,7 @@ verify_kismet() {
   done
   if [[ -n $sources ]] && command -v python3 >/dev/null; then
     printf '%s' "$sources" | python3 -c '
-import json, sys
+import json, math, sys
 try:
     srcs = json.load(sys.stdin)
 except Exception:
@@ -698,7 +815,13 @@ for s in srcs:
     if s.get("kismet.datasource.error"):
         print("  datasource %s (%s): ERROR - %s" % (name, iface, s.get("kismet.datasource.error_reason")))
     elif s.get("kismet.datasource.running") and pk > 0:
-        print("  datasource %s (%s): running, hopping=%s, hop channels: %d, %d packets" % (name, iface, s.get("kismet.datasource.hopping"), len(s.get("kismet.datasource.hop_channels") or []), pk))
+        # Kismet 2025-09 hops with a stride derived from the list length only;
+        # a stride sharing a factor with it leaves part of the list unvisited.
+        n = len(s.get("kismet.datasource.hop_channels") or [])
+        stride = s.get("kismet.datasource.hop_shuffle_skip") or 1
+        g = math.gcd(n, stride) if n and s.get("kismet.datasource.hop_shuffle") else 1
+        hop = "stride %d, all visited" % stride if g == 1 else "stride %d, WARNING: only %d of them are visited" % (stride, n // g)
+        print("  datasource %s (%s): running, hopping=%s, hop channels: %d (%s), %d packets" % (name, iface, s.get("kismet.datasource.hopping"), n, hop, pk))
     elif s.get("kismet.datasource.running"):
         print("  datasource %s (%s): running but NO packets yet - the watchdog will restart Kismet if this persists" % (name, iface))
     else:
@@ -718,15 +841,39 @@ except Exception:
 }
 
 print_next_steps() {
-  local ip
+  local ip web security=""
+  local p=$KISMET_HTTPD_PORT
   ip=$(ip -o -4 addr show scope global 2>/dev/null \
        | awk '{split($4, a, "/"); print a[1]; exit}' || true)
+  if is_loopback "$KISMET_HTTPD_BIND"; then
+    # Remote side 127.0.0.1, not localhost: on the Pi localhost resolves to ::1
+    # first, where Kismet does not listen.
+    web="ssh -L ${p}:127.0.0.1:${p} ${SENSOR_USER}@${ip:-<pi-host>}   (or your alias: ssh -L ${p}:127.0.0.1:${p} pi)
+             then open http://localhost:${p}/ on the PC - Kismet listens on ${KISMET_HTTPD_BIND} only"
+  else
+    web="http://${ip:-<pi-ip>}:${p}/   (listening on ${KISMET_HTTPD_BIND}: reachable from the network, basic auth over plain HTTP)"
+  fi
+  if [[ $HTTPD_WAS_EXPOSED -eq 1 ]] && is_loopback "$KISMET_HTTPD_BIND"; then
+    security="
+  Security   Until this run the web UI listened on all interfaces (Kismet's default 0.0.0.0),
+             so its basic-auth login went over plain HTTP on the network. It now listens on
+             ${KISMET_HTTPD_BIND} only."
+    if [[ $KEEP_CREDS -eq 1 ]]; then
+      security+="
+             You kept the existing login. If its password is used anywhere else or may have
+             been seen, rotate it: re-run and answer 'n' to \"Keep it?\"."
+    elif [[ $AUTH_CHANGED -eq 1 ]]; then
+      security+="
+             New login stored (the collector was restarted to pick it up). Update the password
+             wherever you keep it (browser, the PC's .env)."
+    fi
+  fi
   cat <<EOF
 
 ==> Done. Next steps
-  Web UI     http://${ip:-<pi-ip>}:${KISMET_HTTPD_PORT}/   (or http://$(hostname).local:${KISMET_HTTPD_PORT}/ with mDNS)
+  Web UI     ${web}
              login: '${KISMET_HTTPD_USER}' with the password you entered
-             (stored in ${AUTH_FILE}, mode 0600 - delete it and re-run to reset)
+             (stored in ${AUTH_FILE}, mode 0600 - delete it and re-run to reset)${security}
   Service    systemctl status kismet
              journalctl -u kismet -f
   Capture    iw dev                      # expect '${CAPTURE_IFACE}mon' with type monitor
@@ -770,6 +917,14 @@ main() {
   KISMET_LOG_DIR="${KISMET_LOG_DIR:-/var/lib/kismet}"
   KISMET_LOG_TITLE="${KISMET_LOG_TITLE:-wifi-sensor}"
   KISMET_HTTPD_PORT="${KISMET_HTTPD_PORT:-2501}"
+  KISMET_HTTPD_BIND="${KISMET_HTTPD_BIND:-127.0.0.1}"
+  # The collector, the watchdog and verify_kismet connect to 127.0.0.1, so the
+  # httpd must listen there (or on every address); Kismet also treats an
+  # unparsable address as fatal at start-up.
+  case $KISMET_HTTPD_BIND in
+    127.0.0.1|0.0.0.0|::) ;;
+    *) die "KISMET_HTTPD_BIND must be 127.0.0.1 (default), 0.0.0.0 or :: - local clients use 127.0.0.1 (got '$KISMET_HTTPD_BIND')" ;;
+  esac
   INSTALL_DIR="${INSTALL_DIR:-/opt/wifi-sensor}"
   KISMET_LOG_KEEP_DAYS="${KISMET_LOG_KEEP_DAYS:-3}"
   KISMET_LOG_MAX_MB="${KISMET_LOG_MAX_MB:-1024}"
@@ -789,6 +944,7 @@ main() {
   select_capture_iface
   check_capture_iface
   resolve_capture_channels
+  if httpd_was_exposed; then HTTPD_WAS_EXPOSED=1; fi
   # All interactive input happens here, before the long-running apt steps.
   collect_credentials
 

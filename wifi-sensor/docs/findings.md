@@ -192,11 +192,12 @@ read from the running system after the change (journal, `polls`), not planned.
 | Channel 165 airtime | ~4.6 % (165 + 165HT40-, incl. stall) | 0 % (`165` is not visited) |
 
 Why only half: the capture helper steps through the (shuffled) list with a fixed
-stride that Kismet 2025-09 derives from the list length alone
-(`capture_framework.c`, `cf_handler_assign_hop_channels`: it accepts the first
-stride s with `N % (N / s) != 0`, which is not a coprimality test). For N = 91
-it happened to pick a stride coprime with 91 (reported `hop_shuffle_skip` 4);
-for N = 90 it picks 4, gcd(90, 4) = 2, so only even list positions are tuned.
+stride that Kismet 2025-09 derives from the list length alone - the Linux Wi-Fi
+helper prefers 4 (`capture_linux_wifi.c`) and `cf_handler_assign_hop_channels`
+(`capture_framework.c`) keeps the first s >= 4 with `N % (N / s) != 0`, which is
+not a coprimality test. For N = 91 that is 4, coprime with 91 (all visited, by
+luck); for N = 90 it is also 4, gcd(90, 4) = 2, so only even list positions are
+tuned.
 Not visited since 22:45:26: 2.4 GHz `1HT40+`, 3, 5, `6HT40-`, 7, 9, 11 (20 MHz;
 11 is still the primary of `11HT40-`), 12; on 5 GHz every odd position (e.g. 36,
 `36VHT80`, `40HT40-`, 44, `44VHT80`, ..., 165). Adjacent-channel reception on
