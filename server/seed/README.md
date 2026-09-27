@@ -68,10 +68,12 @@ python3 seed/import_snapshot.py buffer-snapshot.db --sensor pi-fri \
   a per-table row count for the sensor.
 - After loading, `refresh_ap_baselines(sensor_id, 200, 2)` is called (skip with
   `--no-baselines`, tune with `--min-obs/--min-days`).
-- Buffer schema v2 and v3 snapshots are both accepted. v3 (collector deployed
-  2026-09-22 or later) carries `observations.disconnects_last`; from a v2
-  snapshot the column is imported as NULL. Apply the current `schema.sql` (step 2)
-  before importing a v3 snapshot, otherwise the INSERT fails on the unknown column.
+- Buffer schema v2, v3 and v4 snapshots are accepted. v3 (collector deployed
+  2026-09-22 or later) carries `observations.disconnects_last`, v4 (2026-09-27 or
+  later) `polls.ds_hop_n / ds_hop_visited / ds_hop_ok` (hop-list coverage); from
+  older snapshots those columns are imported as NULL. Apply the current
+  `schema.sql` (step 2) before importing a newer snapshot, otherwise the INSERT
+  fails on the unknown columns.
 
 Re-running with the same or a later snapshot is safe and accumulates: time
 series rows are inserted only if new, `devices` keep the earliest `first_seen`

@@ -30,9 +30,9 @@ Everything runs between BEGIN and COMMIT, so a failure (bad MAC, FK violation,
 lost connection) leaves the database untouched. psql's own "COPY n" / "INSERT 0 n"
 command tags show what was staged and what was actually inserted.
 
-Column and semantics reference: wifi-sensor/collector/store.py (buffer schema v2
-or v3; v3 added observations.disconnects_last, which a v2 snapshot imports as NULL)
-and server/schema.sql.
+Column and semantics reference: wifi-sensor/collector/store.py (buffer schema v2,
+v3 or v4; v3 added observations.disconnects_last, v4 polls.ds_hop_*; older
+snapshots import them as NULL) and server/schema.sql.
 """
 
 import argparse
@@ -43,7 +43,7 @@ import sys
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-EXPECTED_SCHEMA_VERSIONS = ("2", "3")
+EXPECTED_SCHEMA_VERSIONS = ("2", "3", "4")
 
 _MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
 # COPY text format: backslash, tab, newline and carriage return are escaped;
@@ -123,14 +123,18 @@ TABLES = [
         "order": " ORDER BY ts",
         "stage": [("ts", "bigint"), ("kismet_ts", "bigint"), ("devices_total", "integer"),
                   ("devices_active", "integer"), ("new_obs", "integer"), ("ds_running", "integer"),
-                  ("ds_error", "text"), ("ds_packets", "bigint"), ("duration_ms", "integer"),
+                  ("ds_error", "text"), ("ds_packets", "bigint"), ("ds_hop_n", "integer"),
+                  ("ds_hop_visited", "integer"), ("ds_hop_ok", "integer"), ("duration_ms", "integer"),
                   ("ok", "integer"), ("error", "text")],
+        "optional": ("ds_hop_n", "ds_hop_visited", "ds_hop_ok"),   # buffer v4
         "macs": (),
         "insert": (
             "INSERT INTO polls (sensor_id, ts, kismet_ts, devices_total, devices_active, new_obs, "
-            "ds_running, ds_error, ds_packets, duration_ms, ok, error)\n"
+            "ds_running, ds_error, ds_packets, ds_hop_n, ds_hop_visited, ds_hop_ok, "
+            "duration_ms, ok, error)\n"
             "SELECT :sid, to_timestamp(ts), to_timestamp(kismet_ts), devices_total, devices_active, "
-            "new_obs, ds_running::boolean, ds_error, ds_packets, duration_ms, ok::boolean, error\n"
+            "new_obs, ds_running::boolean, ds_error, ds_packets, ds_hop_n, ds_hop_visited, "
+            "ds_hop_ok::boolean, duration_ms, ok::boolean, error\n"
             "FROM stage_polls\n"
             "ON CONFLICT DO NOTHING;"),
     },

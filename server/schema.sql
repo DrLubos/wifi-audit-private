@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   key   text PRIMARY KEY,
   value text NOT NULL);
 -- 2: observations.disconnects_last (buffer v3)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '2')
+-- 3: polls.ds_hop_n / ds_hop_visited / ds_hop_ok (buffer v4)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '3')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- sensors ------------------------------------------------------------------
@@ -48,10 +49,20 @@ CREATE TABLE IF NOT EXISTS polls (
   ds_running     boolean,                    -- every datasource running
   ds_error       text,                       -- first datasource error reason
   ds_packets     bigint,                     -- sum of datasource num_packets
+  ds_hop_n       integer,                    -- live hop-list length (buffer v4)
+  ds_hop_visited integer,                    -- hop entries really tuned (buffer v4)
+  ds_hop_ok      boolean,                    -- configured list, fully visited (buffer v4; NULL = no explicit list / older buffer)
   duration_ms    integer,
   ok             boolean NOT NULL DEFAULT true,
   error          text,
   PRIMARY KEY (sensor_id, ts));
+-- Schema 3: hop-list coverage on a polls table created by an earlier schema
+-- (metadata only; rows from older buffers keep NULL). Degraded channel coverage
+-- (Kismet 2025-09 collapsing the hop list) is invisible in ds_packets - see
+-- wifi-sensor/docs/findings.md section 7.
+ALTER TABLE polls ADD COLUMN IF NOT EXISTS ds_hop_n integer;
+ALTER TABLE polls ADD COLUMN IF NOT EXISTS ds_hop_visited integer;
+ALTER TABLE polls ADD COLUMN IF NOT EXISTS ds_hop_ok boolean;
 COMMENT ON TABLE polls IS
   'One row per collector poll (30 s): collector, Kismet and datasource health.';
 
