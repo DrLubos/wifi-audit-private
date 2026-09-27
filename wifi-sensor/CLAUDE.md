@@ -184,7 +184,8 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   its effective time in `docs/findings.md` (section 7). Channel reweighting for the
   probe study is a separate, later decision.
 - **Hop stride rule (Kismet 2025-09 bug) - coverage halved from 2026-09-26
-  22:45:26 UTC until the 89-entry list is deployed (pending):** the capture helper
+  22:45:26 to 2026-09-27 13:04:57 UTC; fixed and verified by the 89-entry list
+  (all 89 settings visited, stride 4):** the capture helper
   hops through the shuffled list with a stride derived only from the list length:
   the Linux Wi-Fi helper prefers 4 (`capture_linux_wifi.c`) and
   `cf_handler_assign_hop_channels` (`capture_framework.c`) keeps the first s >= 4
@@ -194,13 +195,34 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   (`dwell_poll.py --list`; `kismet.datasource.hop_shuffle_skip`). Rule: a hop list
   must satisfy gcd(N, stride) = 1 - a prime N is safe for every stride. The
   installer replays the search (`hop_stride_ok`) and refuses a bad explicit list;
-  `verify_kismet()` checks the live stride (also for `auto`). Record the
-  deployment time in `docs/findings.md` section 7 and close this item.
+  `verify_kismet()` checks the live stride (also for `auto`). Details and dated
+  windows: `docs/findings.md` section 7.
+- **OPEN, urgent - a capture-helper crash pins the sensor to channel 1 (Kismet
+  2025-09 bug, since the explicit `channels=` list of 2026-09-26 22:45:26):**
+  after a helper error Kismet re-opens the source from a definition it rebuilds
+  without quoting (`kis_datasource.cc`, `generate_source_definition()`: plain
+  `key=value` pairs), so `channels="1,1HT40+,..."` comes back as `channels=1` plus
+  stray options (`wlan1:1ht40+,2,...,name=capture,channels=1,...` in the error
+  log) and the re-opened source hops `['1']` until Kismet restarts. Observed:
+  2412 MHz only from 2026-09-26 23:09:14 to 2026-09-27 11:34:24 and 12:17:20 -
+  12:22:55; after some crashes the re-opened source delivered no frames at all
+  (then the watchdog's stuck-counter check restarts Kismet, ~4-6 min). A plain
+  channel-1 capture keeps the counter moving, so **the watchdog does not catch
+  the collapse**. Until fixed, every helper crash can cost hours of coverage -
+  check `kismet.datasource.hop_channels` (or `dwell_poll.py`) after any
+  "IPC connection closed". Fix to be planned (e.g. the watchdog compares the live
+  hop list with the configured one and restarts Kismet). `auto` lists survive a
+  re-open (no commas in the definition). Dated windows: `docs/findings.md`
+  sections 6 and 7.
 - **Open item - capture helper restarts:** Kismet's datasource reported
   `retry_attempts = 45` (`error_reason` "IPC connection closed") after 3.4 days of
-  Kismet uptime, ~13 helper restarts/day, each a short capture gap. Cause unknown
-  (the old volatile journal kept only ~4 min). Re-measure after the storm fix with
-  the persistent journal (`journalctl -u kismet`, delta of `retry_attempts`).
+  Kismet uptime, ~13 helper restarts/day, each a short capture gap. Cause unknown.
+  First persistent-journal data (after the storm fix): crashes at 2026-09-26
+  23:09:14, 23:29:21, 23:54:22, 2026-09-27 00:11:05, 11:29:37, 11:30:07 and
+  12:17:20/39/47 - then none between 00:11 and 11:29 (sensor on channel 1 only at
+  the time, see the item above). Keep counting (`journalctl -u kismet | grep
+  "IPC connection closed"`, delta of `retry_attempts`) and look at the kernel log
+  around each crash. Each crash currently triggers the channel-1 collapse.
 
 ## Data to read from Kismet (targets for the collector, Milestone 2)
 

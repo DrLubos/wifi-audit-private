@@ -138,14 +138,18 @@ flowchart LR
 
 ## 6. Known data gaps
 
-Windows in which the buffer has no usable polls. Exclude them from coverage,
-rate and "never seen" statements, and do not schedule staged experiments into
-them.
+Windows in which the buffer has no usable polls, or in which polls succeeded
+but the capture delivered no frames (Kismet's packet counter frozen). Exclude
+them from coverage, rate and "never seen" statements, and do not schedule staged
+experiments into them. Windows with reduced channel coverage (but frames) are
+in section 7.
 
 | From (UTC) | To (UTC) | Length | Cause |
 |---|---|---|---|
 | 2026-09-22 13:43:21 (last ok poll) | 2026-09-23 09:26:58 (first ok poll) | 19 h 44 m | Root filesystem full (Kismet logs) |
 | 2026-09-26 22:46:43 (last ok poll) | 2026-09-26 22:48:23 (first ok poll) | 1 m 40 s | Controlled reboot after the hop-list/journal install (`sudo reboot` 22:46:55, Kismet up 22:47:52; one failed poll at 22:47:53) |
+| 2026-09-27 11:30:14 (source "re-opened" after a capture-helper crash; counter frozen from the 11:29:54 poll) | 2026-09-27 11:34:25 (watchdog restarted Kismet; frames again at the 11:34:54 poll) | ~4 m | Polls ok, no frames: helper crashes at 11:29:37 and 11:30:07, Kismet's re-open with the broken definition (section 7) captured nothing until the watchdog's second strike |
+| 2026-09-27 12:17:20 (helper crash; counter frozen from the 12:17:24 poll) | 2026-09-27 12:22:55 (watchdog restarted Kismet; frames again at the 12:23:24 poll) | ~5.5 m | Same: helper crashes at 12:17:20/39/47, re-open captured nothing |
 
 **2026-09-22 disk-full gap** (boundaries read from `polls` in the live buffer):
 
@@ -176,20 +180,23 @@ read from the running system after the change (journal, `polls`), not planned.
 
 | Effective from (UTC) | Change | Effect on the data |
 |---|---|---|
-| 2026-09-26 22:45:26 | Hop list: explicit `channels=` list, Kismet's autodetected 91-entry list without `165HT40-` (90 entries, same order, shuffled at 5 hops/s). `install_sensor.sh` restarted Kismet at 22:45:25-26; last poll on the old list 22:45:13, first on the new list 22:45:43 | rtw88 WARN storm over (last WARN 22:45:22; 0 since); the 721 ms stall per cycle is gone (dwell median 0.215 s, max 0.223 s). **But only 45 of the 90 entries are visited** - see below |
+| 2026-09-26 22:45:26 | Hop list: explicit `channels=` list, Kismet's autodetected 91-entry list without `165HT40-` (90 entries, same order, shuffled at 5 hops/s). `install_sensor.sh` restarted Kismet at 22:45:25-26; last poll on the old list 22:45:13, first on the new list 22:45:43 | rtw88 WARN storm over (last WARN 22:45:22; 0 since); the 721 ms stall per cycle is gone (dwell median 0.215 s, max 0.223 s). **But only 45 of the 90 entries were visited, until 2026-09-27 13:04:57** (stride 4 vs length 90, see below): **WIDS and any probe data from 2026-09-26 22:45:26 to 2026-09-27 13:04:57 saw half the channel list** - and most of that window even less (next row) |
+| 2026-09-26 23:09:14 - 2026-09-27 11:34:24, and 2026-09-27 12:17:20 - 12:22:55 | **Hop list collapsed to channel 1** after capture-helper crashes ("IPC connection closed" at 23:09:14, 23:29:21, 23:54:22, 00:11:05, 11:29:37, 11:30:07, 12:17:20/39/47). Kismet 2025-09 re-opens a failed source from a definition it rebuilds without quoting (`kis_datasource.cc`, `generate_source_definition()`), so `channels="1,1HT40+,..."` became `channels=1` plus stray options; the re-opened source hopped `['1']` (saved datasource state of both Kismet runs; the first reboot-to-11:34 run logged 6 retries, the 11:34-12:22 run 3). Ended only by the watchdog's Kismet restarts (stuck counter after the later crashes) | **Only 2412 MHz received for ~12 h 25 min overnight and ~5 min at noon**: from the 23:10 10-minute bin to 11:20 every observation in the buffer is on 2412 MHz (a few 2417-2457 MHz values until 23:40 from adjacent-channel reception), no 5 GHz at all; the frame rate stayed normal, so the watchdog did not notice. Treat these windows as channel-1-only data. Plus no frames at all 11:30:14-11:34:25 and 12:17:20-12:22:55 (section 6). Caused by the explicit `channels=` list of 22:45:26 - with Kismet's autodetected list (no commas in the definition) a re-open kept the full list |
+| 2026-09-27 13:04:57 | Hop list: 89 entries (also without `140HT40-`, 136+140 is not an 802.11 40 MHz channel; same order otherwise), stride check in the installer. `install_sensor.sh` restarted Kismet 13:04:56-57; last poll on the 90-entry list 13:04:54, first on the 89-entry list 13:05:24 | Full coverage again: all **89** distinct settings visited (`dwell_poll.py`, 90 s at ~13:21), stride 4, gcd(89, 4) = 1; dwell median 0.215 s, max 0.222 s; cycle ~19.1 s; 2.4 GHz time share 19.5 %; 0 WARNs. **Still exposed to the channel-1 collapse at the next helper crash** (open item in `CLAUDE.md`) - check future data for 2412-only stretches |
+| 2026-09-27 13:04:57 | Kismet web UI / REST API bound to 127.0.0.1 (`httpd_bind_address`; was 0.0.0.0 on every interface). The existing web UI login was **kept** (unique password, not reused elsewhere; now reachable only on loopback / through an SSH tunnel) | None on the captured data (the collector already used 127.0.0.1; polls continued) |
 | 2026-09-26 ~22:40 | Journal persistent (`journalctl --flush` during the install; the oldest entry kept from that boot is 22:40:39) | Kernel, Kismet and collector logs survive reboots (200 MB cap). Earlier incidents have only ~4 min of journal. Each boot's first lines carry the stale clock (e.g. 2026-09-15 13:53) until chrony syncs - the pre-start logs "clock synchronised" at that point |
 
 **Hop coverage before and after 22:45:26** (measured with
 `analysis/probe_study/dwell_poll.py`):
 
-| | Before (2026-09-26 ~22:20, 90 s) | After (~22:52, 90 s; 22:59, 20 s) |
-|---|---|---|
-| Hop-list entries | 91 | 90 |
-| Distinct settings visited | 91 | **45** (every other list position) |
-| Dwell per hop | median 0.215 s; `165HT40-` 0.721 s | median 0.215 s, max 0.223 s |
-| Full cycle | ~20.1 s | ~9.7 s (45 x 0.215 s) |
-| 2.4 GHz time share | 18.2 % | 19.7 % (20 s sample) |
-| Channel 165 airtime | ~4.6 % (165 + 165HT40-, incl. stall) | 0 % (`165` is not visited) |
+| | Before (2026-09-26 ~22:20, 90 s) | 90 entries (~22:52, 90 s; 22:59, 20 s) | 89 entries (2026-09-27 ~13:21, 90 s) |
+|---|---|---|---|
+| Hop-list entries | 91 | 90 | 89 |
+| Distinct settings visited | 91 | **45** (every other list position) | 89 |
+| Dwell per hop | median 0.215 s; `165HT40-` 0.721 s | median 0.215 s, max 0.223 s | median 0.215 s, max 0.222 s |
+| Full cycle | ~20.1 s | ~9.7 s (45 x 0.215 s) | ~19.1 s |
+| 2.4 GHz time share | 18.2 % | 19.7 % (20 s sample) | 19.5 % |
+| Channel 165 airtime | ~4.6 % (165 + 165HT40-, incl. stall) | 0 % (`165` is not visited) | ~1.1 % (`165` only) |
 
 Why only half: the capture helper steps through the (shuffled) list with a fixed
 stride that Kismet 2025-09 derives from the list length alone - the Linux Wi-Fi
@@ -201,10 +208,10 @@ tuned.
 Not visited since 22:45:26: 2.4 GHz `1HT40+`, 3, 5, `6HT40-`, 7, 9, 11 (20 MHz;
 11 is still the primary of `11HT40-`), 12; on 5 GHz every odd position (e.g. 36,
 `36VHT80`, `40HT40-`, 44, `44VHT80`, ..., 165). Adjacent-channel reception on
-2.4 GHz still hears some frames of the skipped channels. This period ends when
-the list length is fixed (pending, see `CLAUDE.md`); that end time goes into this
-table as its own row. No channel reweighting was done - that is a separate,
-later decision for the probe study.
+2.4 GHz still hears some frames of the skipped channels. This period ended at
+2026-09-27 13:04:57 (89-entry list, row above); most of it was channel-1-only
+anyway (row "Hop list collapsed"). No channel reweighting was done - that is a
+separate, later decision for the probe study.
 
 ## 8. Probe-request feasibility study (2026-09-26)
 
@@ -289,7 +296,9 @@ rate); compact per-probe records ~2-3 MB/day; budget <= 10 MB/day for peaks.
 3. Low IE entropy (~3 bits): linkage has to rest on directed SSIDs, RSSI and
    timing; daytime samples may spread the classes.
 4. Hopping misses most scan bursts; capture-helper restarts (~13/day before the
-   storm fix) add gaps; the hop coverage bug in section 7 halves the channels.
+   storm fix) add gaps, and with an explicit hop list each one currently pins the
+   sensor to channel 1 until Kismet restarts (section 7; 2026-09-26 22:45 -
+   2026-09-27 13:05 also had only half the channels).
 5. Weak sample (15 min, night, one site, dominated by one device).
 6. Data protection: keyed hashes are still pseudonymous personal data and
    directed SSIDs are sensitive - an ethics/GDPR note is needed.
