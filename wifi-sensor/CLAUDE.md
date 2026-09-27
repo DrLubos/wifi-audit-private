@@ -294,8 +294,8 @@ Eventbus (push) for alerts later. Fields of interest:
   there are no `wpa_version`/RSN fields, only `crypt_string` + `crypt_bitfield`;
   `ietag_checksum`/`beacon_fingerprint` vary per beacon (stored per-observation, not
   treated as a stable identity); `/alerts/alerts.json` is 404.
-- **Dataset rules (buffer schema v5, 2026-09-27; `docs/findings.md` section 11) -
-  pending the `install_collector.sh` run:**
+- **Dataset rules (buffer schema v5, deployed 2026-09-27 19:57:29 UTC;
+  `docs/findings.md` sections 7 and 11):**
   - **RSSI floors are censored values, not levels.** The RTL8821CU reports
     -106 dBm as its CCK floor (every 2.4 GHz beacon; `rtw8821c.c`:
     `lna_gain_table[lna] - 2 * vga`, minimum -106) and -120 dBm as its OFDM
@@ -311,7 +311,11 @@ Eventbus (push) for alerts later. Fields of interest:
   - **AP configuration is merged field by field** (`store.merge_config`): NULL
     from Kismet = unknown, keep the stored value; only known -> different known
     is a change. Before v5 the alternating empty/real beacon record wrote a
-    history row on almost every poll for some APs (42 % of all history rows).
+    history row on almost every poll for some APs (42 % of all history rows);
+    after v5 history fell from ~540 to ~48 rows/h, almost all real channel
+    changes. Known residual: an AP first seen without a beacon record gets
+    `cloaked`/`crypt_bits`/`mfp` = 0 (`_flag`/`_counter`), so its first record
+    writes one history row.
   - **`observations.freq_khz` is not the reception channel of `rssi`** (Kismet's
     device frequency, set from other frames); the AP's channel is
     `devices.adv_channel`.

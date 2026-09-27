@@ -276,6 +276,7 @@ read from the running system after the change (journal, `polls`), not planned.
 | 2026-09-27 13:04:57 | Hop list: 89 entries (also without `140HT40-`, 136+140 is not an 802.11 40 MHz channel; same order otherwise), stride check in the installer. `install_sensor.sh` restarted Kismet 13:04:56-57; last poll on the 90-entry list 13:04:54, first on the 89-entry list 13:05:24 | Full coverage again: all **89** distinct settings visited (`dwell_poll.py`, 90 s at ~13:21), stride 4, gcd(89, 4) = 1; dwell median 0.215 s, max 0.222 s; cycle ~19.1 s; 2.4 GHz time share 19.5 %; 0 WARNs. **Still exposed to the channel-1 collapse at the next helper crash** (open item in `CLAUDE.md`) - check future data for 2412-only stretches |
 | 2026-09-27 13:04:57 | Kismet web UI / REST API bound to 127.0.0.1 (`httpd_bind_address`; was 0.0.0.0 on every interface). The existing web UI login was **kept** (unique password, not reused elsewhere; now reachable only on loopback / through an SSH tunnel) | None on the captured data (the collector already used 127.0.0.1; polls continued) |
 | 2026-09-27 14:15:50 | Hop guard deployed (`wifi-sensor-hop-guard.service` started 14:15:50, guarding the 89-entry list); collector with buffer v4 restarted 14:15:56, first poll with `polls.ds_hop_*` 14:15:57. Kismet not restarted (up since 13:04:57). Recorded 2026-09-27 ~19:40 from the journal and `polls` | A capture-helper crash still collapses the live list to channel 1, but only until the guard's next check: crashes 14:16:41, 14:19:30 and 18:42:26 (the last one with a USB disconnect) were re-applied at 14:16:50, 14:19:40 and 18:42:34 ("live 1 entries -> 89"), so **<= ~10 s of channel-1-only data per crash** instead of hours. `ds_hop_ok` = 0 on 1 of 624 polls up to ~19:28 (18:42:27, source not running). From 14:15:57 every poll records the live hop-list length, the visited entries and whether the list is the configured one - later degraded windows can be read from `polls` instead of reconstructed |
+| 2026-09-27 19:57:29 | Collector with buffer schema v5 (`install_collector.sh`, commit `8b76e3c`; section 11): collector stopped 19:57:28 and started 19:57:29, migration v4 -> v5 logged 19:57:30; last poll on v4 19:57:27, first on v5 19:57:30 (ok). Kismet and the hop guard not restarted, no capture gap | **RSSI floor values -106/-120 are stored as NULL** in `rssi`/`rssi_min`/`rssi_max` with `rssi_floor = 1` (first flagged row 19:58:00): 0 raw floor values in the first 53 min against 156 in the 53 min before; 92 flagged. **AP configuration merged field-wise**: `device_config_history` 47.5 rows/h in the first 53 min against 540/h just before and 269/h in the same hours of the previous day; 41 of the 42 rows are real advertised-channel changes, 1 is an AP's first beacon record (`crypt_bits` stored as 0 before it, then the real value). Rows before this time keep raw floors and the churn; readers apply the section 11 rules |
 | 2026-09-26 ~22:40 | Journal persistent (`journalctl --flush` during the install; the oldest entry kept from that boot is 22:40:39) | Kernel, Kismet and collector logs survive reboots (200 MB cap). Earlier incidents have only ~4 min of journal. Each boot's first lines carry the stale clock (e.g. 2026-09-15 13:53) until chrony syncs - the pre-start logs "clock synchronised" at that point |
 
 **Hop coverage before and after 22:45:26** (measured with
@@ -570,6 +571,103 @@ levels and has no eligibility rules; the causes it found led to the rules of
 section 11. The second pass (same method, `python -m detection fp-audit`) is run
 after they are deployed and is added below, next to this one.
 
+### Second pass (2026-09-27, after the section 11 rules)
+
+Same data as the first pass (server, 2026-09-15 14:55 -> 2026-09-27 14:27 UTC;
+no snapshot imported since), same window 2026-09-15 .. 09-28 and default
+parameters, now with the section 11 rules: schema 4 applied and baselines
+refitted at 2026-09-27 20:02:57 UTC (`ap_baselines.computed_at`; 112 of 125
+rows qualify on valid readings, **0 medians at a floor value**, lowest -98 dBm,
+no robust sd of 0), code at `cdc278f`. `evil-twin --dry-run` (77 s, peak RSS
+46 MB) and `fp-audit` (504 s), both read-only; `fp-audit`'s circular run
+reproduces the dry run exactly.
+
+| Circular baseline, k 6 | First pass | Second pass |
+|---|---|---|
+| APs evaluated | 118 | **93** (112 baselined; excluded: 17 randomised BSSIDs, 2 floor share > 0.35) |
+| Windows dropped by the channel guard | - | 275 |
+| Detections (b) / APs | 82 / 18 | **24 / 6** |
+| Severity low / medium / high | 21 / 38 / **23** | 7 / 17 / **0** |
+| Direction stronger / weaker | 50 / 32 | 8 / 16 |
+| Facet both / median_shift / spread | 59 / 12 / 11 | 16 / 5 / 3 |
+| AP kind | randomised hotspots 28, campus 28, `FRI_wifi` 14, D-Link 10, others 2 | `FRI_wifi` 14, campus 10 |
+
+**Causes of the 24.** The tool's classes (documented degraded window; channel
+change within +-1 h; else open) put all 24 in "open" - by construction, since
+the guard already drops windows within 1 h of a change. A read-only rerun with
+a finer classifier (scratch, not committed: `FRI_wifi`; hours since the AP's
+own last advertised-channel change; degraded; open by AP kind) and a look at
+the series:
+
+- **`FRI_wifi` -96 dBm dips: 14** - the same mechanism as in the first pass,
+  still not understood (section 11), no rule.
+- **Campus: 10, cause open.** 8 are the 3 BSSIDs of one 5 GHz radio, together,
+  "stronger" by 9-15 dB in short evening episodes: 2026-09-25 18:30-19:00 and
+  ~20:00, 2026-09-26 19:30-20:10 UTC (10-minute medians -78 .. -70 dBm against a
+  baseline of -84). **Not a channel effect**: the radio sat on channel 48 at
+  the time (moved from 64 at 17:41:43 and 18:16:43), but its median is -84 dBm
+  on both channel 64 (36 493 readings) and channel 48 (15 792), and -84 .. -86
+  on channel 48 in every 3-hour band of the day. **Not sensor-wide**: in the
+  same windows the median shift of all other APs was 0 to +1.5 dB. The other 2
+  are single campus BSSIDs (12.0 and 17.5 dB weaker).
+- The finer classifier put all 10 campus detections "1-3 h after the AP's own
+  channel change" (1.1-2.3 h). **That is the base rate, not a cause**: these
+  radios change channel 15-19 times a day (181-224 changes per BSSID in
+  12 days), so much of any day is 1-3 h after some change. The same caveat
+  applies to the first pass's "AP channel change within +-1 h" class (25).
+
+**Is the channel guard worth it?** (read-only, all baselined APs with at least
+one change, 2026-09-15 .. 09-28)
+
+- Cost: the +-1 h zones around their own changes cover **41 % of campus AP
+  time** (85 campus BSSIDs, 11 097 changes); 31 of them spend more than half
+  their time inside a zone. A real twin in those hours would be missed too.
+- Effect per reading: deviations are only moderately more frequent near a
+  change - > 8 dB from the baseline median in 1.66 % of readings inside the
+  zones vs 1.20 % outside (1.4 x), > 12 dB 0.38 % vs 0.25 %.
+- Effect on detections (circular, k 6, dry runs):
+
+  | `--channel-guard` | Windows dropped | Detections / APs | High | Not `FRI_wifi` |
+  |---|---|---|---|---|
+  | 0 | 0 | 40 / 11 | 5 | 26 |
+  | 600 s | 87 | 36 / 10 | 4 | 22 |
+  | 1800 s | 197 | 31 / 9 | 2 | 17 |
+  | 3600 s (default) | 275 | 24 / 6 | 0 | 10 |
+
+  So channel changes do produce the large steps (all 5 high detections go
+  away only with the full hour), but the 1 h guard gets there by not looking
+  at 41 % of campus AP time. Per-channel levels differ little on most campus
+  BSSIDs (median of the range of per-channel medians 3 dB, p90 7 dB; 15 of
+  89 BSSIDs with >= 6 dB, channels with >= 300 readings). Candidate
+  replacement, to be measured before any change: a per-(AP, advertised
+  channel) baseline plus a short guard for the transition itself. The default
+  stays 3600 s until then.
+
+**Split-baseline audit, second pass** (split at 2026-09-21 14:41:22, evaluated
+on 2026-09-21 14:41 .. 09-28; split baselines qualify for 98 APs, 10 of them
+excluded as randomised). Cells: detections / APs / high; the first pass in
+brackets. "Channel change" in the cause column is the timing class above
+(base rate, not a cause).
+
+| k (W 10) | circular baseline on the 2nd half | split baseline (1st half) | split: classes |
+|---|---|---|---|
+| 3 | 108 / 9 / 0 (170 / 26 / 100) | 50 / 13 / 0 (82 / 26 / 7) | `FRI_wifi` 20; campus 29 (16 at 1-3 h and 5 at 3-6 h after a change, 8 other); degraded 1 |
+| 4 | 87 / 8 / 0 (65 / 15 / 13) | 48 / 12 / 0 (69 / 19 / 7) | `FRI_wifi` 19; campus 28 (16 / 4 / 8); degraded 1 |
+| 6 | 13 / 6 / 0 (39 / 12 / 14) | **15 / 8 / 0** (27 / 12 / 8) | `FRI_wifi` 3; campus 12 (10 / 1 / 1) |
+
+- The README expectation "0 high/critical" is **met** in every variant (first
+  pass: 7-100 high), with the 1 h guard.
+- Circular at k 3-4 is higher than split (108 vs 50): 29 resp. 19 of them come
+  from the one randomised BSSID that stays eligible because it has a globally
+  administered sibling (an infrastructure virtual AP; not in the split
+  column), 26 resp. 19 from non-campus APs other than `FRI_wifi`, and 19
+  resp. 16 lie in the 45/90 hop-coverage window (section 7).
+- What remains after the section 11 rules: `FRI_wifi` (open), and short
+  "stronger" / "weaker" episodes of campus radios whose cause is open - not
+  explained by the channel they are on. Both are false positives a staged
+  evaluation will have to live with or explain; the next measurement is the
+  per-channel baseline above.
+
 ## 11. Data quality: RSSI floors, config-history churn, `freq_khz` (2026-09-27)
 
 Follow-up of section 10, before any change to the detector logic. Each rule
@@ -658,6 +756,15 @@ the current value) is the one definition of an AP's channel timeline (11 388
 changes on 138 APs, 2026-09-27) - used by the evil_twin channel guard and
 fp-audit.
 
+Checked after deployment (2026-09-27 19:57:29, section 7): history rows fell
+from 540/h (hour before) to 47.5/h, 41 of 42 of them real advertised-channel
+changes. Residual: an AP first seen without a beacon record gets `cloaked`,
+`crypt_bits` and the MFP flags stored as 0 (they go through `_flag` /
+`_counter`, not the 0 -> NULL mapping), so its first real record counts as a
+known -> known change and writes one history row (1 in the first 53 min). A
+missing record is recognisable (open APs carry crypt `Open`, so crypt NULL
+means "no record"); not fixed, at most one row per AP.
+
 ### `observations.freq_khz` is not the reception channel
 
 `freq_khz` is Kismet's `kismet.device.base.frequency`: the frequency attributed
@@ -682,9 +789,11 @@ server schemas and both `CLAUDE.md` files; no code change.
 - **Channel-change guard**: deviating windows ending within 1 h
   (`--channel-guard 3600`) of the AP's own `ap_channel_changes` entry are
   dropped; 25 of the 82 first-pass false positives were within +-1 h of such a
-  change. How many windows this suppresses (APs that change channel every
-  hour or so could be guarded most of the time) is reported by fp-audit
-  (`guarded`); a per-channel baseline is left for later.
+  change. Measured after deployment (section 10, second pass): the zones
+  cover 41 % of campus AP time and deviations are only 1.4 x more frequent
+  inside them; the guard removes all high detections, but mostly by not
+  looking. A per-channel baseline with a short transition guard is the
+  candidate replacement, not built.
 
 ### `FRI_wifi` -96 dBm readings - investigated, not understood, no rule
 
