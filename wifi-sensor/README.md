@@ -66,6 +66,8 @@ systemctl list-timers wifi-sensor-capture-watchdog.timer wifi-sensor-kismet-log-
 journalctl -u wifi-sensor-kismet-log-retention  # which kismetdb logs were deleted
 df -h / ; journalctl --disk-usage              # persistent journal, capped at 200 MB
 ssh -L 2501:127.0.0.1:2501 pi                 # on the PC: Kismet web UI at http://localhost:2501/
+journalctl -u wifi-sensor-hop-guard            # "re-applied hop list" after a capture-helper crash
+python3 -c "import sqlite3; [print(r) for r in sqlite3.connect('file:/var/lib/wifi-sensor/buffer.db?mode=ro', uri=True).execute('SELECT datetime(ts, \"unixepoch\"), ds_hop_visited, ds_hop_n, ds_hop_ok FROM polls ORDER BY ts DESC LIMIT 5')]"   # hop coverage per poll
 iw dev                                        # expect wlan1mon, type monitor
 
 python3 /opt/wifi-sensor/analysis/analyze.py  # buffer overview (read-only)

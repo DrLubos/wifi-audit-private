@@ -27,5 +27,9 @@ RETENTION_DAYS=14
 # Per-request timeout towards Kismet, seconds.
 HTTP_TIMEOUT=15
 
+# Kismet config holding the capture source= line. Its explicit channels= list is
+# what polls.ds_hop_ok compares the live hop list against (world-readable).
+KISMET_SITE_CONF=/etc/kismet/kismet_site.conf
+
 # DEBUG | INFO | WARNING
 LOG_LEVEL=INFO

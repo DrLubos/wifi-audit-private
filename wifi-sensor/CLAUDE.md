@@ -197,8 +197,9 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   installer replays the search (`hop_stride_ok`) and refuses a bad explicit list;
   `verify_kismet()` checks the live stride (also for `auto`). Details and dated
   windows: `docs/findings.md` section 7.
-- **OPEN, urgent - a capture-helper crash pins the sensor to channel 1 (Kismet
-  2025-09 bug, since the explicit `channels=` list of 2026-09-26 22:45:26):**
+- **A capture-helper crash pins the sensor to channel 1 (Kismet 2025-09 bug,
+  since the explicit `channels=` list of 2026-09-26 22:45:26) - mitigated by the
+  hop guard (pending deployment; then <= ~16 s of channel-1 data per crash):**
   after a helper error Kismet re-opens the source from a definition it rebuilds
   without quoting (`kis_datasource.cc`, `generate_source_definition()`: plain
   `key=value` pairs), so `channels="1,1HT40+,..."` comes back as `channels=1` plus
@@ -210,13 +211,33 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   channel-1 capture keeps the counter moving, so **the watchdog does not catch
   the collapse**. Until fixed, every helper crash can cost hours of coverage -
   check `kismet.datasource.hop_channels` (or `dwell_poll.py`) after any
-  "IPC connection closed". Fix to be planned (e.g. the watchdog compares the live
-  hop list with the configured one and restarts Kismet). `auto` lists survive a
-  re-open (no commas in the definition). Dated windows: `docs/findings.md`
-  sections 6 and 7.
+  "IPC connection closed". `auto` lists survive a re-open (no commas in the
+  definition). Dated windows: `docs/findings.md` sections 6 and 7.
+  **Hop guard** (`sensor/hop_guard.py`, `wifi-sensor-hop-guard.service`, installed
+  by `install_sensor.sh`, runs as the sensor user): every 10 s it compares the live
+  hop list with the `channels=` list of the `source=` line in `kismet_site.conf`
+  **as an unordered multiset** (same entries, same count, case-insensitive - Kismet
+  shuffles; an order-sensitive check would re-apply every 10 s and reset the hop
+  cycle) and on a mismatch re-applies it with `POST
+  /datasource/by-uuid/<uuid>/set_channel.cmd` (`channels`, `rate`, `shuffle`; admin
+  login). The broken stored definition is not repaired, so each later crash needs
+  another re-apply. It never restarts Kismet (dead capture stays the watchdog's
+  job), logs only its own actions, and backs off to 60 s after 3 failed or
+  non-sticking re-applies. Polling was chosen over Kismet's eventbus
+  (`DATASOURCE_OPENED` fires on every re-open): no websocket client in the stdlib,
+  and a listener that silently dies or misses an event during a reconnect would
+  need the same periodic check anyway. Tests: `python3 -m unittest discover -s
+  sensor/tests`. Keep hop lists prime: after a re-apply the helper's stride search
+  starts from the carried-over value, so a composite length can lose coverage even
+  if the installer's fresh-start check passed.
 - **Open item - capture helper restarts:** Kismet's datasource reported
   `retry_attempts = 45` (`error_reason` "IPC connection closed") after 3.4 days of
-  Kismet uptime, ~13 helper restarts/day, each a short capture gap. Cause unknown.
+  Kismet uptime, ~13 helper restarts/day, each a short capture gap. Two causes
+  seen so far (`docs/findings.md` section 9): (1) the helper exits with "did not
+  get PING from Kismet for over 15 seconds" - its own loop blocked >= 15 s, only
+  while hopping (hypothesis: slow rtw88 channel switches over USB); (2) the USB
+  adapter drops off the bus (re-enumeration, `USB write ret=-19`) - the watchdog
+  restarts Kismet. Power is fine (throttled 0x0).
   First persistent-journal data (after the storm fix): crashes at 2026-09-26
   23:09:14, 23:29:21, 23:54:22, 2026-09-27 00:11:05, 11:29:37, 11:30:07 and
   12:17:20/39/47 - then none between 00:11 and 11:29 (sensor on channel 1 only at

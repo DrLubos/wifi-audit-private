@@ -1,0 +1,36 @@
+# wifi-sensor-hop-guard.service - template installed by install_sensor.sh, which
+# replaces __SENSOR_USER__, __INSTALL_DIR__, __KISMET_URL__ and __AUTH_FILE__.
+#
+# Keeps Kismet hopping the configured channel list: after a capture-helper crash
+# Kismet 2025-09 re-opens the source with a collapsed list (channel 1 only). The
+# guard checks every 10 s and re-applies the list over REST; it never restarts
+# Kismet (see the script). Runs unprivileged as the sensor user.
+[Unit]
+Description=Wi-Fi sensor hop guard (re-apply the Kismet hop list)
+After=kismet.service
+Wants=kismet.service
+
+[Service]
+Type=simple
+User=__SENSOR_USER__
+Group=kismet
+Environment=KISMET_URL=__KISMET_URL__
+Environment=KISMET_AUTH_FILE=__AUTH_FILE__
+Environment=KISMET_SITE_CONF=/etc/kismet/kismet_site.conf
+Environment=HOP_GUARD_INTERVAL=10
+ExecStart=/usr/bin/python3 __INSTALL_DIR__/sensor/hop_guard.py
+Restart=always
+RestartSec=10
+Nice=5
+
+# Hardening: reads the auth file and kismet_site.conf, talks to 127.0.0.1 only.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

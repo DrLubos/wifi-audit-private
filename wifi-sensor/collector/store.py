@@ -26,6 +26,12 @@ two polls is an exact "deauth/disassoc activity in this interval" bit, which
 the burst-size field disconnects cannot give. The v2 -> v3 migration is a
 single ALTER TABLE ADD COLUMN: metadata only, no rewrite, old rows read NULL.
 
+Schema v4 adds polls.ds_hop_n / ds_hop_visited / ds_hop_ok (hop_coverage.py):
+the live hop-list length, the entries the helper really visits, and whether
+the live list is the configured one. Kismet 2025-09 can lose channel coverage
+without the packet counter noticing (docs/findings.md section 7); these columns
+make such windows visible in the data. Same metadata-only migration as v3.
+
 "sent" columns are for the upload step (later); the prototype only prunes by
 age. No detection lives here - the store only writes what shape.py produced.
 """
@@ -36,7 +42,7 @@ import sqlite3
 
 log = logging.getLogger("collector.store")
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -53,6 +59,10 @@ CREATE TABLE IF NOT EXISTS polls (
   ds_running     INTEGER,            -- 1 when every datasource is running
   ds_error       TEXT,               -- first datasource error reason, if any
   ds_packets     INTEGER,            -- sum of datasource num_packets
+  ds_hop_n       INTEGER,            -- live hop-list length (v4)
+  ds_hop_visited INTEGER,            -- entries the helper really visits (v4)
+  ds_hop_ok      INTEGER,            -- 1 = configured list, fully visited; 0 = degraded;
+                                     -- NULL = no explicit list configured (v4)
   duration_ms    INTEGER,
   ok             INTEGER NOT NULL DEFAULT 1,
   error          TEXT);
@@ -191,6 +201,9 @@ class Store:
         if v == "2":
             self._migrate_v2_to_v3()
             v = "3"
+        if v == "3":
+            self._migrate_v3_to_v4()
+            v = "4"
         if v is not None and int(v) != SCHEMA_VERSION:
             raise RuntimeError("database schema version %s, collector expects %d"
                                % (v, SCHEMA_VERSION))
@@ -233,6 +246,23 @@ class Store:
             self.db.execute("ROLLBACK")
             raise
 
+    def _migrate_v3_to_v4(self):
+        """v4 adds polls.ds_hop_n / ds_hop_visited / ds_hop_ok (hop-list
+        coverage). ALTER TABLE ADD COLUMN only, like v2 -> v3; older polls read
+        NULL. A buffer without the table yet gets the columns from _SCHEMA."""
+        log.info("migrating buffer schema v3 -> v4: adding polls.ds_hop_*")
+        self.db.execute("BEGIN")
+        try:
+            cols = [r[1] for r in self.db.execute("PRAGMA table_info(polls)")]
+            for c in ("ds_hop_n", "ds_hop_visited", "ds_hop_ok"):
+                if cols and c not in cols:
+                    self.db.execute("ALTER TABLE polls ADD COLUMN %s INTEGER" % c)
+            self.set_meta("schema_version", "4")
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+
     def close(self):
         self.db.close()
 
@@ -253,7 +283,8 @@ class Store:
         """Store the result of one successful poll in a single transaction.
 
         health:  dict with kismet_ts, devices_total, ds_running, ds_error,
-                 ds_packets (see collector.py)
+                 ds_packets and optionally ds_hop_n, ds_hop_visited, ds_hop_ok
+                 (see collector.py)
         records: list of shape.shape_device() dicts
         alerts:  list of shape.shape_alert() dicts
         Returns (new_observations, new_alerts).
@@ -269,11 +300,13 @@ class Store:
                 new_alerts += self._write_alert(a)
             self.db.execute(
                 "INSERT INTO polls(ts, kismet_ts, devices_total, devices_active, new_obs, "
-                "ds_running, ds_error, ds_packets, duration_ms, ok) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                "ds_running, ds_error, ds_packets, ds_hop_n, ds_hop_visited, ds_hop_ok, "
+                "duration_ms, ok) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
                 (ts, health.get("kismet_ts"), health.get("devices_total"), len(records),
                  new_obs, health.get("ds_running"), health.get("ds_error"),
-                 health.get("ds_packets"), duration_ms))
+                 health.get("ds_packets"), health.get("ds_hop_n"), health.get("ds_hop_visited"),
+                 health.get("ds_hop_ok"), duration_ms))
             if health.get("kismet_ts") is not None:
                 self.set_meta("last_kismet_ts", health["kismet_ts"])
             self.db.execute("COMMIT")

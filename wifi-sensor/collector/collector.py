@@ -21,6 +21,9 @@ passes the same file as EnvironmentFile). Environment wins over the file.
                      between two polls.          Default: 5
   RETENTION_DAYS     Delete observations older than this.  Default: 14
   HTTP_TIMEOUT       Seconds per Kismet request. Default: 15
+  KISMET_SITE_CONF   Kismet config with the capture source= line; its explicit
+                     channels= list is what polls.ds_hop_ok compares the live hop
+                     list against.          Default: /etc/kismet/kismet_site.conf
   LOG_LEVEL          DEBUG | INFO | WARNING.     Default: INFO
 
 Run by hand:  python3 collector.py [--once]
@@ -34,6 +37,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from hop_coverage import SiteConf, hop_health  # noqa: E402
 from kismet_client import KismetClient, KismetError  # noqa: E402
 from shape import DEVICE_FIELDS, shape_alert, shape_device  # noqa: E402
 from store import Store  # noqa: E402
@@ -51,6 +55,7 @@ DEFAULTS = {
     "POLL_OVERLAP": "5",
     "RETENTION_DAYS": "14",
     "HTTP_TIMEOUT": "15",
+    "KISMET_SITE_CONF": "/etc/kismet/kismet_site.conf",
     "LOG_LEVEL": "INFO",
 }
 
@@ -123,8 +128,9 @@ def datasource_health(sources):
     return running, error, packets
 
 
-def poll_once(client, store, cfg, since):
-    """Run one poll. Returns the Kismet timestamp to resume from next time."""
+def poll_once(client, store, cfg, since, site=None):
+    """Run one poll. Returns the Kismet timestamp to resume from next time.
+    SITE (hop_coverage.SiteConf) supplies the configured hop list."""
     ts = int(time.time())
     t0 = time.monotonic()
     try:
@@ -152,18 +158,23 @@ def poll_once(client, store, cfg, since):
         if isinstance(raw_alerts, list) else []
 
     ds_running, ds_error, ds_packets = datasource_health(sources)
+    hop_n, hop_visited, hop_ok = hop_health(sources, site.channels() if site else None)
     health = {
         "kismet_ts": kismet_ts,
         "devices_total": status.get("kismet.system.devices.count"),
         "ds_running": ds_running,
         "ds_error": ds_error,
         "ds_packets": ds_packets,
+        "ds_hop_n": hop_n,
+        "ds_hop_visited": hop_visited,
+        "ds_hop_ok": hop_ok,
     }
     ms = int((time.monotonic() - t0) * 1000)
     new_obs, new_alerts = store.write_poll(ts, health, records, alerts, ms)
-    log.info("poll ok: total=%s active=%d skipped=%d new_obs=%d alerts=%d/%d ds=%s %dms",
+    log.info("poll ok: total=%s active=%d skipped=%d new_obs=%d alerts=%d/%d ds=%s hop=%s/%s%s %dms",
              health["devices_total"], len(records), skipped, new_obs, new_alerts, len(alerts),
-             "up" if ds_running else ("DOWN " + (ds_error or "")), ms)
+             "up" if ds_running else ("DOWN " + (ds_error or "")), hop_visited, hop_n,
+             "" if hop_ok is None else (" ok" if hop_ok else " DEGRADED"), ms)
     if abs(kismet_ts - ts) > 5:
         log.warning("clock skew: kismet=%d collector=%d", kismet_ts, ts)
     return kismet_ts
@@ -187,6 +198,7 @@ def main(argv):
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
     store = Store(cfg["DB_PATH"])
+    site = SiteConf(cfg["KISMET_SITE_CONF"])
     client = KismetClient(cfg["KISMET_URL"], cfg["KISMET_USER"], cfg["KISMET_PASS"],
                           timeout=cfg["HTTP_TIMEOUT"])
     # Resume from the last successful poll; a fresh buffer takes a full snapshot.
@@ -200,7 +212,7 @@ def main(argv):
     try:
         while True:
             started = time.monotonic()
-            since = poll_once(client, store, cfg, since)
+            since = poll_once(client, store, cfg, since, site)
             if once:
                 log.info("counts: %s", store.counts())
                 break

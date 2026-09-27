@@ -73,7 +73,7 @@ with `ok = 0` and the loop continues; the service is never taken down by it.
 
 | Table | One row per | Contents |
 |---|---|---|
-| `polls` | poll | collector/Kismet timestamps, device counts, datasource state, duration, error |
+| `polls` | poll | collector/Kismet timestamps, device counts, datasource state, hop-list coverage (`ds_hop_n`, `ds_hop_visited`, `ds_hop_ok`), duration, error |
 | `devices` | device | key, MAC, type, manufacturer, first/last seen; for APs the advertised configuration: SSID, cloaked, `crypt` (Kismet crypt string), `crypt_bits`, MFP supported/required, advertised channel, HT mode, beacon rate, country |
 | `device_config_history` | AP configuration change | the configuration that was replaced, with the poll time of the change |
 | `observations` | active device per poll | Kismet `last_time`, heard frequency and channel, RSSI last/min/max, cumulative packet and byte counters; AP only: associated client count, `disconnects` (size of the current deauth/disassoc burst, not a counter) and `disconnects_last` (unix second of the last deauth/disassoc frame, NULL until one is seen), QBSS station count and channel utilisation, BSS timestamp (uptime), beacon IE checksum and fingerprint; client only: BSSID |
@@ -86,6 +86,18 @@ with `ok = 0` and the loop continues; the service is never taken down by it.
 Cumulative counters are stored as Kismet reports them; deltas are derived when
 the data is analysed, which keeps the collector free of state and robust to
 missed polls. `sent` columns exist for the later upload step.
+
+Schema v4 added `polls.ds_hop_n` (live hop-list length), `ds_hop_visited`
+(entries the capture helper really tunes: N / gcd(N, shuffle stride)) and
+`ds_hop_ok` (1 = the live list equals the `channels=` list of the `source=` line in
+`KISMET_SITE_CONF` as an unordered multiset and is fully visited; 0 = degraded;
+NULL = no explicit list configured). Kismet 2025-09 can lose channel coverage
+without the packet counter noticing - after a capture-helper crash it re-opens the
+source with a collapsed list, and its hop stride can skip entries
+(`hop_coverage.py`, `docs/findings.md` sections 7 and 9). `sensor/hop_guard.py`
+repairs the collapse; these columns make any degraded window visible in the
+data. Migration as for v3: `ALTER TABLE ADD COLUMN`, older polls read NULL; to
+roll the code back set `meta.schema_version` to `3`.
 
 Schema v3 added `observations.disconnects_last` (Kismet
 `dot11.device.client_disconnects_last`, verified in `phy_80211.cc`: set to the

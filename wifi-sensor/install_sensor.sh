@@ -17,6 +17,11 @@
 #   kismet-log-retention.sh
 #                        hourly systemd timer and every Kismet start: deletes
 #                        old / empty / over-cap kismetdb logs (never the open one).
+#   hop_guard.py         systemd service: every 10 s compares Kismet's live hop
+#                        list with the configured channels= list (unordered) and
+#                        re-applies it over REST - Kismet 2025-09 collapses it to
+#                        channel 1 when it re-opens the source after a capture-
+#                        helper crash. Never restarts Kismet.
 #
 # Disk and memory bounds (after the 2026-09-22 disk-full incident): kismetdb
 # without frame logging, idle devices expire from Kismet's tracker, log
@@ -78,6 +83,7 @@ SENSOR_SRC_DIR="$SCRIPT_DIR/sensor"
 UNIT_TEMPLATE_DIR="$SCRIPT_DIR/systemd"
 WATCHDOG_UNIT="wifi-sensor-capture-watchdog"
 RETENTION_UNIT="wifi-sensor-kismet-log-retention"
+HOP_GUARD_UNIT="wifi-sensor-hop-guard"
 COLLECTOR_UNIT="wifi-sensor-collector"
 
 # Locations defined by the Kismet / Debian packaging (not sensor-specific).
@@ -134,6 +140,7 @@ usage() {
 # service is restarted only when needed.
 CHANGED=0
 LAST_WRITE_CHANGED=0
+PY_HELPERS_CHANGED=0
 mark_changed() { CHANGED=1; }
 
 # write_if_changed DEST MODE OWNER:GROUP   (content on stdin)
@@ -682,6 +689,15 @@ install_sensor_scripts() {
   for f in "$SENSOR_SRC_DIR"/*.sh; do
     write_if_changed "$INSTALL_DIR/sensor/$(basename "$f")" 0755 root:root <"$f"
   done
+  # Python helpers run as their own services; a change restarts that service,
+  # not Kismet, so the CHANGED flag is preserved across them.
+  local kismet_changed=$CHANGED
+  for f in "$SENSOR_SRC_DIR"/*.py; do
+    [[ -f $f ]] || continue
+    write_if_changed "$INSTALL_DIR/sensor/$(basename "$f")" 0755 root:root <"$f"
+    if [[ $LAST_WRITE_CHANGED -eq 1 ]]; then PY_HELPERS_CHANGED=1; fi
+  done
+  CHANGED=$kismet_changed
 }
 
 configure_service() {
@@ -742,6 +758,7 @@ EOF
 # Fill the __PLACEHOLDER__s of a unit template from the installer's settings.
 render_unit() {
   sed -e "s|__INSTALL_DIR__|$INSTALL_DIR|g" -e "s|__CAPTURE_IFACE__|$CAPTURE_IFACE|g" \
+      -e "s|__SENSOR_USER__|$SENSOR_USER|g" \
       -e "s|__KISMET_URL__|http://127.0.0.1:$KISMET_HTTPD_PORT|g" \
       -e "s|__AUTH_FILE__|$AUTH_FILE|g" \
       -e "s|__KISMET_LOG_DIR__|$KISMET_LOG_DIR|g" -e "s|__KISMET_LOG_TITLE__|$KISMET_LOG_TITLE|g" \
@@ -768,6 +785,27 @@ install_timer() {
   next=$(systemctl list-timers --all --no-legend "$unit.timer" 2>/dev/null \
          | awk 'NR == 1 && $1 != "-" && $1 != "n/a" {print $1, $2, $3, $4}' || true)
   log "$unit.timer: $(systemctl is-active "$unit.timer"), next run ${next:-on its schedule (monotonic timer)}"
+}
+
+# Long-running helper service (template in systemd/). Restarted when its unit or
+# its script changed, otherwise only started if it is not running.
+install_service() {
+  local unit=$1 rendered unit_changed
+  local tpl="$UNIT_TEMPLATE_DIR/$unit.service"
+  step "systemd: $unit.service"
+  [[ -f $tpl ]] || die "unit template for $unit not found in $UNIT_TEMPLATE_DIR"
+  rendered=$(render_unit "$tpl")
+  local kismet_changed=$CHANGED
+  write_if_changed "/etc/systemd/system/$unit.service" 0644 root:root <<<"$rendered"
+  unit_changed=$LAST_WRITE_CHANGED
+  CHANGED=$kismet_changed
+  systemctl daemon-reload
+  systemctl enable "$unit.service" >/dev/null 2>&1
+  if [[ $unit_changed -eq 1 || $PY_HELPERS_CHANGED -eq 1 ]] || ! systemctl is-active --quiet "$unit.service"; then
+    systemctl restart "$unit.service"
+    log "$unit.service (re)started"
+  fi
+  log "$unit.service: $(systemctl is-active "$unit.service")"
 }
 
 verify_kismet() {
@@ -878,6 +916,7 @@ print_next_steps() {
              journalctl -u kismet -f
   Capture    iw dev                      # expect '${CAPTURE_IFACE}mon' with type monitor
   Watchdog   systemctl list-timers ${WATCHDOG_UNIT}.timer
+  Hop guard  journalctl -u ${HOP_GUARD_UNIT}      # "re-applied hop list" after a helper crash
              journalctl -b -u kismet -u ${WATCHDOG_UNIT}     # pre-start + watchdog lines included
   Logs       ${KISMET_LOG_DIR}/${KISMET_LOG_TITLE}-*.kismet   (no frames; kept ${KISMET_LOG_KEEP_DAYS} d / ${KISMET_LOG_MAX_MB} MB)
              kismetdb_statistics --in <file.kismet>
@@ -962,6 +1001,7 @@ main() {
   configure_service
   install_timer "$WATCHDOG_UNIT"
   install_timer "$RETENTION_UNIT"
+  install_service "$HOP_GUARD_UNIT"
   verify_kismet
   print_next_steps
 }

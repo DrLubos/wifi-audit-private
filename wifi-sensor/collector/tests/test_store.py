@@ -9,7 +9,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from shape import shape_alert, shape_device  # noqa: E402
-from store import Store  # noqa: E402
+from store import SCHEMA_VERSION, Store  # noqa: E402
 from test_shape import ALERT_RAW, AP_RAW, CLIENT_RAW, TS  # noqa: E402
 
 HEALTH = {"kismet_ts": TS, "devices_total": 2, "ds_running": 1,
@@ -154,7 +154,7 @@ class StoreTest(unittest.TestCase):
         path = self.store.db.execute("PRAGMA database_list").fetchone()[2]
         self.store.close()
         self.store = Store(path)
-        self.assertEqual(self.store.get_meta("schema_version"), "3")
+        self.assertEqual(self.store.get_meta("schema_version"), str(SCHEMA_VERSION))
 
     def test_migrates_v2_to_v3_keeps_observations(self):
         path = os.path.join(self.tmp.name, "v2.db")
@@ -176,7 +176,7 @@ class StoreTest(unittest.TestCase):
         v2.close()
         store = Store(path)
         try:
-            self.assertEqual(store.get_meta("schema_version"), "3")
+            self.assertEqual(store.get_meta("schema_version"), str(SCHEMA_VERSION))
             cols = [r[1] for r in store.db.execute("PRAGMA table_info(observations)")]
             self.assertIn("disconnects_last", cols)
             # The pre-migration row survives, with the new column NULL.
@@ -193,10 +193,45 @@ class StoreTest(unittest.TestCase):
         # Reopening a migrated buffer is a no-op.
         store = Store(path)
         try:
-            self.assertEqual(store.get_meta("schema_version"), "3")
+            self.assertEqual(store.get_meta("schema_version"), str(SCHEMA_VERSION))
             self.assertEqual(store.db.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 2)
         finally:
             store.close()
+
+    def test_migrates_v3_to_v4_adds_hop_columns(self):
+        path = os.path.join(self.tmp.name, "v3.db")
+        v3 = sqlite3.connect(path)
+        v3.executescript("""
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta VALUES ('schema_version', '3');
+            CREATE TABLE polls (
+              id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, kismet_ts INTEGER,
+              devices_total INTEGER, devices_active INTEGER, new_obs INTEGER,
+              ds_running INTEGER, ds_error TEXT, ds_packets INTEGER,
+              duration_ms INTEGER, ok INTEGER NOT NULL DEFAULT 1, error TEXT);
+            INSERT INTO polls(ts, ds_running, ds_packets) VALUES (100, 1, 5);
+        """)
+        v3.close()
+        store = Store(path)
+        try:
+            self.assertEqual(store.get_meta("schema_version"), "4")
+            cols = [r[1] for r in store.db.execute("PRAGMA table_info(polls)")]
+            for c in ("ds_hop_n", "ds_hop_visited", "ds_hop_ok"):
+                self.assertIn(c, cols)
+            # The pre-migration poll survives with the new columns NULL.
+            self.assertEqual(store.db.execute(
+                "SELECT ts, ds_packets, ds_hop_n, ds_hop_visited, ds_hop_ok FROM polls").fetchall(),
+                [(100, 5, None, None, None)])
+        finally:
+            store.close()
+
+    def test_poll_stores_hop_coverage(self):
+        health = dict(HEALTH, ds_hop_n=89, ds_hop_visited=89, ds_hop_ok=1)
+        self.poll(TS, [AP_RAW], health=health)
+        self.poll(TS + 30, [AP_RAW])  # a health dict without hop keys stores NULL
+        self.store.write_failed_poll(TS + 60, "boom", 5)
+        self.assertEqual(self.q("SELECT ds_hop_n, ds_hop_visited, ds_hop_ok FROM polls ORDER BY ts"),
+                         [(89, 89, 1), (None, None, None), (None, None, None)])
 
     def test_migrates_v1_associations(self):
         path = os.path.join(self.tmp.name, "v1.db")
@@ -213,7 +248,7 @@ class StoreTest(unittest.TestCase):
         store = Store(path)
         try:
             # v1 -> v2 -> v3 in one start.
-            self.assertEqual(store.get_meta("schema_version"), "3")
+            self.assertEqual(store.get_meta("schema_version"), str(SCHEMA_VERSION))
             cols = [r[1] for r in store.db.execute("PRAGMA table_info(associations)")]
             self.assertEqual(cols, ["ap_key", "client_mac", "first_seen", "last_seen", "sent"])
             self.assertEqual(store.db.execute("SELECT COUNT(*) FROM associations").fetchone()[0], 0)
