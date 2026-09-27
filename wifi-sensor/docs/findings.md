@@ -12,7 +12,11 @@ the channel-hop list, 2026-09-26): compare per-channel figures only within one
 configuration period. Section 8 is the probe-request feasibility study,
 section 9 the channel-plan analysis and the capture-helper crash causes,
 section 10 the first false-positive characterisation of the server-side
-evil_twin detector.
+evil_twin detector, section 11 the data-quality rules that came out of it
+(RSSI floor values, config-history churn, `freq_khz`). **The figures of
+sections 1-3 and 10 treat the RSSI floor values -106/-120 dBm as signal
+levels**; sections 2-3 were re-measured without them (2026-09-27, tables at
+the end of each section) - the original text is kept, marked superseded.
 
 | Script | Invocation |
 |---|---|
@@ -37,6 +41,10 @@ evil_twin detector.
 
 ## 2. RSSI baseline stability (`rssi_stability.py`)
 
+> **Superseded (floor values included).** The text and tables below count the
+> RSSI floor values -106/-120 dBm as signal levels (section 11). Kept as
+> published on 2026-09-19; the re-measurement is at the end of this section.
+
 Across **106 fixed APs** with enough readings (>= 200 readings on >= 2 days;
 690 131 readings):
 
@@ -60,7 +68,48 @@ Across **106 fixed APs** with enough readings (>= 200 readings on >= 2 days;
   not an average); readings exist only for polls in which the AP was active;
   phone hotspots that moved are not filtered beyond the min-days rule.
 
+**Re-measurement without the floor values (2026-09-27)** - same window
+(2026-09-15 -> 2026-09-19 12:34:00 UTC, `--until "2026-09-19 12:34"`), same
+defaults, run on the Pi's buffer on 2026-09-27 18:44-18:46 UTC (before the
+14-day retention reaches that window). Three runs:
+
+- **old** = `--keep-floor`, the pre-2026-09-27 behaviour. It does **not**
+  reproduce the published 106 APs / 690 131 readings: 99 APs / 681 756 readings,
+  because 36 device keys that were APs in the window are now typed client or
+  ad-hoc by Kismet (the script selects by the current `devices.type`). The
+  per-AP distributions match the published ones to 0.1 dB, so this rerun is the
+  like-for-like "old" column.
+- **floors excluded** = the new default: -106/-120 are censored readings, left
+  out of every statistic (section 11).
+- **eligible (f <= 0.35)** = floors excluded and APs whose floor share exceeds
+  0.35 removed (`--max-floor-share 0.35`, the evil_twin eligibility rule of
+  section 11). Keeps the censoring bias of the middle column visible: an AP
+  with many floor readings gets an upward-biased median there.
+
+| Metric | old (floors as levels) | floors excluded | eligible (f <= 0.35) |
+|---|---|---|---|
+| Qualifying APs / readings | 99 / 681 756 | 95 / 675 180 | 92 / 673 768 |
+| Floor readings in the window (all APs) | 7 528 counted as levels | 7 528 excluded | 7 528 excluded |
+| Floor share per qualifying AP | - | median 0, p90 0, max 0.939; > 0.01: 6 APs, > 0.35: 3 | max 0.267 |
+| RSSI sd per AP: median / Q3 / p90 / max | 2.3 / 3.3 / 5.2 / 10.0 dB | 2.4 / 3.3 / 5.0 / 7.0 dB | 2.2 / 3.3 / **3.7** / 7.0 dB |
+| Robust sd: min / median / Q3 | **0.0** / 1.5 / 3.0 dB | 1.5 / 1.5 / 3.0 dB | 1.5 / 1.5 / 3.0 dB |
+| APs with sd <= 3 dB / <= 5 dB | 67 (68 %) / 86 (87 %) | 65 (68 %) / 84 (88 %) | 65 (71 %) / 84 (91 %) |
+| 2.4 GHz: APs, median sd, sd <= 5 dB | 60, 2.6, 78 % | 56, 2.6, 80 % | 53, 2.6, 85 % |
+| 5 GHz: APs, median sd, sd <= 5 dB | 39, 1.8, 100 % | 39, 1.8, 100 % | 39, 1.8, 100 % |
+| Day-to-day range of the daily mean: median / p90 / max | 2.4 / 6.2 / 18.9 dB | 2.3 / 5.9 / 10.1 dB | 2.4 / 5.9 / 10.1 dB |
+| Drift ratio (range of daily means / robust sd) | 1.62 | 1.58 | 1.59 |
+
+What changes: the robust sd of 0.0 dB disappears (it belonged to APs whose
+readings were mostly the floor, i.e. no measurement at all), the worst per-AP
+sd and day-to-day range shrink (10.0 -> 7.0 dB, 18.9 -> 10.1 dB), and once the
+heavily censored APs are removed the p90 sd drops from 5.0 to 3.7 dB. The
+medians and the headline ("median sd ~2.3 dB, one static baseline per AP is
+adequate") do not change.
+
 ## 3. False-positive floor of a naive RSSI threshold (`rssi_stability.py`)
+
+> **Superseded (floor values included).** As section 2: kept as published on
+> 2026-09-19, re-measurement at the end of this section.
 
 Baseline = median of the first 50 % of each AP's readings; evaluated on the
 remaining **345 090 genuine readings** of the same 106 APs. The share of readings
@@ -88,6 +137,41 @@ a rule `|reading - baseline| > Y dB` would flag **with no attack present**:
   a false-positive floor of roughly 1-2 % of readings even at 8-10 dB, and
   excursions of several consecutive observations are common - any RSSI-based
   detector needs per-AP baselines and persistence, not a global threshold.
+
+**Re-measurement without the floor values (2026-09-27)** - the same three runs
+as in section 2 (old = floors as levels, rerun; floors excluded; eligible =
+floors excluded and floor share <= 0.35). Test readings: 340 901 / 337 610 /
+336 903. Cells: readings flagged (pooled) / worst AP / excursions lasting
+>= 3 observations.
+
+| Y | old (floors as levels) | floors excluded | eligible (f <= 0.35) |
+|---|---|---|---|
+| 3 dB | 24.128 % / 71.6 % / 5 970 | 24.131 % / 66.9 % / 5 917 | 24.073 % / 65.1 % / 5 877 |
+| 5 dB | 9.202 % / 65.6 % / 2 311 | 9.038 % / 43.7 % / 2 241 | 8.985 % / 43.7 % / 2 212 |
+| 6 dB | 5.825 % / 64.4 % / 1 609 | 5.608 % / 32.5 % / 1 531 | 5.572 % / 32.5 % / 1 514 |
+| 8 dB | 2.047 % / 60.6 % / 393 | **1.797 %** / 29.4 % / 315 | **1.763 %** / 29.4 % / 302 |
+| 10 dB | 0.975 % / 59.0 % / 147 | **0.712 %** / 27.0 % / 65 | **0.685 %** / 27.0 % / 57 |
+| 12 dB | 0.727 % / 58.2 % / 128 | 0.456 % / 23.8 % / 43 | 0.439 % / 23.8 % / 40 |
+| 15 dB | 0.632 % / 56.9 % / 121 | 0.354 % / 19.8 % / 35 | 0.349 % / 19.8 % / 35 |
+| 20 dB | 0.132 % / 14.1 % / 17 | 0.078 % / 1.0 % / 4 | 0.078 % / 1.0 % / 4 |
+
+| | old | floors excluded | eligible (f <= 0.35) |
+|---|---|---|---|
+| \|deviation\| p99 / p99.9 / max | 10 / 22 / 53 dB | 9 / 20 / 44 dB | 9 / 20 / 44 dB |
+| Stronger / weaker readings beyond 15 dB | **797** / 1 358 | **9** / 1 186 | 9 / 1 167 |
+| Longest excursion beyond 8 dB | 128 observations | 30 | 30 |
+| APs never flagged at 8 / 10 dB | 12 / 26 of 99 | 11 / 25 of 95 | 11 / 25 of 92 |
+| Per-AP 3 x robust sigma rule | 8.107 % | 8.162 % | 8.156 % |
+
+What changes: at 10-15 dB the pooled false-positive share falls by roughly a
+quarter to a half and the persistent excursions (>= 3 observations) by 55-71 %;
+beyond 15 dB almost nothing is "stronger" any more (797 -> 9) - those were
+real readings of weak APs measured against a baseline sitting on the floor.
+What stays: at 3-6 dB the figures barely move, the 3-sigma rule still flags
+~8 %, and the worst AP still exceeds 8 dB in ~29 % of its readings (a
+randomised-BSSID phone hotspot; the campus APs are unchanged at 5-10 %). The
+conclusion of this section holds, with a lower floor: ~1.8 % of genuine
+readings beyond 8 dB and ~0.7 % beyond 10 dB, before any persistence rule.
 
 ## 4. AP inventory and impostor candidates (`inventory_changes.py`)
 
@@ -191,6 +275,7 @@ read from the running system after the change (journal, `polls`), not planned.
 | 2026-09-26 23:09:14 - 2026-09-27 11:34:24, and 2026-09-27 12:17:20 - 12:22:55 | **Hop list collapsed to channel 1** after capture-helper crashes ("IPC connection closed" at 23:09:14, 23:29:21, 23:54:22, 00:11:05, 11:29:37, 11:30:07, 12:17:20/39/47). Kismet 2025-09 re-opens a failed source from a definition it rebuilds without quoting (`kis_datasource.cc`, `generate_source_definition()`), so `channels="1,1HT40+,..."` became `channels=1` plus stray options; the re-opened source hopped `['1']` (saved datasource state of both Kismet runs; the first reboot-to-11:34 run logged 6 retries, the 11:34-12:22 run 3). Ended only by the watchdog's Kismet restarts (stuck counter after the later crashes) | **Only 2412 MHz received for ~12 h 25 min overnight and ~5 min at noon**: from the 23:10 10-minute bin to 11:20 every observation in the buffer is on 2412 MHz (a few 2417-2457 MHz values until 23:40 from adjacent-channel reception), no 5 GHz at all; the frame rate stayed normal, so the watchdog did not notice. Treat these windows as channel-1-only data. Plus no frames at all 11:30:14-11:34:25 and 12:17:20-12:22:55 (section 6). Caused by the explicit `channels=` list of 22:45:26 - with Kismet's autodetected list (no commas in the definition) a re-open kept the full list |
 | 2026-09-27 13:04:57 | Hop list: 89 entries (also without `140HT40-`, 136+140 is not an 802.11 40 MHz channel; same order otherwise), stride check in the installer. `install_sensor.sh` restarted Kismet 13:04:56-57; last poll on the 90-entry list 13:04:54, first on the 89-entry list 13:05:24 | Full coverage again: all **89** distinct settings visited (`dwell_poll.py`, 90 s at ~13:21), stride 4, gcd(89, 4) = 1; dwell median 0.215 s, max 0.222 s; cycle ~19.1 s; 2.4 GHz time share 19.5 %; 0 WARNs. **Still exposed to the channel-1 collapse at the next helper crash** (open item in `CLAUDE.md`) - check future data for 2412-only stretches |
 | 2026-09-27 13:04:57 | Kismet web UI / REST API bound to 127.0.0.1 (`httpd_bind_address`; was 0.0.0.0 on every interface). The existing web UI login was **kept** (unique password, not reused elsewhere; now reachable only on loopback / through an SSH tunnel) | None on the captured data (the collector already used 127.0.0.1; polls continued) |
+| 2026-09-27 14:15:50 | Hop guard deployed (`wifi-sensor-hop-guard.service` started 14:15:50, guarding the 89-entry list); collector with buffer v4 restarted 14:15:56, first poll with `polls.ds_hop_*` 14:15:57. Kismet not restarted (up since 13:04:57). Recorded 2026-09-27 ~19:40 from the journal and `polls` | A capture-helper crash still collapses the live list to channel 1, but only until the guard's next check: crashes 14:16:41, 14:19:30 and 18:42:26 (the last one with a USB disconnect) were re-applied at 14:16:50, 14:19:40 and 18:42:34 ("live 1 entries -> 89"), so **<= ~10 s of channel-1-only data per crash** instead of hours. `ds_hop_ok` = 0 on 1 of 624 polls up to ~19:28 (18:42:27, source not running). From 14:15:57 every poll records the live hop-list length, the visited entries and whether the list is the configured one - later degraded windows can be read from `polls` instead of reconstructed |
 | 2026-09-26 ~22:40 | Journal persistent (`journalctl --flush` during the install; the oldest entry kept from that boot is 22:40:39) | Kernel, Kismet and collector logs survive reboots (200 MB cap). Earlier incidents have only ~4 min of journal. Each boot's first lines carry the stale clock (e.g. 2026-09-15 13:53) until chrony syncs - the pre-start logs "clock synchronised" at that point |
 
 **Hop coverage before and after 22:45:26** (measured with
@@ -479,3 +564,190 @@ classes, 38); segment or suppress (b) around an advertised-channel change of the
 AP (-> 25); exclude randomised-BSSID (mobile) APs from (b); investigate the
 `FRI_wifi` -96 dBm readings and the config-history flapping. Then repeat this
 audit with the split baseline.
+
+**Superseded in part (2026-09-27):** this pass counts the RSSI floor values as
+levels and has no eligibility rules; the causes it found led to the rules of
+section 11. The second pass (same method, `python -m detection fp-audit`) is run
+after they are deployed and is added below, next to this one.
+
+## 11. Data quality: RSSI floors, config-history churn, `freq_khz` (2026-09-27)
+
+Follow-up of section 10, before any change to the detector logic. Each rule
+has one definition per side (sensor: `collector/dataset_rules.py`; server:
+`server/schema.sql`, schema 4) and becomes effective with the deployment
+recorded in section 7. **Raw history is not rewritten** on either side: rows
+written before the collector's buffer v5 keep the raw values, and every reader
+applies the rule.
+
+### RSSI floor values -106 / -120 dBm are censored readings
+
+Where they come from (source-verified, Kismet 2025-09-R1 and Linux rtw88):
+
+- Kismet takes the **first** radiotap dBm_AntSignal field of a frame
+  (`kis_dlt_radiotap.cc`), i.e. mac80211's combined `rx_status->signal`, and
+  with `dot11_ap_signal_from_beacon=true` (packaged `kismet_80211.conf`) an AP's
+  `sig_last` always comes from a beacon - on 2.4 GHz a 1 Mbps **CCK** frame.
+- rtw88 computes the CCK power of the RTL8821C as `lna_gain_table[lna] - 2 *
+  vga` (`rtw8821c.c`, `get_cck_rx_pwr`); with `lna_gain_table_1` the smallest
+  possible output is -44 - 2 x 31 = **-106 dBm** (maximum-gain state). The OFDM
+  path is `max(PWDB - 110, -120)`, so **-120** is the OFDM clamp. The 2 dB CCK
+  step also explains why even values dominate the weak 2.4 GHz readings.
+- In the data (server, 2026-09-15 .. 09-27): 81 120 of 2 229 938 readings
+  (3.64 %) are exactly -106, against 31 at -105 and 25 at -107; 30 are -120.
+
+A floor value means "at or below the floor (or AGC not settled)" - censoring,
+not missing data and not a level. Rules:
+
+1. Never used as a signal level (no median, MAD or threshold over it). Sensor:
+   `rssi_value()` / `sql_rssi()`, the collector stores NULL from buffer v5 on;
+   server: `rssi_valid()` in `refresh_ap_baselines()`, evil_twin and the API.
+2. Never silently dropped either: dropping the floors of a weak AP moves its
+   median up. With a floor share f, the valid-only median sits at quantile
+   `0.5 + f/2` of the true distribution; the bias is
+   `Q_valid(0.5) - Q_valid((0.5 - f) / (1 - f))`, and for f >= 0.5 the true
+   median is itself censored. So the censoring is kept: `observations.rssi_floor`
+   (buffer v5 and server), `ap_baselines.n_floor`, and a per-AP **floor share**
+   `n_floor / (n_obs + n_floor)`.
+3. An AP whose floor share exceeds **0.35** is not eligible for evil_twin
+   signal (b).
+
+**Deriving the 0.35** (read-only on the server, all data 2026-09-15 14:55 ..
+2026-09-27 14:27; the same computation is now `fp-audit --mode floor-share`):
+per AP the floor share, the median and robust sd of the valid readings, and the
+censoring bias above.
+Criterion: the largest f at which the bias stays within the AP's own robust sd
+(at least 1 dB) for all APs, with 0.5 as the hard ceiling.
+
+| Floor share f of the 112 APs that qualify on valid readings | APs |
+|---|---|
+| < 0.01 | 97 |
+| 0.01 - 0.10 | 2 |
+| 0.10 - 0.20 | 3 |
+| 0.20 - 0.35 | 3 (largest 0.322: bias 2 dB, robust sd 3.0 dB - within) |
+| 0.35 - 0.50 | 2 (0.433: bias **14 dB**, robust sd 3.0 dB - first violation; 0.465: 12 dB) |
+| >= 0.50 (median censored) | 5 |
+
+Admissible interval **[0.322, 0.433)**; 0.35 is the round value inside it.
+It removes **7 of the 112** qualifying APs: 5 randomised-BSSID phone hotspots,
+1 D-Link and 1 ADB home router - no campus AP. Of the 118 baselines stored
+before the rule, 6 no longer qualify at all on valid readings (5 of them had
+81-100 % floor readings, one 39 %); `refresh_ap_baselines()` now clears the
+statistics of such rows. Over all 443 APs, 108 have more than half of their
+readings at a floor. The same rule applied to the section 2-3 window removes 3
+of 95 APs (tables there).
+
+### Config-history churn
+
+`store.py` compared the whole configuration tuple of an AP on every poll.
+Kismet's `last_beaconed_ssid_record` regularly comes back empty (channel 0,
+empty HT mode, beacon rate 0, all mapped to NULL = unknown), which counted as a
+change: a history row, the `devices` configuration overwritten with NULLs, and
+another row when the real values returned on the next poll. On the server
+(2026-09-27): 68 620 history rows, **28 835 (42 %) replacing an all-NULL
+configuration**, on 195 APs; 27 APs wrote 100-1000 rows a day. Real
+(non-NULL) advertised-channel changes: 11 317 on 121 APs, of which 4 123 lasted
+under 10 min and 511 over 6 h (campus dynamic channel selection).
+
+Fix (collector, buffer v5): field-wise merge, NULL = unknown = keep the stored
+value; a history row and `config_changed_at` only when a known value changes to
+a different known value; unknown -> known fills the field silently. Accepted
+consequence: a field that genuinely disappears (e.g. a dropped country IE) is
+no longer recorded. Server: history not rewritten; the view
+`ap_channel_changes` (non-NULL advertised-channel changes from the history plus
+the current value) is the one definition of an AP's channel timeline (11 388
+changes on 138 APs, 2026-09-27) - used by the evil_twin channel guard and
+fp-audit.
+
+### `observations.freq_khz` is not the reception channel
+
+`freq_khz` is Kismet's `kismet.device.base.frequency`: the frequency attributed
+to the frame that last updated the device's frequency (`devicetracker.cc`: the
+frame's own channel information when present, else the tuned channel). Signal
+and frequency are updated from different frames, so it is neither the channel
+the `rssi` frame was received on nor reliably the AP's channel (a channel-12
+BSSID shows the same -65 dBm "at" 2417, 2437 and 5260 MHz). The AP's channel
+is `devices.adv_channel`; stored data cannot attribute a reading to
+off-channel reception. Documented in the collector README, the buffer and
+server schemas and both `CLAUDE.md` files; no code change.
+
+### evil_twin (b) eligibility (server, `evil_twin.py`)
+
+- **Randomised BSSIDs excluded** unless a globally administered sibling (same
+  last 3 octets) exists: 20 of 125 baselined APs had a randomised BSSID, only 3
+  of them present on >= 7 days (median 934 readings against 24 410 for the
+  others), mostly Samsung/MediaTek phones - a personal hotspot's "baseline" is
+  wherever its owner happened to be. 1 has a sibling (an infrastructure virtual
+  AP) and stays. `--include-random-bssid` restores the old behaviour.
+- **Floor share > 0.35** (above).
+- **Channel-change guard**: deviating windows ending within 1 h
+  (`--channel-guard 3600`) of the AP's own `ap_channel_changes` entry are
+  dropped; 25 of the 82 first-pass false positives were within +-1 h of such a
+  change. How many windows this suppresses (APs that change channel every
+  hour or so could be guarded most of the time) is reported by fp-audit
+  (`guarded`); a per-channel baseline is left for later.
+
+### `FRI_wifi` -96 dBm readings - investigated, not understood, no rule
+
+The 14 "level change, cause open" false positives of section 10 are dips of
+`FRI_wifi` (MikroTik, channel 5 HT40+) from its usual level to a discrete
+-96 dBm. Measured so far (read-only; the live capture ran in memory on the Pi,
+kept only frames with this AP's BSSID and printed aggregates, nothing written):
+
+- At poll resolution the AP alternates between its level (~-78 dBm until
+  2026-09-26) and -96 all the time; a "dip" is a run of -96 last-beacons. The
+  beacon TSF advances continuously through the dips: one transmitter.
+- **Only this AP does it.** Of the 38 2.4 GHz APs whose median is >= -84 dBm
+  (so a second level 14-22 dB lower would still sit above the -106 floor), it
+  is the only one with such a second level (share 0.137; every other AP
+  <= 0.042; Pi buffer, 91-entry list period).
+- **Not time of day:** share of polls at <= -94 dBm 0.08-0.14 in every UTC hour
+  (91-entry list period).
+- **By hop-list period** (Pi buffer; "low" = the -96 mode):
+
+  | Period (section 7) | Polls | Polls with an FRI_wifi reading | Low share | Top values |
+  |---|---|---|---|---|
+  | 91-entry list (to 2026-09-26 22:45:26) | 29 571 | 27 490 (93 %) | 0.15 | -78, -76, -80, -96 |
+  | 90-entry list, 45 visited, channel 5 **not** tuned (22:45:26-23:09:14) | 45 | 11 (24 %) | 0 | -84 .. -82 only |
+  | channel-1 collapse (23:09:14-11:34:24) | 1 490 | 0 | - | - |
+  | 90-entry list again (11:34-13:04:57; new shuffle, visited half not measured) | 181 | 45 (25 %) | 0.27 | - |
+  | 89-entry list (13:04:57 to ~19:00) | 716 | 546 (76 %) | 0.04 (to ~19:30: 18 of 576 readings) | -82, -78, -80 |
+
+- No sensor-wide level shift between the periods: per-AP median, 89-entry list
+  minus the last ~1.4 days of the 91-entry list, +1 dB on 2.4 GHz (41 APs) and
+  0 dB on 5 GHz (24 APs); `FRI_wifi` itself -80 -> -82 dBm.
+- **Live capture, 2026-09-27, 20 min between 19:00 and 19:30 UTC** (89-entry
+  list; Kismet's pcapng stream, each frame attributed to the tuned setting by
+  sampling `iw dev wlan1mon info`): 62 frames of the BSSID (45 beacons,
+  17 probe responses, all 1 Mbps). 60 were received while tuned to channel 5
+  (2432 MHz): -82 x 43, -80 x 13, -78 x 2, -92 x 1. 2 were attributed to
+  channel-6 settings, both -82: one with radiotap frequency 2437 MHz (a real
+  channel-6 reception), one with **2412 MHz** while `iw` already reported the
+  next setting (`6HT40-`) - i.e. received at the end of a channel-1 or
+  `1HT40+` dwell, during the switch. **None at <= -94** - at the current ~3 %
+  of polls ~2 were expected, so the sample says little.
+
+Reading so far: the first hypothesis ("-96 = a beacon heard during a
+neighbouring channel's dwell, ~18 dB adjacent-channel loss") does not fit.
+With channel 5 not tuned at all (second row) the AP was still heard, at
+-84 .. -82 dBm, from the +-5 MHz neighbours, i.e. a few dB below its level, and
+the live capture saw -82 on channel 6 (2437 MHz). Remaining candidate, untested: -96 is a
+beacon received while the sensor is tuned to **`1HT40+`, whose secondary
+20 MHz channel is channel 5** - of the hop list's 2.4 GHz 40 MHz entries
+(`1HT40+`, `6HT40-`, `6HT40+`, `11HT40-`, secondaries 5, 2, 10, 7), only
+`1HT40+` covers an AP of this strength on its secondary half; the campus APs
+sit on 1/6/11/13, all primaries, and none of them shows a second level. It
+fits the zero low readings while `1HT40+` was not tuned (second row), and a
+2-4 dB weaker AP pushing an 18 dB lower copy towards the decode limit would
+explain the lower low share and poll coverage on the 89-entry list. Against
+it: the one frame received at 2412 MHz in the live capture had the normal
+level (-82), not -96 - if it came from the `1HT40+` dwell, that dwell does not
+always produce the low level. Other explanations (e.g. a receiver gain-state
+effect at this AP's input level) are not excluded.
+
+Next test (not run): the same capture over several hours (~15-20 low frames
+expected at the current rate), attributing frames by the radiotap frequency
+(a channel-5 AP's frame reported at 2412 MHz comes from a channel-1 or `1HT40+`
+dwell), with a much coarser `iw` sample only to tell those two apart, instead
+of a tight `iw` polling loop (~220 process starts per second for 20 min - no
+helper crash or degraded poll during the test, but too heavy for hours). No rule until the mechanism is shown; until then `FRI_wifi`'s
+(b) detections stay in the "open" class.
