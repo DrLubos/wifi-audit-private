@@ -638,10 +638,18 @@ one change, 2026-09-15 .. 09-28)
   away only with the full hour), but the 1 h guard gets there by not looking
   at 41 % of campus AP time. Per-channel levels differ little on most campus
   BSSIDs (median of the range of per-channel medians 3 dB, p90 7 dB; 15 of
-  89 BSSIDs with >= 6 dB, channels with >= 300 readings). Candidate
-  replacement, to be measured before any change: a per-(AP, advertised
-  channel) baseline plus a short guard for the transition itself. The default
-  stays 3600 s until then.
+  89 BSSIDs with >= 6 dB, channels with >= 300 readings).
+
+  **Decision (developer, 2026-09-28): default `--channel-guard 0` (off), the
+  option stays.** Blinding 41 % of campus AP time is worse for a WIDS than
+  the false positives the guard removes (on this data 16 detections in
+  12 days, ~1.3 a day, 5 of them high), and without a staged evil twin the
+  guard's cost in recall cannot be measured. The table above is the measured trade-off, to be decided after
+  the staged evaluation. No per-channel baseline for now. With the new
+  default, the circular k 6 run on this data gives **40 detections on 11 APs,
+  5 high** (all 5 within an hour of the AP's own channel change); the second
+  pass figures above were taken with the guard at 3600 s, the default at the
+  time.
 
 **Split-baseline audit, second pass** (split at 2026-09-21 14:41:22, evaluated
 on 2026-09-21 14:41 .. 09-28; split baselines qualify for 98 APs, 10 of them
@@ -665,8 +673,9 @@ brackets. "Channel change" in the cause column is the timing class above
 - What remains after the section 11 rules: `FRI_wifi` (open), and short
   "stronger" / "weaker" episodes of campus radios whose cause is open - not
   explained by the channel they are on. Both are false positives a staged
-  evaluation will have to live with or explain; the next measurement is the
-  per-channel baseline above.
+  evaluation will have to live with or explain. With the guard off (the
+  default from 2026-09-28) add the channel-change steps: 16 more detections,
+  5 of them high, on this data.
 
 ## 11. Data quality: RSSI floors, config-history churn, `freq_khz` (2026-09-27)
 
@@ -786,14 +795,16 @@ server schemas and both `CLAUDE.md` files; no code change.
   wherever its owner happened to be. 1 has a sibling (an infrastructure virtual
   AP) and stays. `--include-random-bssid` restores the old behaviour.
 - **Floor share > 0.35** (above).
-- **Channel-change guard**: deviating windows ending within 1 h
-  (`--channel-guard 3600`) of the AP's own `ap_channel_changes` entry are
-  dropped; 25 of the 82 first-pass false positives were within +-1 h of such a
-  change. Measured after deployment (section 10, second pass): the zones
-  cover 41 % of campus AP time and deviations are only 1.4 x more frequent
-  inside them; the guard removes all high detections, but mostly by not
-  looking. A per-channel baseline with a short transition guard is the
-  candidate replacement, not built.
+- **Channel-change guard** (`--channel-guard S`): deviating windows ending
+  within S seconds of the AP's own `ap_channel_changes` entry are dropped;
+  25 of the 82 first-pass false positives were within +-1 h of such a change
+  (timing, see section 10). Deployed with S = 3600; measured after deployment
+  (section 10, second pass): the zones cover 41 % of campus AP time and
+  deviations are only 1.4 x more frequent inside them - the guard removes all
+  high detections, but mostly by not looking. **Default 0 (off) since
+  2026-09-28** (developer's decision: coverage over suppression while the
+  recall cost is unmeasured); the option stays, the decision is revisited
+  after the staged evaluation. No per-channel baseline for now.
 
 ### `FRI_wifi` -96 dBm readings - investigated, not understood, no rule
 
