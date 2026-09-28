@@ -772,7 +772,62 @@ changes. Residual: an AP first seen without a beacon record gets `cloaked`,
 `_counter`, not the 0 -> NULL mapping), so its first real record counts as a
 known -> known change and writes one history row (1 in the first 53 min). A
 missing record is recognisable (open APs carry crypt `Open`, so crypt NULL
-means "no record"); not fixed, at most one row per AP.
+means "no record"); not fixed in the collector, at most one row per AP - the
+server's reading below treats it as unknown.
+
+**Reading the history: `ap_config_changes` (server schema 5, 2026-09-28).**
+History stays as recorded (every column kept: a crypt/MFP/country/beacon-rate
+change is a security signal); one view reads it, as `rssi_valid()` reads RSSI.
+The data corrected the first guess ("A -> empty -> A"):
+- The dominant pre-v5 row is not an empty record but an **incomplete** one:
+  SSID, crypt and flags present, channel/HT/beacon rate/country NULL (29 508 of
+  71 249 rows in the Pi buffer); only 118 rows have no record at all (crypt
+  and channel both NULL); 3 rows equal their successor.
+- **Hidden APs** (20-22) alternate between their cloaked beacon (SSID `''`,
+  cloaked) and a named, uncloaked record: 406 SSID/cloaked flips on the
+  server, still 14 in the first 20.7 h after v5 (both values are known, so the
+  collector merge cannot help).
+- **`crypt_bits` value <-> 0** under an unchanged WPA2/WPA3 string on 10 APs
+  after v5 (17 flips): 0 is Kismet's missing-field value. It is also an open
+  AP's real bitfield: on the server bits 0 occur only with crypt `Open` (61
+  APs) or with no record (130), never on a protected AP.
+
+Rules of the view (developer's decisions on the hidden APs and on keeping
+downgrades visible): a no-record state is skipped; per field NULL = unknown;
+`crypt_bits` 0 = unknown unless crypt is `Open`; a hidden beacon's `''` SSID
+and its cloaked flag are unknown (one state with the named record); a change
+is a known value followed by a different known one, dated at the ts where the
+old value was replaced. `ap_channel_changes` (used by the detectors) is the
+view's `adv_channel` rows - identical to its previous definition (11 388 rows
+on 138 APs, compared both ways). A fixture test
+(`server/tests/sql/ap_config_changes_test.sql`) proves that a WPA2 -> Open
+downgrade stays visible in `crypt`, `crypt_bits` and `mfp_sup` - directly,
+behind pre-v5 churn, and when first seen in an incomplete record - while the
+churn, the `crypt_bits` 0 flips and the hidden-beacon alternation stay silent;
+two deliberately broken variants of the view fail it.
+
+Per-column changes, raw transitions vs the view's rules (Pi buffer, both
+periods; v5 switch 2026-09-27 19:57:29 UTC):
+
+| Column | Raw, before v5 (70 326 transitions) | View, before | Raw, after v5 (923 transitions, 20.7 h) | View, after |
+|---|---|---|---|---|
+| adv_channel | 70 274 | 11 519 | 895 | 891 |
+| ht_mode | 59 218 | 23 | 5 | 1 |
+| beacon_rate | 59 212 | 13 | 4 | 0 |
+| country | 51 800 | **0** | 3 | 0 |
+| ssid | 621 | 1 | 18 | 0 |
+| cloaked | 414 | 0 | 14 | 0 |
+| crypt | 210 | 1 | 4 | 0 |
+| crypt_bits | 133 | 0 | 21 | 0 |
+| mfp_sup | 35 | 0 | 2 | 2 |
+| mfp_req | 0 | 0 | 0 | 0 |
+
+On the server (data to 2026-09-27 14:27, all pre-v5): 68 620 history rows ->
+11 424 changes (adv_channel 11 388 on 138 APs, ht_mode 21, beacon_rate 12,
+crypt 1, crypt_bits 1, ssid 1). Country, a static field, never changed on any
+AP; the AP page shows it once, with a marker when it differs from the country
+most of the sensor's APs advertise (SK: 230 of 235 known; 5 foreign - US 2,
+CN, DK, DE; 345 APs without a country IE).
 
 ### `observations.freq_khz` is not the reception channel
 
