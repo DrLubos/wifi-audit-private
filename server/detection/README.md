@@ -323,18 +323,20 @@ counted in the report's eligibility line and in `info`:
   derived from the data (`fp-audit --mode floor-share`; admissible interval
   [0.322, 0.433) on 2026-09-27, it removes 7 of 112 qualifying APs, none of them
   campus APs).
-- **Channel-change guard**: a deviating window that ends within
-  `--channel-guard` seconds (default 3600) of one of the AP's own
-  advertised-channel changes (view `ap_channel_changes`, built from
-  `device_config_history`) is dropped before episodes are built; the count is in
-  `info.windows_channel_guarded`. Campus APs change channel by themselves
-  (dynamic channel selection, 15-19 times a day). Measured (findings §10,
-  second pass): without the guard 40 detections / 5 high, with 3600 s 24 / 0
-  high - but the ±1 h zones cover 41 % of campus AP time and deviations are
-  only 1.4× more frequent inside them, so the guard mostly works by not
-  looking. Per-channel medians of most campus BSSIDs differ by ~3 dB (15 of 89
-  by ≥ 6 dB). Candidate replacement, to be measured first: a per-(AP,
-  advertised channel) baseline plus a short guard for the transition itself.
+- **Channel-change guard - an option, off by default** (`--channel-guard S`,
+  default 0): with S > 0 a deviating window that ends within S seconds of one
+  of the AP's own advertised-channel changes (view `ap_channel_changes`, built
+  from `device_config_history`) is dropped before episodes are built; the
+  count is in `info.windows_channel_guarded`. Measured (findings §10, second
+  pass): 0 s -> 40 detections / 5 high, 600 s -> 36 / 4, 1800 s -> 31 / 2,
+  3600 s -> 24 / 0 - but campus radios change channel 15-19 times a day, the
+  ±1 h zones cover 41 % of campus AP time, and deviations are only 1.4× more
+  frequent inside them, so the guard works mostly by not looking. **Off by
+  default (developer's decision, 2026-09-28):** blinding 41 % of campus AP time
+  is worse for a WIDS than the false positives the guard removes (16 in 12 days
+  on the seeded data, 5 of them high), and its recall cost cannot be measured
+  before a staged evil twin; decide after the staged evaluation. No per-channel
+  baseline for now.
 
 ### Signal (a) algorithm
 
@@ -365,7 +367,7 @@ audit separate median-shift from spread-inflation.
 `--persist-window 900`, `--med-dev 12`, `--high-dev 20`, `--gap 300`,
 `--trusted-source whitelist|baseline`, `--baseline-hours 24`, `--persist-hours 1`,
 `--persist-obs 20`, `--include-random-bssid` (off), `--max-floor-share 0.35`,
-`--channel-guard 3600` (0 = off); `--dry-run`/`--verbose`/`--json` as elsewhere.
+`--channel-guard 0` (off); `--dry-run`/`--verbose`/`--json` as elsewhere.
 
 **Seeded false-positive audit** (no rogue present, so every detection is a false
 positive) - `python -m detection fp-audit` (`fp_audit.py`), **read-only**: it
@@ -378,8 +380,12 @@ as `refresh_ap_baselines()` (as a SELECT) and evaluated on the second half, at
 the evil_twin options above. Every detection is attributed to a cause - a
 documented degraded window (`degraded_windows.csv`, from findings §6/§7; add a
 row when a new gap or coverage loss is documented), an advertised-channel
-change of the AP within an hour, else "open" - and an AP kind (campus /
-randomised / other). Expect **0 high/critical**. `--mode floor-share` prints the
+change of the AP within an hour (timing, not a proven cause - campus radios are
+within an hour of some change ~41 % of the time), else "open" - and an AP kind
+(campus / randomised / other). Expectation "0 high/critical": met only with
+`--channel-guard 3600` (second pass, 2026-09-27); with the default (guard off)
+the circular run has 5 high, all within an hour of the AP's own channel change
+(findings §10). `--mode floor-share` prints the
 per-AP floor share and censoring bias and the admissible `--max-floor-share`
 interval (JSON lines with `--json`).
 

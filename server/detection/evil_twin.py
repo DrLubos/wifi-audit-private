@@ -184,7 +184,8 @@ class Params:
     # (b) eligibility (docs/findings.md section 11)
     include_random_bssid: bool = False  # randomised (locally administered) BSSIDs are mobile
     max_floor_share: float = 0.35       # baseline n_floor / (n_obs + n_floor) above -> ineligible
-    channel_guard_s: float = 3600       # drop deviating windows within this of a channel change
+    channel_guard_s: float = 0          # drop deviating windows within this of a channel change;
+                                        # off: +-1 h blinds 41 % of campus AP time (findings s. 10)
     close_dbm: float = -60              # (a) 'close/strong' escalation
     strong_db: float = 10
 
@@ -768,9 +769,10 @@ def add_arguments(p):
     p.add_argument("--max-floor-share", type=float, default=0.35, metavar="F",
                    help="(b) ineligible when the baseline's share of floor (censored) readings exceeds "
                         "this (default 0.35, derived in findings section 11)")
-    p.add_argument("--channel-guard", type=float, default=3600, metavar="S",
+    p.add_argument("--channel-guard", type=float, default=0, metavar="S",
                    help="(b) drop deviating windows within S seconds of the AP's own advertised-channel "
-                        "change (default 3600; 0 = off)")
+                        "change (default 0 = off; 3600 removes the high false positives but blinds "
+                        "~41 %% of campus AP time - measured trade-off in findings section 10)")
     p.add_argument("--dry-run", action="store_true", help="analyse and print, write nothing")
     p.add_argument("--verbose", "-v", action="store_true", help="print every episode/candidate")
     p.add_argument("--json", action="store_true",

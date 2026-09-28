@@ -16,9 +16,11 @@ one AP at a time):
   circular2  the stored baselines evaluated on the second half only, per k;
   split      baselines refitted on the first half [data start, split point)
              and evaluated on the second half, per k.
-Each emitted detection is attributed to a cause: a documented degraded window
+Each emitted detection is attributed to a class: a documented degraded window
 (degraded_windows.csv), an advertised-channel change of the AP within an hour,
-else "open"; plus the AP kind (campus / randomised / other).
+else "open"; plus the AP kind (campus / randomised / other). The channel class
+is timing, not a proven cause: campus radios change channel 15-19 times a day,
+so +-1 h of some change covers ~41 % of their time (findings section 10).
 
 --mode floor-share: per AP the share f of censored floor readings and the
 bias of the valid-only median, Q(0.5) - Q((0.5 - f) / (1 - f)) of the valid

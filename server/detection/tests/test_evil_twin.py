@@ -435,6 +435,14 @@ class ParamsTest(unittest.TestCase):
         self.assertEqual((params.k, params.trusted_source, params.window_w), (4.0, "baseline", 20))
         self.assertEqual(params.as_dict()["trusted_source"], "baseline")
 
+    def test_channel_guard_is_off_by_default_but_settable(self):
+        # coverage over suppression: the guard's recall cost is unmeasured (findings section 10)
+        p = argparse.ArgumentParser()
+        et.add_arguments(p)
+        self.assertEqual(Params.from_args(p.parse_args([])).channel_guard_s, 0)
+        self.assertEqual(Params().channel_guard_s, 0)
+        self.assertEqual(Params.from_args(p.parse_args(["--channel-guard", "3600"])).channel_guard_s, 3600)
+
 
 if __name__ == "__main__":
     unittest.main()
