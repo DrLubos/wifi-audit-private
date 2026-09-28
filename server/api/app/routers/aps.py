@@ -22,7 +22,18 @@ _AP_COLS = """
     coalesce(trusted, false) AS trusted, rssi_median, rssi_robust_sd, rssi_sd,
     baseline_n_obs, baseline_n_days"""
 
-_CONFIG_COLS = "ssid, crypt, adv_channel, ht_mode, beacon_rate, country, cloaked, mfp_sup, mfp_req"
+# Configuration changes of one AP, newest first, one row per poll ts with the
+# fields that changed there (old -> new). ap_config_changes (schema.sql) is the
+# cleaned reading of device_config_history: pre-v5 incomplete-record churn,
+# Kismet's missing-field crypt_bits 0 and the hidden-beacon alternation are
+# unknown values, not changes. total = change events before the LIMIT.
+_CHANGES = """
+    SELECT ts, changes, count(*) OVER () AS total
+    FROM (SELECT ts, json_agg(json_build_object('field', field, 'old', old_value, 'new', new_value)
+                              ORDER BY field) AS changes
+          FROM ap_config_changes WHERE sensor_id = %s AND device_key = %s
+          GROUP BY ts) g
+    ORDER BY ts DESC LIMIT 200"""
 
 
 @router.get("/aps")
@@ -42,10 +53,18 @@ def get_ap(device_key: str = Path(pattern=DEVICE_KEY_RE), sensor=Depends(get_sen
     with db.pool.connection() as conn:
         ap = conn.execute(
             "SELECT " + _AP_COLS + ", cloaked, mfp_sup, mfp_req, beacon_rate, country, "
-            "config_changed_at FROM ap_inventory WHERE sensor_id = %s AND device_key = %s",
+            "config_changed_at, "
+            # the sensor's usual country (most common among its APs): another one is
+            # a weak rogue / misconfigured-AP hint, shown as a marker
+            "(SELECT mode() WITHIN GROUP (ORDER BY c.country) FROM devices c "
+            " WHERE c.sensor_id = i.sensor_id AND c.type = 'ap' AND c.country IS NOT NULL) "
+            "AS country_expected "
+            "FROM ap_inventory i WHERE sensor_id = %s AND device_key = %s",
             (sid, device_key)).fetchone()
         if ap is None:
             raise HTTPException(status_code=404, detail="unknown access point")
+        ap["country_foreign"] = (ap["country"] is not None and ap["country_expected"] is not None
+                                 and ap["country"] != ap["country_expected"])
         baseline = conn.execute(
             "SELECT rssi_median, rssi_mean, rssi_sd, rssi_robust_sd, rssi_p5, rssi_p95, "
             "main_freq_khz, n_obs, n_floor, n_days, window_start, window_end, computed_at, trusted, "
@@ -58,19 +77,28 @@ def get_ap(device_key: str = Path(pattern=DEVICE_KEY_RE), sensor=Depends(get_sen
             "min(ts) AS first_obs, max(ts) AS last_obs "
             "FROM observations WHERE sensor_id = %s AND device_key = %s",
             (sid, device_key)).fetchone()
-        hist_total = conn.execute(
-            "SELECT count(*) AS n FROM device_config_history "
-            "WHERE sensor_id = %s AND device_key = %s", (sid, device_key)).fetchone()["n"]
-        hist = conn.execute(
-            "SELECT ts, " + _CONFIG_COLS + " FROM device_config_history "
-            "WHERE sensor_id = %s AND device_key = %s ORDER BY ts DESC LIMIT 200",
-            (sid, device_key)).fetchall()
+        raw = conn.execute(
+            # hidden APs alternate between the cloaked beacon (ssid '') and a named
+            # record (one state in ap_config_changes): flag the hidden beacon and
+            # keep the latest name seen for the header
+            "SELECT count(*) AS n, coalesce(bool_or(cloaked AND ssid = ''), false) AS hidden_beacon, "
+            "(array_agg(ssid ORDER BY ts DESC) FILTER (WHERE ssid <> ''))[1] AS name_seen "
+            "FROM device_config_history WHERE sensor_id = %s AND device_key = %s",
+            (sid, device_key)).fetchone()
+        changes = conn.execute(_CHANGES, (sid, device_key)).fetchall()
+    ap["hidden_beacon"] = raw["hidden_beacon"] or bool(ap["cloaked"] and not ap["ssid"])
+    ap["name_seen"] = ap["ssid"] or raw["name_seen"]
     return {
         "ap": ap,
         "baseline": baseline,
         "observations": obs,
-        # rows hold the configuration that was REPLACED at ts (as on the sensor)
-        "config_history": {"total": hist_total, "rows": hist},
+        # changes[].changes: [{field, old, new}] at ts (old value replaced at ts);
+        # raw_rows = rows of device_config_history, incl. the pre-v5 churn
+        "config_history": {
+            "total": changes[0]["total"] if changes else 0,
+            "raw_rows": raw["n"],
+            "rows": [{"ts": r["ts"], "changes": r["changes"]} for r in changes],
+        },
     }
 
 

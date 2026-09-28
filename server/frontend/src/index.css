@@ -289,6 +289,13 @@ details.table-view .table-wrap { max-height: 320px; overflow: auto; margin-top: 
   border-radius: 999px;
   color: var(--text-2);
 }
+.flag.warn { color: var(--warn); border-color: currentColor; }
+
+/* configuration changes: one "label old -> new" chip per changed field */
+.change { display: inline-block; margin-right: 1rem; white-space: nowrap; }
+.change .label { color: var(--text-3); margin-right: 0.35rem; }
+.change.security .label { color: var(--warn); font-weight: 600; }
+.change .sep { color: var(--text-3); }
 
 /* --- detections ---------------------------------------------------------- */
 

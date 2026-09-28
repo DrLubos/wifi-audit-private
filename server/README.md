@@ -71,7 +71,14 @@ docker compose exec frontend caddy reload --config /etc/caddy/Caddyfile     # af
 docker compose build api && docker compose up -d api                        # after an api change
 docker compose logs -f api
 docker compose run --rm detect deauth-flood --from 2026-09-15 --to 2026-09-21 --dry-run   # batch detector, see detection/README.md
+docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+    -v ON_ERROR_STOP=1 < tests/sql/ap_config_changes_test.sql              # SQL fixture test (temp tables, rolled back)
 ```
+
+SQL fixture tests in `tests/sql/` check views of the applied schema against
+fixtures in TEMP copies of the tables, inside a transaction that is rolled back
+(no real row is read or written); each prints `PASS` or raises. Run them after
+applying `schema.sql`.
 
 `$POSTGRES_USER`/`$POSTGRES_DB` above are the values from `.env`
 (`set -a; . ./.env; set +a` loads them into the shell). Seeding from a Pi

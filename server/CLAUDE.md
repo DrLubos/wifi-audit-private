@@ -86,7 +86,7 @@ Conventions for the stack:
   even though there is one sensor today (the thesis framing is an overlay of sensors).
 - Seed path in `server/seed/` (export a Pi snapshot -> import with psql). Idempotent
   and accumulating, so the server keeps history the Pi's 14-day retention discards.
-- **Dataset rules (schema 4, 2026-09-27; `../wifi-sensor/docs/findings.md` §11):**
+- **Dataset rules (schema 4-5, 2026-09-27/28; `../wifi-sensor/docs/findings.md` §11):**
   - **RSSI floors -106/-120 dBm are censored values, not levels** (rtw88 CCK/OFDM
     clamps of the capture adapter; 3.6 % of all readings). Every RSSI reader goes
     through `rssi_valid(rssi)` (floor -> NULL) and counts floors with
@@ -98,9 +98,21 @@ Conventions for the stack:
     AP's median (biased upward). The floor list lives once in `schema.sql`; a
     collector test keeps it equal to `wifi-sensor/collector/dataset_rules.py`.
   - **`device_config_history` before the v5 collector is ~42 % artefact**
-    (alternating empty/real beacon record: NULL <-> real channel/HT/beacon rate).
-    Use the view `ap_channel_changes` (non-NULL advertised channel changes only)
-    for channel timelines, not raw history rows.
+    (A -> incomplete beacon record -> A: channel/HT/beacon rate/country NULL).
+    Never read raw history rows as changes: the view **`ap_config_changes`**
+    (schema 5) is the one reading of the configuration timeline - no-record
+    states skipped, NULL = unknown per field, `crypt_bits` 0 unknown unless
+    crypt is `Open` (so a WPA2 -> Open downgrade still shows), a hidden AP's
+    cloaked beacon (`ssid` '') vs its named record is one state.
+    `ap_channel_changes` is its `adv_channel` rows (detectors use it). Keep every
+    history column (crypt/MFP/country/beacon-rate changes are security signals).
+    Fixture test: `tests/sql/ap_config_changes_test.sql` (must stay green; it
+    proves the rules cannot hide a downgrade).
+  - **AP queries must stay index-only scans** on
+    `observations_device_ts_rssi_floor` (INCLUDE rssi, rssi_floor): a column
+    outside the index makes every AP page read ~30k heap pages (7-9 s cold,
+    measured 2026-09-28). Add a column to the INCLUDE list rather than read it
+    from the heap; the importer vacuums `observations` after each load.
   - **`observations.freq_khz` is not the reception channel of `rssi`** (Kismet's
     device frequency, updated from other frames) and not reliably the AP's
     channel; use `devices.adv_channel`.

@@ -28,7 +28,10 @@ What the stream does
 
 Everything runs between BEGIN and COMMIT, so a failure (bad MAC, FK violation,
 lost connection) leaves the database untouched. psql's own "COPY n" / "INSERT 0 n"
-command tags show what was staged and what was actually inserted.
+command tags show what was staged and what was actually inserted. After COMMIT
+the stream vacuums observations (outside the transaction), so the new heap pages
+are all-visible and the AP queries stay index-only scans (schema.sql, covering
+index observations_device_ts_rssi_floor).
 
 Column and semantics reference: wifi-sensor/collector/store.py (buffer schema v2
 to v5; v3 added observations.disconnects_last, v4 polls.ds_hop_*, v5
@@ -370,6 +373,14 @@ def emit_stream(out, db, args, log):
                        "ap_baselines", "detections")]
     out.write("SELECT * FROM (VALUES\n  %s) AS t (table_name, n_rows);\n" % ",\n  ".join(parts))
     out.write("COMMIT;\n")
+
+    # 5. visibility map: the AP queries are index-only scans on the covering index
+    #    and fetch the heap row for every page not marked all-visible; autovacuum's
+    #    insert threshold is ~20 % of the table, i.e. days of imports. VACUUM cannot
+    #    run in a transaction block, and ON_ERROR_STOP keeps a failed load from
+    #    getting here.
+    out.write("\\echo -- vacuum observations (visibility map for index-only scans)\n")
+    out.write("VACUUM (ANALYZE) observations;\n")
 
 
 def emit_abort(out, reason):

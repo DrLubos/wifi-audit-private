@@ -325,7 +325,8 @@ counted in the report's eligibility line and in `info`:
   campus APs).
 - **Channel-change guard - an option, off by default** (`--channel-guard S`,
   default 0): with S > 0 a deviating window that ends within S seconds of one
-  of the AP's own advertised-channel changes (view `ap_channel_changes`, built
+  of the AP's own advertised-channel changes (view `ap_channel_changes` = the
+  `adv_channel` rows of `ap_config_changes`, schema 5, same rows as before; built
   from `device_config_history`) is dropped before episodes are built; the
   count is in `info.windows_channel_guarded`. Measured (findings §10, second
   pass): 0 s -> 40 detections / 5 high, 600 s -> 36 / 4, 1800 s -> 31 / 2,

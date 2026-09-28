@@ -12,21 +12,40 @@ const BUCKETS = [
   { s: 21600, label: "6 h" },
 ];
 
-// Config-history rows hold the configuration that was REPLACED at ts. The
-// state that replaced it is the next-newer row, or the current config for the
-// newest row; cells that differ from that are highlighted.
-const HISTORY_FIELDS = [
-  ["ssid", "SSID"], ["crypt", "Encryption"], ["adv_channel", "Channel"], ["ht_mode", "HT"],
-  ["beacon_rate", "Beacon rate"], ["country", "Country"], ["cloaked", "Cloaked"],
-  ["mfp_sup", "MFP sup."], ["mfp_req", "MFP req."],
-];
+// Configuration changes come from ap_config_changes (schema.sql), the cleaned
+// reading of the config history: per poll ts only the fields that changed,
+// old -> new. Security-relevant fields are marked; static fields (country,
+// beacon rate, MFP, hidden SSID) are shown once in the header.
+const CHANGE_FIELDS = {
+  ssid: { label: "SSID", security: true },
+  cloaked: { label: "Hidden", security: true },
+  crypt: { label: "Encryption", security: true },
+  crypt_bits: { label: "Crypt bits", security: true },
+  mfp_sup: { label: "MFP supported", security: true },
+  mfp_req: { label: "MFP required", security: true },
+  country: { label: "Country", security: true },
+  adv_channel: { label: "Channel" },
+  ht_mode: { label: "HT" },
+  beacon_rate: { label: "Beacon rate" },
+};
+const FIELD_ORDER = Object.keys(CHANGE_FIELDS);
+const byFieldOrder = (a, b) => FIELD_ORDER.indexOf(a.field) - FIELD_ORDER.indexOf(b.field);
+
+// Values arrive as text from the view: booleans 'true'/'false', crypt_bits decimal.
+function fmtValue(field, v) {
+  if (v === null || v === undefined) return "-";
+  if (field === "crypt_bits") return "0x" + BigInt(v).toString(16);
+  if (v === "true") return "yes";
+  if (v === "false") return "no";
+  return v;
+}
+
+const fmtMfp = (ap) => (ap.mfp_req ? "required" : ap.mfp_sup ? "supported" : ap.mfp_sup === false ? "no" : "-");
 
 const CHART_HEIGHT = 320;
 // The first view of an AP reads its whole history from disk; say so instead of
 // looking stuck.
 const RSSI_LOADING = "Loading RSSI history — the first view of an access point reads its full history";
-
-const show = (v) => (v === true ? "yes" : v === false ? "no" : v ?? "-");
 
 // Page-shaped placeholder while /api/aps/{key} loads: same blocks, same heights.
 function DetailSkeleton() {
@@ -65,22 +84,35 @@ export default function ApDetail() {
   if (!detail.data) return <DetailSkeleton />;
 
   const { ap, baseline, observations, config_history: history } = detail.data;
-  const current = ap;
 
   return (
     <>
       <p className="crumbs"><Link to="/aps">← Access points</Link></p>
-      <h1>{ap.hidden ? <span className="muted">&lt;hidden SSID&gt;</span> : ap.ssid}</h1>
+      <h1>{ap.hidden ? (
+        <>
+          <span className="muted">&lt;hidden SSID&gt;</span>
+          {ap.name_seen ? <span className="muted"> ({ap.name_seen})</span> : null}
+        </>
+      ) : ap.ssid}</h1>
       <div className="ap-head">
         <span className="mono">{ap.bssid}</span>
         <span>{ap.manuf ?? "unknown manufacturer"} <span className="mono muted">{ap.oui}</span></span>
         <span>{ap.crypt ?? "-"}</span>
         <span>ch {ap.adv_channel ?? "-"}{ap.ht_mode ? ` (${ap.ht_mode})` : ""}
           {baseline?.main_freq_khz ? ` · ${bandOf(baseline.main_freq_khz)}` : ""}</span>
+        <span>MFP {fmtMfp(ap)}</span>
+        <span>beacon rate {ap.beacon_rate ?? "-"}</span>
+        <span>country {ap.country ?? "-"}</span>
         <span>first {fmtDateTime(ap.first_seen)} · last {fmtDateTime(ap.last_seen)} · {fmtDuration(ap.lifetime_s)}</span>
+        {ap.country_foreign ? (
+          <span className="flag warn"
+                title="Advertised country differs from the one most of this sensor's APs advertise: a weak hint of a rogue or misconfigured AP">
+            country {ap.country} ≠ {ap.country_expected}
+          </span>
+        ) : null}
+        {ap.hidden_beacon ? <span className="flag">hidden SSID</span> : null}
         {ap.random_bssid ? <span className="flag">randomised BSSID</span> : null}
         {ap.trusted ? <span className="flag">trusted</span> : null}
-        {ap.mfp_req ? <span className="flag">MFP required</span> : null}
       </div>
 
       {baseline ? (
@@ -118,35 +150,43 @@ export default function ApDetail() {
         ) : (!rssi.error ? <Skeleton height={CHART_HEIGHT} label={RSSI_LOADING} /> : null)}
       </div>
 
-      <h2>Configuration history
-        <small>{fmtInt(history.total)} changes{history.total > history.rows.length ? `, newest ${history.rows.length} shown` : ""}</small>
+      <h2>Configuration changes
+        <small>{fmtInt(history.total)} change{history.total === 1 ? "" : "s"}{history.total > history.rows.length ? `, newest ${history.rows.length} shown` : ""}</small>
       </h2>
       {history.rows.length === 0 ? (
-        <p className="muted">No configuration change recorded.</p>
+        <p className="muted">No configuration change recorded ({fmtInt(history.raw_rows)} raw history rows).</p>
       ) : (
         <div className="table-wrap">
           <table className="small-table">
             <thead>
-              <tr><th>Replaced at</th>{HISTORY_FIELDS.map(([k, label]) => <th key={k}>{label}</th>)}</tr>
+              <tr><th>When</th><th>Changes (old → new)</th></tr>
             </thead>
             <tbody>
-              {history.rows.map((row, i) => {
-                const newer = i === 0 ? current : history.rows[i - 1];
-                return (
-                  <tr key={row.ts}>
-                    <td>{fmtDateTime(row.ts)}</td>
-                    {HISTORY_FIELDS.map(([k]) => (
-                      <td key={k} className={(row[k] ?? null) !== (newer[k] ?? null) ? "changed" : ""}>
-                        {show(row[k])}
-                      </td>
-                    ))}
-                  </tr>
-                );
-              })}
+              {history.rows.map((row) => (
+                <tr key={row.ts}>
+                  <td>{fmtDateTime(row.ts)}</td>
+                  <td className="wrap">
+                    {[...row.changes].sort(byFieldOrder).map((c) => {
+                      const f = CHANGE_FIELDS[c.field] ?? { label: c.field };
+                      return (
+                        <span key={c.field} className={f.security ? "change security" : "change"}>
+                          <span className="label">{f.label}</span>
+                          <span className="mono">{fmtValue(c.field, c.old)}</span>
+                          <span className="sep"> → </span>
+                          <span className="mono">{fmtValue(c.field, c.new)}</span>
+                        </span>
+                      );
+                    })}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
           <p className="muted" style={{ padding: "0.3rem 0.6rem", margin: 0 }}>
-            Each row is the configuration that was replaced at that time; highlighted cells differ from what followed.
+            Dated when the old value was last seen; security-relevant fields are highlighted.
+            {" "}{fmtInt(history.raw_rows)} raw history rows: empty beacon records written before collector v5
+            (2026-09-27 19:57 UTC), Kismet's missing-field crypt bits and a hidden AP's alternating hidden/named
+            records are not changes (findings §11).
           </p>
         </div>
       )}

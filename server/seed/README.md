@@ -68,6 +68,11 @@ python3 seed/import_snapshot.py buffer-snapshot.db --sensor pi-fri \
   a per-table row count for the sensor.
 - After loading, `refresh_ap_baselines(sensor_id, 200, 2)` is called (skip with
   `--no-baselines`, tune with `--min-obs/--min-days`).
+- After COMMIT the stream runs `VACUUM (ANALYZE) observations` (outside the
+  transaction): the AP pages read `observations` through a covering index as
+  index-only scans, which need the new heap pages marked all-visible; without
+  it they fetch one heap page per reading until autovacuum catches up (days of
+  imports). A failed load stops before it (ON_ERROR_STOP).
 - Buffer schema v2 to v5 snapshots are accepted. v3 (collector deployed
   2026-09-22 or later) carries `observations.disconnects_last`, v4 (2026-09-27 or
   later) `polls.ds_hop_n / ds_hop_visited / ds_hop_ok` (hop-list coverage), v5

@@ -26,7 +26,10 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 --    observations.rssi_floor (buffer v5), ap_baselines.n_floor; view
 --    ap_channel_changes; refresh_ap_baselines() clears baselines that no
 --    longer qualify
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '4')
+-- 5: covering index observations_device_ts_rssi_floor (rssi, rssi_floor)
+--    replaces observations_device_ts_rssi; view ap_config_changes (the
+--    cleaned configuration timeline), ap_channel_changes derived from it
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '5')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- sensors ------------------------------------------------------------------
@@ -159,13 +162,24 @@ ALTER TABLE observations ADD COLUMN IF NOT EXISTS rssi_floor boolean;
 COMMENT ON COLUMN observations.freq_khz IS
   'Kismet kismet.device.base.frequency: frequency of the frame that last updated the device frequency (Kismet prefers the frame''s own channel info, else the tuned channel, and updates it from other frames than the signal). Not the reception channel of rssi and not reliably the AP''s channel - use devices.adv_channel.';
 -- The per-device time-series index (the PK is time-leading for the hypertable).
--- It covers rssi so the bucket query of /api/aps/{key}/rssi runs as an
--- index-only scan: without INCLUDE (rssi) it touched ~14k heap pages per AP
--- (rows of one AP are spread over the whole table, inserted in time order),
--- 3-8 s on a cold cache; with it, ~125 index pages and ~0.1 s.
-CREATE INDEX IF NOT EXISTS observations_device_ts_rssi
-  ON observations (sensor_id, device_key, ts) INCLUDE (rssi);
--- Its predecessor without INCLUDE (same leading columns) is redundant.
+-- It covers every column the AP queries read (rssi and, since schema 4,
+-- rssi_floor through rssi_is_floor()), so /api/aps/{key} and its /rssi bucket
+-- query run as index-only scans. Rows of one AP are spread over the whole heap
+-- (inserted in time order, ~1 row per page), so a heap fetch costs one page per
+-- reading. Measured 2026-09-28 on a busy AP (~29.7k readings): with
+-- INCLUDE (rssi) only, the schema-4 queries fell back to an Index Scan reading
+-- ~30,000 heap pages - 6.6-9.0 s cold and 3.5-4.2 s on repeat (235 MB > 128 MB
+-- shared_buffers); as index-only scans ~400 index pages, 0.3-2.4 s cold and
+-- 14-30 ms warm. Index-only scans need the heap pages all-visible: the seed
+-- importer vacuums observations after each load.
+-- Building it on the 1 GB box: SHARE lock on observations (reads continue,
+-- writes such as a seed import wait), maintenance_work_mem-bounded sort,
+-- peak extra disk ~ the new index plus its sort spill (~0.6 GB); the old
+-- index is freed at COMMIT.
+CREATE INDEX IF NOT EXISTS observations_device_ts_rssi_floor
+  ON observations (sensor_id, device_key, ts) INCLUDE (rssi, rssi_floor);
+-- Its predecessors (same leading columns, fewer INCLUDE columns) are redundant.
+DROP INDEX IF EXISTS observations_device_ts_rssi;
 DROP INDEX IF EXISTS observations_device_ts;
 COMMENT ON TABLE observations IS
   'One row per active device per poll: the core RSSI/counter time series. A row exists only for polls in which the device was active.';
@@ -442,27 +456,71 @@ FROM devices d
 LEFT JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.device_key
 WHERE d.type = 'ap';
 
--- Changes of an AP's advertised channel. device_config_history holds the
--- REPLACED configuration at the poll ts where the new one was first seen.
--- Before collector buffer v5 an empty beacon record (channel/HT/beacon rate
--- unknown) also wrote a row on almost every poll; unknown values are therefore
--- skipped and a change is a known channel followed by a different known one
--- (the next known replaced value, else the device's current channel).
-CREATE OR REPLACE VIEW ap_channel_changes AS
-WITH k AS (
-  SELECT h.sensor_id, h.device_key, h.ts, h.adv_channel AS before_ch
-  FROM device_config_history h
-  WHERE h.adv_channel IS NOT NULL
+-- Changes of an AP's advertised configuration, one row per changed field - the
+-- one reading of the configuration timeline (docs/findings.md section 11).
+-- device_config_history holds the REPLACED configuration at the poll ts where
+-- the new one was first seen, devices the current one; neither is rewritten,
+-- every column stays (a crypt/MFP/country/beacon-rate change is a security
+-- signal). Rules, in the spirit of rssi_valid():
+--   1. a state without a beacon record (crypt and adv_channel both NULL) says
+--      nothing about any field and is skipped;
+--   2. per field, NULL = unknown and is skipped: before collector buffer v5
+--      (2026-09-27 19:57:29 UTC) an incomplete beacon record (channel, HT mode,
+--      beacon rate and country missing) wrote a row on almost every poll,
+--      A -> incomplete -> A;
+--   3. crypt_bits 0 is Kismet's "field missing" unless the crypt string is
+--      'Open' (an open AP's real bitfield is 0), so a WPA2 -> Open downgrade
+--      still shows, in crypt and in crypt_bits;
+--   4. a hidden AP's cloaked beacon (ssid '') carries no name, and its cloaked
+--      flag is unknown there: hidden APs alternate between that record and a
+--      named, uncloaked one, which is one state, not a change;
+--   5. a change is a known value followed by a different known value, dated at
+--      the ts where the old value was replaced.
+-- Values are text (booleans 'true'/'false', crypt_bits decimal). Fixture test:
+-- tests/sql/ap_config_changes_test.sql.
+CREATE OR REPLACE VIEW ap_config_changes AS
+WITH st AS (
+  SELECT sensor_id, device_key, ts, ssid, cloaked, crypt, crypt_bits, mfp_sup, mfp_req,
+         adv_channel, ht_mode, beacon_rate, country
+  FROM device_config_history
+  UNION ALL
+  SELECT sensor_id, device_key, NULL::timestamptz, ssid, cloaked, crypt, crypt_bits, mfp_sup, mfp_req,
+         adv_channel, ht_mode, beacon_rate, country
+  FROM devices
+), known AS (
+  SELECT st.sensor_id, st.device_key, st.ts, f.field, f.val
+  FROM st CROSS JOIN LATERAL (VALUES
+    ('ssid',        nullif(st.ssid, '')),
+    ('cloaked',     CASE WHEN st.ssid = '' THEN NULL ELSE st.cloaked::text END),
+    ('crypt',       st.crypt),
+    ('crypt_bits',  CASE WHEN st.crypt_bits = 0 AND st.crypt IS DISTINCT FROM 'Open' THEN NULL
+                         ELSE st.crypt_bits::text END),
+    ('mfp_sup',     st.mfp_sup::text),
+    ('mfp_req',     st.mfp_req::text),
+    ('adv_channel', st.adv_channel),
+    ('ht_mode',     st.ht_mode),
+    ('beacon_rate', st.beacon_rate::text),
+    ('country',     st.country)) AS f(field, val)
+  WHERE f.val IS NOT NULL AND NOT (st.crypt IS NULL AND st.adv_channel IS NULL)
 ), seq AS (
-  SELECT k.sensor_id, k.device_key, k.ts, k.before_ch,
-         coalesce(lead(k.before_ch) OVER (PARTITION BY k.sensor_id, k.device_key ORDER BY k.ts),
-                  d.adv_channel) AS after_ch
-  FROM k
-  JOIN devices d ON d.sensor_id = k.sensor_id AND d.device_key = k.device_key
+  SELECT k.sensor_id, k.device_key, k.ts, k.field, k.val,
+         lead(k.val) OVER (PARTITION BY k.sensor_id, k.device_key, k.field
+                           ORDER BY k.ts NULLS LAST) AS new_val
+  FROM known k
 )
-SELECT sensor_id, device_key, ts, before_ch AS from_channel, after_ch AS to_channel
+SELECT sensor_id, device_key, ts, field, val AS old_value, new_val AS new_value
 FROM seq
-WHERE after_ch IS NOT NULL AND after_ch <> before_ch;
+WHERE ts IS NOT NULL AND new_val IS NOT NULL AND new_val <> val;
+COMMENT ON VIEW ap_config_changes IS
+  'Changes of an AP''s advertised configuration, one row per changed field (old -> new), with the pre-v5 incomplete-record churn, Kismet''s missing-field crypt_bits 0 and the hidden-beacon/named-record alternation read as unknown. History is not rewritten.';
+
+-- Changes of an AP's advertised channel: the adv_channel rows of
+-- ap_config_changes (same rows as its schema-4 definition: 11,388 on 138 APs,
+-- compared 2026-09-28). Used by the evil_twin channel guard and fp-audit.
+CREATE OR REPLACE VIEW ap_channel_changes AS
+SELECT sensor_id, device_key, ts, old_value AS from_channel, new_value AS to_channel
+FROM ap_config_changes
+WHERE field = 'adv_channel';
 
 COMMIT;
 
