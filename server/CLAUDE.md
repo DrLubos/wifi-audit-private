@@ -120,6 +120,30 @@ Conventions for the stack:
     `refresh_ap_baselines()` with a split window for an audit - it rewrites
     `ap_baselines`). Documented sensor gaps for it: `detection/degraded_windows.csv`.
 
+## Operating rules for Claude Code (the server box)
+
+Same split as on the Pi: Claude Code writes files in this repo on the Mac; the
+developer runs anything that changes the box. Rules set 2026-09-29.
+
+- **Allowed:** read-only exploration over `ssh google`: `docker compose
+  ps/logs/stats/top`, `docker system df`, `free`, `df`, `vmstat`, `iostat`,
+  `uptime`, `lscpu`, `dmesg`, `journalctl`, reading files.
+- **Allowed:** psql **only as the role `claude_ro`**
+  (`ops/create_ro_role.sql`: login without a password - local socket inside
+  the db container only -, `pg_read_all_data` + `pg_monitor`, read-only
+  transactions, 120 s statement timeout, may set `track_io_timing`):
+  `docker compose exec -T db psql -U claude_ro -d "$POSTGRES_DB"`.
+- **Allowed:** running `tests/perf/measure.sh`, including its db restarts and
+  page-cache drops (nobody else uses the box).
+- **Allowed:** creating and running temporary test scripts in
+  `/tmp/wifi-audit-testing` on the server (create it there; delete its
+  contents when done). Nothing outside that folder. Scripts that touch the
+  database still use only `claude_ro`; anything that would write, restart or
+  deploy stays under "Not allowed" - a script does not change that.
+- **Not allowed:** database writes, `docker compose up/down/build/rm`, editing
+  or deleting files on the server, package or service changes. The developer
+  runs those (schema, imports, backups, deploys) when Claude says what to run.
+
 ## Privacy (same rule as the sensor)
 
 No bystander PII: no client IP addresses, no WPS serial/model/name fields. The
@@ -129,6 +153,5 @@ sensor already excludes these; the server must not reintroduce them.
 
 - English only for identifiers/comments/commits. No credentials in git (DB URL,
   secrets via a gitignored `.env`). Commit often, keep changes reviewable.
-- Claude Code writes/edits files here; the developer runs docker compose / psql / the
-  deploy. Do not run destructive DB commands, `docker compose up`, or deploy on the
-  developer's behalf.
+- Claude Code writes/edits files here; the developer runs docker compose / psql writes /
+  the deploy (see "Operating rules" above for what Claude may run on the box).

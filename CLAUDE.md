@@ -26,4 +26,7 @@ Read the one for the folder you are working in.
 - One git repository, one history: commit sensor and server changes as
   separate, reviewable commits; do not split into submodules.
 - Claude Code runs on the developer's Mac. Read-only SSH exploration of the Pi
-  (`ssh pi`) is allowed; installers are run by the developer, never by Claude.
+  (`ssh pi`) and server (`ssh google`) is allowed; installers are run
+  by the developer, never by Claude. On the server, psql only as the read-only
+  role `claude_ro` - the full list is under "Operating rules" in
+  `server/CLAUDE.md`.
