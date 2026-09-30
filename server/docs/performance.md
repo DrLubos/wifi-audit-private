@@ -84,39 +84,83 @@ image ships stdlib bytecode, api healthcheck every 60 s, db healthcheck every
 
 ## 4. Before / after
 
-The "after" columns are filled once schema 6 is deployed and measured with
-the same tools.
+Before: schema 5, 2026-09-29/30. After: schema 6 deployed, measured
+2026-09-30 07:17-07:40 UTC with the same tools and the same data (no import
+in between). Raw files: `~/perf-before.txt`, `~/perf-after.txt`,
+`~/perf-after-coldstart.txt`, `~/perf-after-e2e-warm.txt` on the Mac.
+
+**Same answers.** `api_snapshot.sh` before and after, `compare_api.py`:
+0 differences - overview, all 580 AP-list rows, the detection list, and for
+the busiest AP (IK-WIFI, 29,861 readings), a floor-heavy one ("Šariš Hilton",
+3,691 of 3,929 readings at a floor) and a hidden one (UZVD-zamestnanci):
+observation / valid / floor counts, first and last reading, 160 / 0 / 165
+config-change events with their fields, hidden-AP name, baseline, and every
+hourly bucket (median, min, max, n, n_floor) and 15-minute bucket of the last
+48 h. The overview gains `ap_observations` and `refreshed_at`. A matching
+`If-None-Match` gets 304 with no body through Caddy on every schema-6 endpoint.
 
 **On the box, api container direct** (`measure.sh`; warm = 20 back-to-back
 requests, so p95/max include throttle slices; SQL = planning + execution of
 the endpoint's statements, cold = after db restart + page-cache drop):
 
-| Endpoint | SQL cold, before | SQL cold, after | SQL warm, before | SQL warm, after | HTTP warm p50 / p95 / max, before | after |
+| Endpoint | SQL cold, before | after | SQL warm, before | after | HTTP cold, before | after | HTTP warm p50 / p95 / max, before | after |
+|---|---|---|---|---|---|---|---|---|
+| `/api/overview` | 677 ms (675 pages read) | 112 ms (5) | 106 ms | 2 ms | 4,850 ms | 326 ms | 105 / 312 / 601 ms | 9 / 61 / 78 ms |
+| `/api/aps` | 557 ms (376 pages) | 71 ms (20) | 5 ms | 13 ms | 2,967 ms | 473 ms | 54 / 122 / 207 ms | 37 / 91 / 180 ms |
+| `/api/aps/{key}` | 1,296 ms (822 pages) | 128 ms (12) | 106 ms | 6 ms | 2,272 ms | 579 ms | 110 / 139 / 308 ms | 26 / 76 / 153 ms |
+| `/api/aps/{key}/rssi` (hourly) | 426 ms (321 pages) | 276 ms | 35 ms | 1 ms | 2,191 ms | 265 ms | 43 / 72 / 79 ms | 24 / 41 / 43 ms |
+| `/api/detections` | 310 ms (31 pages) | 239 ms (26) | 3 ms | 7 ms | 2,203 ms | 562 ms | 14 / 25 / 43 ms | 18 / 26 / 64 ms |
+| 15-min RSSI view | whole history, 31 kB | last 48 h: 446 ms | - | 8 ms | | | 80 / 126 / 207 ms | 29 / 72 / 73 ms |
+
+- HTTP cold "after" is the endpoint's request; the `/api/health` request
+  just before it (the reconnect to the restarted db) took 0.4-0.9 s, which
+  the "before" figures still contained.
+- `/api/aps` stays the heaviest warm request: its SQL builds the 265 kB JSON
+  (13 ms warm instead of 5 ms of plain rows), but the Python encoding (~50 ms
+  before) is gone. Paging comes with the new frontend.
+- Detections: the list no longer carries the evidence (16,562 -> 4,569 B);
+  its SQL got slightly slower warm (7 ms vs 3 ms: the AP lookup on
+  `ap_summary` has no index on bssid - 580 rows, not worth one).
+- The raw 15-minute view costs 446 ms cold (274 ms of it planning with a cold
+  catalog), 8 ms warm.
+- Storage of the read tables: 6.4 MB in all (`ap_rssi_hourly` 3.9 MB,
+  `ap_config_changes` 2.1 MB, `ap_summary` 248 kB, `sensor_hourly` 64 kB).
+
+**Cold start** (`MODE=coldstart`, first request of each variant):
+
+| Variant | `/api/health` before | after | first `/api/overview` before | after | first `/api/aps/{key}` before | after |
 |---|---|---|---|---|---|---|
-| `/api/overview` | 677 ms (675 pages read) | | 106 ms | | 105 / 312 / 601 ms | |
-| `/api/aps` | 557 ms (376 pages) | | 5 ms | | 54 / 122 / 207 ms | |
-| `/api/aps/{key}` | 1,296 ms (822 pages) | | 106 ms | | 110 / 139 / 308 ms | |
-| `/api/aps/{key}/rssi` (hourly) | 426 ms (321 pages) | | 35 ms | | 43 / 72 / 79 ms | |
-| `/api/detections` | 310 ms (31 pages) | | 3 ms | | 14 / 25 / 43 ms | |
+| db restart only | 2,494 / 3,120 ms | 1,038 ms | 1,751 / 527 ms | 24 ms | 2,421 / 1,638 ms | 180 ms |
+| page-cache drop only | 66 ms | 107 ms | 89 ms | 29 ms | 118 ms | 20 ms |
+| restart + drop | 355 / 3,887 ms | 90 ms | 851 / 915 ms | 433 ms | 1,109 / 1,074 ms | 193 ms |
+| restart + drop, in-container harness | 63 ms | 855 ms | 4,505 / 815 ms | 328 ms | | |
 
-**From the Mac through Caddy** (`e2e.sh`; each request on its own connection,
-so every line includes one ~195 ms TCP connect; warm = median of 5):
+After a restart the pool now discards all dead connections in one
+`pool.check()` (api log: three "discarding broken connection" in the same
+millisecond, no backoff sleeps). The remaining ~1 s of the first request
+after a restart is page-ins on the request path (docker-proxy 77 and Caddy 28
+major faults, 14 MB read), not the pool.
 
-| Request | first after 3 h idle, before | after | warm, before | after |
-|---|---|---|---|---|
-| `/` (index.html) | 333 ms | | 353 ms | |
-| JS bundle (121 kB gzip) | 1,477 ms | | 727 ms | |
-| `/api/health` | 907 ms | | 458 ms | |
-| `/api/overview` | 4,424 ms | | 522 ms | |
-| `/api/findings` | 830 ms | | 342 ms | |
-| `/api/alerts?limit=50` | 1,121 ms | | 362 ms | |
-| `/api/aps` | 1,362 ms | | 568 ms | |
-| `/api/aps/{key}` | 2,487 ms | | 593 ms | |
-| `/api/aps/{key}/rssi` | 471 ms | | 376 ms | |
-| `/api/detections` | 817 ms | | 392 ms | |
+**From the Mac through Caddy** (`e2e.sh`; each request on its own
+connection). The network differed between the runs - TCP connect ~195 ms
+before, ~130 ms after - so the last two columns give each API call minus
+`/api/health` of the same pass: the server's share above a trivial request.
 
-Cold start after a db restart (`MODE=coldstart`, first request, before):
-`/api/health` 2.5, 3.1 and 3.9 s in three of four runs (pool check backoff;
-0.36 s once, when the compose healthcheck had already met the dead
-connection), then the first `/api/overview` 0.5-1.8 s,
-first `/api/aps/{key}` 1.1-2.4 s; after a page-cache drop alone 66-149 ms.
+| Request | first after 3 h idle, before | after | warm, before | after | warm over `/api/health`, before | after |
+|---|---|---|---|---|---|---|
+| `/` (index.html) | 333 ms | | 353 ms | 270 ms | | |
+| JS bundle (121 kB gzip) | 1,477 ms | | 727 ms | 655 ms | | |
+| `/api/health` | 907 ms | | 458 ms | 287 ms | 0 | 0 |
+| `/api/overview` | 4,424 ms | | 522 ms | 273 ms | +64 ms | -14 ms |
+| `/api/findings` | 830 ms | | 342 ms | 278 ms | -116 ms | -9 ms |
+| `/api/alerts?limit=50` | 1,121 ms | | 362 ms | 282 ms | -96 ms | -5 ms |
+| `/api/aps` | 1,362 ms | | 568 ms | 422 ms | +110 ms | +135 ms |
+| `/api/aps/{key}` | 2,487 ms | | 593 ms | 285 ms | +135 ms | -2 ms |
+| `/api/aps/{key}/rssi` | 471 ms | | 376 ms | 283 ms | -82 ms | -4 ms |
+| `/api/detections` | 817 ms | | 392 ms | 278 ms | -66 ms | -9 ms |
+
+Warm, every page's API calls now sit at the network floor except `/api/aps`
+(29 kB gzip: the transfer's extra round trips). The negative deltas before
+come from `/api/health` itself being slow in that pass (median 458 ms, max
+649 ms); the cause of that was not measured. The first-after-idle "after" column is measured
+separately, after 3+ hours without any request to the box.
