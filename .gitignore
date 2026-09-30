@@ -31,3 +31,6 @@ server/docs/groundtruth*.csv
 server/docs/counter_only.json
 server/docs/cap/
 *.pcap
+
+# API response snapshots (server/tests/perf/api_snapshot.sh): SSIDs/BSSIDs
+server/tests/perf/out/

@@ -17,10 +17,19 @@
 # runs), then HTTP warm p50/p95/max over N requests (default 20). HTTP goes to
 # the api container directly (127.0.0.1:8000, like its healthcheck), not
 # through Caddy. The AP endpoints use the AP with the most readings.
+#
+# MODE=coldstart measures only what the first requests after a cold start
+# cost and why (coldstart_probe.py, on the box): four variants, each after
+# 60 s of idle - db restart only, page-cache drop only, both (requests through
+# Caddy), and both with the cold request made the default way (a python
+# started in the api container). Per request: time, VM stall time (the
+# e2-micro CPU throttle), disk reads, swap-ins and the processes with the most
+# major page faults and CPU time. VARIANTS="both harness" runs a subset.
 set -eu
 HOST="${HOST:-google}"
 REMOTE_DIR="${REMOTE_DIR:-wifi-audit/server}"
 N="${N:-20}"
+MODE="${MODE:-full}"
 here=$(cd "$(dirname "$0")" && pwd)
 
 on_box() { ssh -o BatchMode=yes "$HOST" "cd $REMOTE_DIR && set -a && . ./.env && set +a && $1"; }
@@ -30,12 +39,39 @@ psql_ro() {
 make_cold() {
   on_box 'docker compose restart db >/dev/null 2>&1 && sync && echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null && until docker compose exec -T db pg_isready -q -U claude_ro -d "$POSTGRES_DB"; do sleep 1; done'
 }
+restart_db() {
+  on_box 'docker compose restart db >/dev/null 2>&1 && until docker compose exec -T db pg_isready -q -U claude_ro -d "$POSTGRES_DB"; do sleep 1; done'
+}
+drop_cache() {
+  on_box 'sync && echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null'
+}
+probe() {
+  on_box "python3 - $*" < "$here/coldstart_probe.py"
+}
 http() {
   args=""
   for a in "$@"; do args="$args '$a'"; done
   on_box "docker compose exec -T api python -$args" < "$here/http_timing.py"
 }
 endpoint_sql() { cat "$here/common.sql" "$here/ep_$1.sql"; }
+
+if [ "$MODE" = coldstart ]; then
+  echo "# cold-start breakdown $(date -u +%Y-%m-%dT%H:%M:%SZ), host $HOST"
+  KEY=$({ cat "$here/common.sql"; echo '\echo :key'; } | psql_ro)
+  B64=$(base64 < "$here/http_timing.py" | tr -d '\n')
+  for v in ${VARIANTS:-restart drop both harness}; do
+    sleep 60                      # idle: the CPU burst credit refills
+    echo "== $v"
+    case $v in
+      restart) restart_db ;;
+      drop)    drop_cache ;;
+      both|harness) make_cold ;;
+    esac
+    if [ "$v" = harness ]; then probe harness "$KEY" "$B64"; else probe http "$KEY"; fi
+  done
+  echo "# done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  exit 0
+fi
 
 echo "# perf measurement $(date -u +%Y-%m-%dT%H:%M:%SZ), host $HOST, N=$N, cold runs: $([ -n "${NO_COLD:-}" ] && echo no || echo yes)"
 echo "== box"

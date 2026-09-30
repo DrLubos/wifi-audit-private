@@ -48,6 +48,7 @@ FROM pg_stat_user_tables ORDER BY n_live_tup DESC;
 \echo    (the Time: line is one full read of observations - the read part of a copy)
 \x on
 \timing on
+SET statement_timeout = '15min';     -- one full read: 149 s cold on 2026-09-29 (role default 120 s)
 SELECT d.type, count(*) AS rows,
        round(100.0 * count(*) / sum(count(*)) OVER (), 1) AS pct_of_rows,
        min(o.ts) AS first_ts, max(o.ts) AS last_ts,
@@ -76,6 +77,7 @@ FROM observations o
 JOIN devices d ON d.sensor_id = o.sensor_id AND d.device_key = o.device_key
 WHERE o.sensor_id = :sid
 GROUP BY d.type ORDER BY count(*) DESC;
+RESET statement_timeout;
 \timing off
 \x off
 SELECT coalesce(sum(new_obs), 0) AS sum_polls_new_obs FROM polls WHERE sensor_id = :sid;
