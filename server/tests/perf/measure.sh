@@ -12,11 +12,16 @@
 # the host page cache (sudo -n), so the dashboard answers 503 for ~10 s, ten
 # times in all. NO_COLD=1 skips the cold runs (warm numbers only).
 #
-# Per endpoint: HTTP cold (one request right after a restart), EXPLAIN
+# Per endpoint: HTTP cold (right after a restart: /api/health first - it pays
+# the api's reconnect to the restarted database - then the endpoint), EXPLAIN
 # (ANALYZE, BUFFERS) cold (after another restart) and warm (the second of two
 # runs), then HTTP warm p50/p95/max over N requests (default 20). HTTP goes to
 # the api container directly (127.0.0.1:8000, like its healthcheck), not
-# through Caddy. The AP endpoints use the AP with the most readings.
+# through Caddy. The AP endpoints use the AP with the most readings. Schema 6
+# queries (ep_*.sql); the schema-5 run is ~/perf-before.txt (2026-09-29).
+# Back-to-back warm requests run the e2-micro out of CPU burst credit after
+# ~12 s, then the whole VM is paused ~85 % of the time in ~220 ms slices
+# (docs/performance.md): warm p95/max include that, p50 mostly not.
 #
 # MODE=coldstart measures only what the first requests after a cold start
 # cost and why (coldstart_probe.py, on the box): four variants, each after
@@ -82,20 +87,29 @@ psql_ro < "$here/sizes.sql"
 
 KEY=$({ cat "$here/common.sql"; echo '\echo :key'; } | psql_ro)
 echo "== busiest AP: $KEY"
+# the AP page's 15-minute view: the last 48 h of the AP's data
+RAWQ=$({ cat "$here/common.sql"; cat <<'SQL'
+SELECT 'bucket=900&from=' || to_char((last_obs + interval '1 second' - interval '48 hours') AT TIME ZONE 'UTC',
+                                     'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+       || '&to=' || to_char((last_obs + interval '1 second') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS rawq
+FROM ap_summary WHERE sensor_id = :sid AND device_key = :'key' \gset
+\echo :rawq
+SQL
+} | psql_ro)
 
 for ep in overview aps ap ap_rssi detections; do
   case $ep in
     overview)   set -- "/api/overview" ;;
     aps)        set -- "/api/aps" ;;
     ap)         set -- "/api/aps/$KEY" ;;
-    ap_rssi)    set -- "/api/aps/$KEY/rssi?bucket=3600" ;;
+    ap_rssi)    set -- "/api/aps/$KEY/rssi" ;;
     detections) set -- "/api/detections" ;;
   esac
   echo
   echo "=================== $ep"
   if [ -z "${NO_COLD:-}" ]; then
     make_cold
-    http cold "$@"
+    http cold /api/health "$@"
     make_cold
     echo "-- EXPLAIN cold"
     endpoint_sql $ep | psql_ro
@@ -107,7 +121,6 @@ for ep in overview aps ap ap_rssi detections; do
 done
 
 echo
-echo "=================== AP page, the other bucket widths; Overview page, its other requests (warm)"
-http warm "$N" "/api/aps/$KEY/rssi?bucket=900" "/api/aps/$KEY/rssi?bucket=21600" \
-  "/api/findings" "/api/alerts?limit=50"
+echo "=================== AP page, the 15-minute view; Overview page, its other requests (warm)"
+http warm "$N" "/api/aps/$KEY/rssi?$RAWQ" "/api/findings" "/api/alerts?limit=50"
 echo "# done $(date -u +%Y-%m-%dT%H:%M:%SZ)"

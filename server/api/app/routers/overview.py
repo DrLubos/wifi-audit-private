@@ -1,81 +1,62 @@
-"""GET /api/overview - capture span, poll health, device counts, alert and detection counts."""
+"""GET /api/overview - capture span, poll health, device counts, alert and detection counts.
 
-from fastapi import APIRouter, Depends
+Schema 6: one row of sensor_summary (built by refresh_rollups() at import
+time) instead of scans over polls and devices; only the detection counts are
+read live, since the batch detectors write detections outside an import. The
+ETag covers both.
+"""
+
+from fastapi import APIRouter, Depends, Request, Response
 
 from .. import db
-from ..deps import get_sensor
+from ..deps import epoch, get_sensor, not_modified, require_rollups, rollup_etag, set_cache_headers
 
 router = APIRouter(prefix="/api", tags=["overview"])
 
-_GAPS = """
-    SELECT prev_ts AS gap_start, ts AS gap_end, extract(epoch FROM gap)::float8 AS gap_s
-    FROM (SELECT ts, lag(ts) OVER (ORDER BY ts) AS prev_ts,
-                 ts - lag(ts) OVER (ORDER BY ts) AS gap
-          FROM polls WHERE sensor_id = %s) g
-    WHERE gap > interval '90 seconds'
-    ORDER BY gap DESC LIMIT 10"""
-
-_GAP_TOTALS = """
-    SELECT count(*) AS n,
-           coalesce(extract(epoch FROM sum(gap)), 0)::float8 AS total_s,
-           coalesce(extract(epoch FROM max(gap)), 0)::float8 AS max_s
-    FROM (SELECT ts - lag(ts) OVER (ORDER BY ts) AS gap
-          FROM polls WHERE sensor_id = %s) g
-    WHERE gap > interval '90 seconds'"""
+_DETECTIONS = """
+    SELECT count(*) AS total, count(*) FILTER (WHERE NOT acked) AS open, max(ts) AS last_ts
+    FROM detections WHERE sensor_id = %s"""
 
 
 @router.get("/overview")
-def overview(sensor=Depends(get_sensor)):
+def overview(request: Request, response: Response, sensor=Depends(get_sensor)):
+    require_rollups(sensor)
     sid = sensor["id"]
     with db.pool.connection() as conn:
-        polls = conn.execute(
-            "SELECT min(ts) AS first_poll, max(ts) AS last_poll, count(*) AS total, "
-            "count(*) FILTER (WHERE ok) AS ok FROM polls WHERE sensor_id = %s", (sid,)).fetchone()
-        gaps = conn.execute(_GAPS, (sid,)).fetchall()
-        gap_totals = conn.execute(_GAP_TOTALS, (sid,)).fetchone()
-        types = conn.execute(
-            "SELECT type, count(*) AS n FROM devices WHERE sensor_id = %s GROUP BY type",
-            (sid,)).fetchall()
-        # polls.new_obs is the number of observation rows the collector wrote
-        # in that poll, so the sum equals count(*) FROM observations (verified
-        # 1 082 443 = 1 082 443 on the seeded data) at 14k rows instead of a
-        # 1 M-row scan that took 36 s on a cold cache.
-        obs = conn.execute(
-            "SELECT coalesce(sum(new_obs), 0)::bigint AS n FROM polls WHERE sensor_id = %s",
-            (sid,)).fetchone()
-        alerts = conn.execute(
-            "SELECT count(*) AS total, max(ts) AS last_ts FROM alerts WHERE sensor_id = %s",
-            (sid,)).fetchone()
-        baselines = conn.execute(
-            "SELECT count(*) AS n FROM ap_baselines WHERE sensor_id = %s AND rssi_median IS NOT NULL",
-            (sid,)).fetchone()
-        detections = conn.execute(
-            "SELECT count(*) AS total, count(*) FILTER (WHERE NOT acked) AS open, max(ts) AS last_ts "
-            "FROM detections WHERE sensor_id = %s", (sid,)).fetchone()
+        detections = conn.execute(_DETECTIONS, (sid,)).fetchone()
+        etag = rollup_etag(sensor, detections["total"], detections["open"],
+                           epoch(detections["last_ts"]))
+        cached = not_modified(request, etag)
+        if cached:
+            return cached
+        s = conn.execute("SELECT * FROM sensor_summary WHERE sensor_id = %s", (sid,)).fetchone()
+    set_cache_headers(response, etag)
 
-    by_type = {r["type"]: r["n"] for r in types}
+    by_type = s["devices_by_type"]
     main_types = ("ap", "client", "bridged")
     devices = {t: by_type.get(t, 0) for t in main_types}
     devices["other"] = sum(n for t, n in by_type.items() if t not in main_types)
     devices["total"] = sum(by_type.values())
 
-    total, ok = polls["total"], polls["ok"]
-    span_s = ((polls["last_poll"] - polls["first_poll"]).total_seconds()
-              if polls["first_poll"] else 0)
+    total, ok = s["polls"], s["polls_ok"]
+    span_s = ((s["last_poll"] - s["first_poll"]).total_seconds() if s["first_poll"] else 0)
     return {
         "sensor": {"name": sensor["name"], "location": sensor["location"], "tz": sensor["tz"]},
-        "capture": {"first_poll": polls["first_poll"], "last_poll": polls["last_poll"],
-                    "span_s": span_s},
+        "capture": {"first_poll": s["first_poll"], "last_poll": s["last_poll"], "span_s": span_s},
         "polls": {
             "total": total, "ok": ok,
             "coverage_pct": round(ok * 100.0 / total, 2) if total else None,
-            "gaps": {"count": gap_totals["n"], "total_s": gap_totals["total_s"],
-                     "max_s": gap_totals["max_s"], "list": gaps},
+            "gaps": {"count": s["gap_count"], "total_s": s["gap_total_s"],
+                     "max_s": s["gap_max_s"], "list": s["gaps"]},
         },
         "devices": devices,
-        "observations": obs["n"],
-        "alerts": {"total": alerts["total"], "last_ts": alerts["last_ts"]},
-        "baselines": baselines["n"],
+        # rows the collector wrote (sum of polls.new_obs, every device type) and
+        # the AP rows the server keeps
+        "observations": s["obs_total"],
+        "ap_observations": s["obs_ap"],
+        "alerts": {"total": s["alerts"], "last_ts": s["alerts_last_ts"]},
+        "baselines": s["baselines"],
         "detections": {"total": detections["total"], "open": detections["open"],
                        "last_ts": detections["last_ts"]},
+        "refreshed_at": s["refreshed_at"],
     }

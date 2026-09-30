@@ -110,8 +110,12 @@ function DeauthFloodEvidence({ ev }) {
   );
 }
 
+// The list carries no evidence; it is loaded when a row is expanded.
 function Evidence({ detection }) {
-  const ev = detection.evidence ?? {};
+  const { data, error } = useApi(`/api/detections/${detection.id}`);
+  if (error) return <p className="error">Failed to load the evidence: {error}</p>;
+  if (!data) return <p className="muted">Loading evidence…</p>;
+  const ev = data.evidence ?? {};
   return (
     <div className="evidence">
       {detection.type === "deauth_flood" ? <DeauthFloodEvidence ev={ev} /> : null}

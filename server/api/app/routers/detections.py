@@ -1,11 +1,13 @@
-"""GET /api/detections - server-side detections (detection/), newest first.
+"""GET /api/detections, /api/detections/{id} - server-side detections (detection/).
 
 Read-only: rows are written by the batch detectors and acknowledged elsewhere
-(no ack endpoint yet). Filters narrow the list; the summary counters are always
-over the whole sensor so the page header does not move with the filters.
+(no ack endpoint yet). The list carries no evidence (it is most of a row's
+size); GET /api/detections/{id} returns one row with it, loaded when a row is
+expanded. Filters narrow the list; the summary counters are always over the
+whole sensor so the page header does not move with the filters.
 """
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from .. import db
 from ..deps import get_sensor
@@ -16,24 +18,29 @@ SEVERITIES = ("info", "low", "medium", "high", "critical")
 
 # The AP the row is about: by device_key, or by BSSID for a row without a
 # device row (an attacker spoofing a BSSID Kismet never classified).
-_LIST = """
+_SELECT = """
     SELECT d.id, d.ts, d.type, d.severity, d.device_key, upper(d.mac::text) AS mac, d.ssid,
-           d.summary, d.evidence, d.acked, d.acked_at, d.ack_note, d.created_at,
+           d.summary, d.acked, d.acked_at, d.ack_note, d.created_at,
            ap.device_key AS ap_device_key, ap.ssid AS ap_ssid,
-           upper(ap.bssid::text) AS ap_bssid, ap.hidden AS ap_hidden, ap.trusted AS ap_trusted
+           upper(ap.bssid::text) AS ap_bssid, ap.hidden AS ap_hidden, ap.trusted AS ap_trusted{extra}
     FROM detections d
     LEFT JOIN LATERAL (
-      SELECT device_key, ssid, bssid, hidden, coalesce(trusted, false) AS trusted, last_seen
-      FROM ap_inventory i
+      SELECT device_key, ssid, bssid, hidden, trusted, last_seen
+      FROM ap_summary i
       WHERE i.sensor_id = d.sensor_id
         AND (i.device_key = d.device_key OR (d.device_key IS NULL AND i.bssid = d.mac))
-      ORDER BY last_seen DESC LIMIT 1) ap ON true
+      ORDER BY last_seen DESC LIMIT 1) ap ON true"""
+
+_LIST = _SELECT.format(extra="") + """
     WHERE d.sensor_id = %(sid)s
       AND (%(severity)s::text    IS NULL OR d.severity = %(severity)s)
       AND (%(type)s::text        IS NULL OR d.type = %(type)s)
       AND (%(acked)s::boolean    IS NULL OR d.acked = %(acked)s)
     ORDER BY d.ts DESC, d.id DESC
     LIMIT %(limit)s"""
+
+_ONE = _SELECT.format(extra=", d.evidence") + """
+    WHERE d.sensor_id = %s AND d.id = %s"""
 
 _SUMMARY = """
     SELECT severity, type, count(*) AS n, count(*) FILTER (WHERE NOT acked) AS open
@@ -65,3 +72,13 @@ def list_detections(
         "count": len(rows),
         "detections": rows,
     }
+
+
+@router.get("/detections/{detection_id}")
+def get_detection(detection_id: int = Path(ge=1), sensor=Depends(get_sensor)):
+    """One detection with its evidence (the list leaves the evidence out)."""
+    with db.pool.connection() as conn:
+        row = conn.execute(_ONE, (sensor["id"], detection_id)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown detection")
+    return row

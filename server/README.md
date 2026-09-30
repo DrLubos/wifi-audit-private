@@ -10,10 +10,10 @@ docker-compose stack.
 
 | Part | State |
 |---|---|
-| `schema.sql` | done - idempotent PostgreSQL schema: the collector's tables mirrored with a `sensor_id` on every row, plus `sensors`, `ap_baselines`, `detections`, `refresh_ap_baselines()` and the `ap_inventory` view. TimescaleDB-ready (`observations` keyed `(ts, sensor_id, device_key)`), not enabled. |
+| `schema.sql` | done - idempotent PostgreSQL schema: the collector's tables mirrored with a `sensor_id` on every row, plus `sensors`, `ap_baselines`, `detections`, `refresh_ap_baselines()` and the `ap_inventory` view. Schema 6: the dashboard read tables `ap_rssi_hourly`, `sensor_hourly`, `ap_summary`, `sensor_summary`, built by `refresh_rollups(sensor_id, from)` (the importer calls it), and `ap_config_changes` materialized. TimescaleDB-ready (`observations` keyed `(ts, sensor_id, device_key)`), not enabled. |
 | `seed/` | done - `export_snapshot.py` (consistent copy of the Pi buffer) and `import_snapshot.py` (SQL + COPY stream piped into psql, idempotent merge). See `seed/README.md`. |
 | `docker-compose.yml`, `api/`, `frontend/` | done - the stack below |
-| dashboard (read-only) | done - `/api/overview`, `/api/aps`, `/api/aps/{key}`, `/api/aps/{key}/rssi` (bucketed in SQL), `/api/alerts`, `/api/findings`, `/api/detections` (filters `severity`, `type`, `acked`); React pages Overview, Access points, AP detail with the RSSI timeline vs baseline (uPlot), Detections with a per-row evidence expand. Seeded from the Pi snapshot of 2026-09-20 |
+| dashboard (read-only) | done - `/api/overview`, `/api/aps`, `/api/aps/{key}` (all three from the schema-6 read tables, never raw observations; ETag from `sensor_summary.refreshed_at`), `/api/aps/{key}/rssi` (hourly from `ap_rssi_hourly`; `bucket=900` with `from`/`to` at most 48 h apart reads raw observations), `/api/alerts`, `/api/findings`, `/api/detections` (filters `severity`, `type`, `acked`; no evidence) and `/api/detections/{id}` (with evidence); React pages Overview, Access points, AP detail with the RSSI timeline vs baseline (uPlot), Detections with a per-row evidence expand. Before/after measurements: `docs/performance.md` |
 | `detection/` | prototype - batch detectors run on demand over a time window, writing only `detections`; one detector so far, `deauth-flood` (Kismet DEAUTHFLOOD alerts + burst events of the polled `client_disconnects` counter, per-AP baseline, idempotent re-runs). See `detection/README.md` |
 | live ingest | later; see `CLAUDE.md` for the scope rules |
 
@@ -52,7 +52,7 @@ docker compose build frontend                 # the node build is the memory pea
 docker compose build api
 docker compose up -d
 docker compose ps                             # db healthy -> api healthy -> frontend running
-curl -s http://localhost/api/health           # {"status":"ok","database":"ok","schema_version":"3"}
+curl -s http://localhost/api/health           # {"status":"ok","database":"ok","schema_version":"6"}
 ```
 
 `SITE_ADDRESS=:80` serves plain HTTP; a domain name switches Caddy to automatic
@@ -72,13 +72,24 @@ docker compose build api && docker compose up -d api                        # af
 docker compose logs -f api
 docker compose run --rm detect deauth-flood --from 2026-09-15 --to 2026-09-21 --dry-run   # batch detector, see detection/README.md
 docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-    -v ON_ERROR_STOP=1 < tests/sql/ap_config_changes_test.sql              # SQL fixture test (temp tables, rolled back)
+    -c 'SELECT * FROM refresh_rollups(1)'                                    # rebuild the dashboard tables of sensor 1 (whole history)
+for t in tests/sql/*_test.sql; do
+  docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < "$t"
+done                                                                        # SQL fixture tests (scratch schema, rolled back)
 ```
 
-SQL fixture tests in `tests/sql/` check views of the applied schema against
-fixtures in TEMP copies of the tables, inside a transaction that is rolled back
-(no real row is read or written); each prints `PASS` or raises. Run them after
-applying `schema.sql`.
+SQL fixture tests in `tests/sql/` run the deployed definitions (the
+`ap_config_changes` view, `refresh_rollups()`) against fixtures in empty copies
+of the tables in a scratch schema, inside a transaction that is rolled back (no
+real row is read or written); each prints `PASS` or raises. Run them after
+applying `schema.sql`, as `$POSTGRES_USER` (they create the scratch schema).
+Unit tests without a database: `python3 -m unittest discover -s api/tests`,
+`-s seed/tests`, `-s detection/tests`, `-s evaluation/tests` (from `server/`).
+
+The dashboard reads the schema-6 tables, which only `refresh_rollups()` writes:
+the importer calls it after every load; after changing `ap_baselines` by hand
+(e.g. `trusted`) or anything else they summarise, run it again (idempotent; with
+a `from` timestamp only the hours from there on are recomputed).
 
 `$POSTGRES_USER`/`$POSTGRES_DB` above are the values from `.env`
 (`set -a; . ./.env; set +a` loads them into the shell). Seeding from a Pi

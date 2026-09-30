@@ -14,14 +14,14 @@ from fastapi.responses import JSONResponse
 from psycopg import OperationalError
 from psycopg_pool import PoolTimeout
 
-from . import db
+from . import cache, db
 from .routers import alerts, aps, detections, findings, overview
 
 log = logging.getLogger("api")
 
 # Read responses that may be cached briefly: the seeded data is static and the
-# box has one core. Health is always fresh.
-CACHE_CONTROL = "public, max-age=60"
+# box has one core. Health is always fresh. The endpoints on the schema-6
+# dashboard tables set Cache-Control and an ETag themselves (cache.py).
 UNCACHED = {"/api/health", "/api/docs", "/api/openapi.json"}
 
 
@@ -36,7 +36,7 @@ async def lifespan(_app):
 
 app = FastAPI(
     title="wifi-audit api",
-    version="0.2.0",
+    version="0.3.0",
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
     redoc_url=None,
@@ -57,7 +57,7 @@ async def cache_control(request: Request, call_next):
     path = request.url.path
     if (request.method == "GET" and path.startswith("/api/") and path not in UNCACHED
             and response.status_code == 200):
-        response.headers.setdefault("Cache-Control", CACHE_CONTROL)
+        response.headers.setdefault("Cache-Control", cache.CACHE_CONTROL)
     return response
 
 
@@ -71,8 +71,11 @@ def health():
     200 when a connection can be obtained and schema_meta is readable (the
     schema version is returned so a missed schema.sql is visible here);
     503 otherwise, so the compose healthcheck and the frontend both see it.
+    First drops the pool's dead idle connections (after a DB restart), so the
+    next dashboard request does not wait for the pool's check backoff (db.py).
     """
     try:
+        db.pool.check()
         with db.pool.connection() as conn:
             row = conn.execute(
                 "SELECT value FROM schema_meta WHERE key = 'schema_version'").fetchone()

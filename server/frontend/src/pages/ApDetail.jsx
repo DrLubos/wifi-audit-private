@@ -6,11 +6,21 @@ import Skeleton from "../components/Skeleton";
 import StatTile from "../components/StatTile";
 import { bandOf, fmtDateTime, fmtDb, fmtDbm, fmtDuration, fmtInt } from "../format";
 
+// 1 h = the whole history from the hourly table; 15 min = the raw readings of
+// the last 48 h of the AP's data (the api refuses longer raw windows).
 const BUCKETS = [
-  { s: 900, label: "15 min" },
   { s: 3600, label: "1 h" },
-  { s: 21600, label: "6 h" },
+  { s: 900, label: "15 min, last 48 h" },
 ];
+const RAW_WINDOW_MS = 48 * 3600 * 1000;
+
+function rssiPath(deviceKey, bucket, lastObs) {
+  if (bucket === 3600) return `/api/aps/${deviceKey}/rssi`;
+  if (!lastObs) return null;                                  // wait for the AP's last reading
+  const to = new Date(new Date(lastObs).getTime() + 1000);    // exclusive bound
+  const from = new Date(to.getTime() - RAW_WINDOW_MS);
+  return `/api/aps/${deviceKey}/rssi?bucket=900&from=${from.toISOString()}&to=${to.toISOString()}`;
+}
 
 // Configuration changes come from ap_config_changes (schema.sql), the cleaned
 // reading of the config history: per poll ts only the fields that changed,
@@ -43,9 +53,7 @@ function fmtValue(field, v) {
 const fmtMfp = (ap) => (ap.mfp_req ? "required" : ap.mfp_sup ? "supported" : ap.mfp_sup === false ? "no" : "-");
 
 const CHART_HEIGHT = 320;
-// The first view of an AP reads its whole history from disk; say so instead of
-// looking stuck.
-const RSSI_LOADING = "Loading RSSI history — the first view of an access point reads its full history";
+const RSSI_LOADING = "Loading RSSI history";
 
 // Page-shaped placeholder while /api/aps/{key} loads: same blocks, same heights.
 function DetailSkeleton() {
@@ -71,7 +79,7 @@ export default function ApDetail() {
   const { deviceKey } = useParams();
   const [bucket, setBucket] = useState(3600);
   const detail = useApi(`/api/aps/${deviceKey}`);
-  const rssi = useApi(`/api/aps/${deviceKey}/rssi?bucket=${bucket}`);
+  const rssi = useApi(rssiPath(deviceKey, bucket, detail.data?.observations?.last_obs));
 
   if (detail.error) {
     return (
