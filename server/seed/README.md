@@ -64,15 +64,26 @@ python3 seed/import_snapshot.py buffer-snapshot.db --sensor pi-fri \
   zone, FK violation) psql stops and nothing is committed. Use `--dry-run` to see
   what the snapshot contains without emitting SQL.
 - psql's command tags tell what happened: `COPY n` = rows staged from the
-  snapshot, `INSERT 0 n` = rows actually inserted/updated. The stream ends with
-  a per-table row count for the sensor.
+  snapshot, `INSERT 0 n` = rows actually inserted/updated. For `polls`,
+  `observations` and `alerts` the inserted rows and the earliest inserted `ts`
+  are collected in the session's temp table `import_from` instead (their tag
+  reads `INSERT 0 1`) and printed after COMMIT. The transaction ends with a
+  per-table row count for the sensor.
 - After loading, `refresh_ap_baselines(sensor_id, 200, 2)` is called (skip with
   `--no-baselines`, tune with `--min-obs/--min-days`).
 - After COMMIT the stream runs `VACUUM (ANALYZE) observations` (outside the
-  transaction): the AP pages read `observations` through a covering index as
+  transaction): the AP queries read `observations` through a covering index as
   index-only scans, which need the new heap pages marked all-visible; without
   it they fetch one heap page per reading until autovacuum catches up (days of
   imports). A failed load stops before it (ON_ERROR_STOP).
+- Then `refresh_rollups(sensor_id, earliest inserted ts)` rebuilds the
+  dashboard tables (schema 6) from that hour on - the whole history on the
+  sensor's first refresh; nothing inserted = the latest hour and the per-AP
+  and per-sensor rows. It runs in its own transaction after the vacuum: if it
+  fails, the import stays; fix the cause and run
+  `SELECT * FROM refresh_rollups(<sensor_id>)` by hand (idempotent). Skip it
+  with `--no-rollups`. Measured cost of a full-history run on the 12-day seed:
+  ~16 s for the AP hour aggregate plus ~5 s for the configuration view.
 - Buffer schema v2 to v5 snapshots are accepted. v3 (collector deployed
   2026-09-22 or later) carries `observations.disconnects_last`, v4 (2026-09-27 or
   later) `polls.ds_hop_n / ds_hop_visited / ds_hop_ok` (hop-list coverage), v5
