@@ -148,19 +148,43 @@ before, ~130 ms after - so the last two columns give each API call minus
 
 | Request | first after 3 h idle, before | after | warm, before | after | warm over `/api/health`, before | after |
 |---|---|---|---|---|---|---|
-| `/` (index.html) | 333 ms | | 353 ms | 270 ms | | |
-| JS bundle (121 kB gzip) | 1,477 ms | | 727 ms | 655 ms | | |
-| `/api/health` | 907 ms | | 458 ms | 287 ms | 0 | 0 |
-| `/api/overview` | 4,424 ms | | 522 ms | 273 ms | +64 ms | -14 ms |
-| `/api/findings` | 830 ms | | 342 ms | 278 ms | -116 ms | -9 ms |
-| `/api/alerts?limit=50` | 1,121 ms | | 362 ms | 282 ms | -96 ms | -5 ms |
-| `/api/aps` | 1,362 ms | | 568 ms | 422 ms | +110 ms | +135 ms |
-| `/api/aps/{key}` | 2,487 ms | | 593 ms | 285 ms | +135 ms | -2 ms |
-| `/api/aps/{key}/rssi` | 471 ms | | 376 ms | 283 ms | -82 ms | -4 ms |
-| `/api/detections` | 817 ms | | 392 ms | 278 ms | -66 ms | -9 ms |
+| `/` (index.html) | 333 ms | 274 ms | 353 ms | 270 ms | | |
+| JS bundle (121 kB gzip) | 1,477 ms | 1,169 ms | 727 ms | 655 ms | | |
+| `/api/health` | 907 ms | 620 ms | 458 ms | 287 ms | 0 | 0 |
+| `/api/overview` | 4,424 ms | 1,852 ms | 522 ms | 273 ms | +64 ms | -14 ms |
+| `/api/findings` | 830 ms | 551 ms | 342 ms | 278 ms | -116 ms | -9 ms |
+| `/api/alerts?limit=50` | 1,121 ms | 744 ms | 362 ms | 282 ms | -96 ms | -5 ms |
+| `/api/aps` | 1,362 ms | 1,135 ms | 568 ms | 422 ms | +110 ms | +135 ms |
+| `/api/aps/{key}` | 2,487 ms | 500 ms | 593 ms | 285 ms | +135 ms | -2 ms |
+| `/api/aps/{key}/rssi` | 471 ms | 326 ms | 376 ms | 283 ms | -82 ms | -4 ms |
+| `/api/detections` | 817 ms | 342 ms | 392 ms | 278 ms | -66 ms | -9 ms |
 
 Warm, every page's API calls now sit at the network floor except `/api/aps`
 (29 kB gzip: the transfer's extra round trips). The negative deltas before
 come from `/api/health` itself being slow in that pass (median 458 ms, max
-649 ms); the cause of that was not measured. The first-after-idle "after" column is measured
-separately, after 3+ hours without any request to the box.
+649 ms); the cause of that was not measured.
+
+**First visit after idle** (`e2e.sh first`, one request each, no restart, no
+cache drop; on the box vmstat and per-process /proc counters around the pass,
+as before). Before: 2026-09-30 01:22, 3 h idle. After: 2026-09-30 13:50,
+**6 h 09 min** idle (last request 07:40:22) - a longer, harsher idle than the
+before run; TCP connect ~135 ms vs ~195 ms.
+
+| | before (3 h idle) | after (6 h idle) |
+|---|---|---|
+| major page faults during the pass | 2,122 (postgres 1,367, uvicorn 599, caddy 105) | 943 (uvicorn 477, postgres 322, caddy 53) |
+| swapped in / read from disk | 20.6 MB / 49.4 MB | 6.8 MB / 26.3 MB |
+| iowait | 30-53 % for ~15 s | > 5 % in 13 s, max 48 % |
+| slowest page request | `/api/overview` 4,424 ms | `/api/overview` 1,852 ms |
+| AP page (`/api/aps/{key}`) | 2,487 ms | 500 ms |
+
+Postgres faults fell by 76 %: the pages the dashboard needs are now a few MB
+of read tables instead of the observations index and the devices table. What
+is left is the api process itself paging back in (uvicorn 477 faults - its
+first request pays most of it: `/api/health` 620 ms, overview 1.85 s) and
+Caddy's pages for the bundle (1.17 s). Those are process memory swapped out
+while idle, which the schema cannot change; `vm.swappiness` (section 2,
+cause 6) is the lever for them. Whether that setting had been applied on the
+box by this run was not checked (no extra request before the measurement).
+Warm pass right after: every API call 288-350 ms, `/api/aps` 447 ms, i.e.
+the network floor, as in the warm table above.
