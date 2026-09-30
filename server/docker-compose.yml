@@ -32,9 +32,13 @@ services:
       - ./schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 10s
+      interval: 30s               # each probe is a docker exec: CPU the e2-micro's budget pays for
       timeout: 5s
       retries: 12
+    # Time for the shutdown checkpoint before SIGKILL (default 10 s): a killed
+    # postgres recovers from WAL on the next start and loses its statistics
+    # counters (pg_stat_*), as after the crash recoveries of 2026-09-27.
+    stop_grace_period: 60s
     networks:
       - backend
     logging: *logging
@@ -49,11 +53,14 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # /api/health also drops the pool's dead connections after a DB restart
+    # (app/db.py). Every probe starts a python (bytecode precompiled in the image).
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
-      interval: 30s
-      timeout: 5s
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]
+      interval: 60s
+      timeout: 10s
       retries: 3
+      start_period: 30s
     networks:
       - backend
       - frontend
