@@ -165,26 +165,49 @@ come from `/api/health` itself being slow in that pass (median 458 ms, max
 649 ms); the cause of that was not measured.
 
 **First visit after idle** (`e2e.sh first`, one request each, no restart, no
-cache drop; on the box vmstat and per-process /proc counters around the pass,
-as before). Before: 2026-09-30 01:22, 3 h idle. After: 2026-09-30 13:50,
-**6 h 09 min** idle (last request 07:40:22) - a longer, harsher idle than the
-before run; TCP connect ~135 ms vs ~195 ms.
+cache drop; on the box vmstat and per-process /proc counters around the pass;
+all three runs the same way). Last request before each idle period and start
+of the measurement:
 
-| | before (3 h idle) | after (6 h idle) |
-|---|---|---|
-| major page faults during the pass | 2,122 (postgres 1,367, uvicorn 599, caddy 105) | 943 (uvicorn 477, postgres 322, caddy 53) |
-| swapped in / read from disk | 20.6 MB / 49.4 MB | 6.8 MB / 26.3 MB |
-| iowait | 30-53 % for ~15 s | > 5 % in 13 s, max 48 % |
-| slowest page request | `/api/overview` 4,424 ms | `/api/overview` 1,852 ms |
-| AP page (`/api/aps/{key}`) | 2,487 ms | 500 ms |
+| Run | Schema | `vm.swappiness` | Idle from | Measured at | Idle duration |
+|---|---|---|---|---|---|
+| A | 5 | 60 | ~2026-09-29 22:22 | 2026-09-30 01:22 | 3 h 00 min |
+| B | 6 | 60 | 2026-09-30 07:40:22 | 2026-09-30 13:49:55 | 6 h 09 min |
+| C | 6 | 10 (set 14:09:00, one warm pass at 14:11) | 2026-09-30 14:11:45 | 2026-09-30 22:41:26 | 8 h 29 min |
 
-Postgres faults fell by 76 %: the pages the dashboard needs are now a few MB
-of read tables instead of the observations index and the devices table. What
-is left is the api process itself paging back in (uvicorn 477 faults - its
-first request pays most of it: `/api/health` 620 ms, overview 1.85 s) and
-Caddy's pages for the bundle (1.17 s). Those are process memory swapped out
-while idle, which the schema cannot change; `vm.swappiness` (section 2,
-cause 6) is the lever for them. Whether that setting had been applied on the
-box by this run was not checked (no extra request before the measurement).
-Warm pass right after: every API call 288-350 ms, `/api/aps` 447 ms, i.e.
-the network floor, as in the warm table above.
+| | A: schema 5, 3 h | B: schema 6, 6 h | C: schema 6 + swappiness 10, 8.5 h |
+|---|---|---|---|
+| `/api/overview` (first API call after `/api/health`) | 4,424 ms | 1,852 ms | 3,043 ms |
+| AP page (`/api/aps/{key}`) | 2,487 ms | 500 ms | 1,041 ms |
+| `/api/aps` | 1,362 ms | 1,135 ms | 1,020 ms |
+| `/api/alerts?limit=50` | 1,121 ms | 744 ms | 974 ms |
+| `/api/health` | 907 ms | 620 ms | 566 ms |
+| JS bundle | 1,477 ms | 1,169 ms | 1,192 ms |
+| major page faults during the pass | 2,122 (postgres 1,367, uvicorn 599, caddy 105) | 943 (uvicorn 477, postgres 322, caddy 53) | 1,082 (uvicorn 572, postgres 284, caddy 115) |
+| swapped in | 20.6 MB | 6.8 MB | 6.5 MB |
+| read from disk (pgpgin, incl. swap-in) | 49.4 MB | 26.3 MB | 90.7 MB |
+| swap in use at the start | 318 MB | 215 MB | 192 MB |
+| seconds with iowait > 5 % (max) | 15 s (53 %) | 13 s (48 %) | 13 s (65 %) |
+| TCP connect | ~195 ms | ~135 ms | ~135 ms |
+
+What each change did:
+
+- **Schema 6 (A -> B)** removed the database's share of the cold visit:
+  postgres faults 1,367 -> 322, swap-in 20.6 -> 6.8 MB, the AP page 2.5 s ->
+  0.5 s, the overview 4.4 s -> 1.9 s, despite twice the idle time. The pages
+  the dashboard needs are now a few MB of read tables instead of the
+  observations index and the devices table.
+- **`vm.swappiness` 10 (B -> C)** showed no benefit in this run. Swap-in stayed
+  the same (6.8 -> 6.5 MB) and uvicorn still paged the most (477 -> 572
+  faults): the api's rarely used memory gets swapped out during a long idle
+  at either setting. Disk reads rose from 26 to 91 MB and the overview was
+  slower (3.0 s), consistent with the kernel now evicting file pages (data
+  files, binaries) instead of process memory. One run each, with different
+  idle durations (6 h vs 8.5 h) and times of day, is not enough to call it
+  worse; it did not remove the remaining cost. What the first visit still
+  pays is the api, Caddy and file pages coming back from disk after hours of
+  idle - outside the schema's reach; keeping them resident would take a
+  periodic warm request or more RAM, not a schema change.
+
+Warm pass right after each idle run: every API call 288-350 ms, `/api/aps`
+447-454 ms - the network floor, as in the warm table above.
