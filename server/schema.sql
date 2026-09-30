@@ -29,7 +29,10 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 -- 5: covering index observations_device_ts_rssi_floor (rssi, rssi_floor)
 --    replaces observations_device_ts_rssi; view ap_config_changes (the
 --    cleaned configuration timeline), ap_channel_changes derived from it
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '5')
+-- 6: dashboard read tables ap_rssi_hourly, sensor_hourly, ap_summary,
+--    sensor_summary, filled by refresh_rollups(); ap_config_changes is a
+--    materialized view refreshed there (ap_channel_changes stays a view on it)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '6')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- sensors ------------------------------------------------------------------
@@ -478,7 +481,19 @@ WHERE d.type = 'ap';
 --      the ts where the old value was replaced.
 -- Values are text (booleans 'true'/'false', crypt_bits decimal). Fixture test:
 -- tests/sql/ap_config_changes_test.sql.
-CREATE OR REPLACE VIEW ap_config_changes AS
+--
+-- Schema 6: MATERIALIZED (the view read every history row of an AP on each
+-- AP page: 85 ms warm for the busiest AP, 4.7 s for all APs). The definition
+-- is unchanged; refresh_rollups() refreshes it after every import - history
+-- only changes there. A schema-5 view of the same name is dropped first
+-- (ap_channel_changes goes with it and is recreated below).
+DO $$
+BEGIN
+  IF (SELECT relkind FROM pg_class WHERE oid = to_regclass('ap_config_changes')) = 'v' THEN
+    DROP VIEW ap_config_changes CASCADE;
+  END IF;
+END $$;
+CREATE MATERIALIZED VIEW IF NOT EXISTS ap_config_changes AS
 WITH st AS (
   SELECT sensor_id, device_key, ts, ssid, cloaked, crypt, crypt_bits, mfp_sup, mfp_req,
          adv_channel, ht_mode, beacon_rate, country
@@ -510,17 +525,395 @@ WITH st AS (
 )
 SELECT sensor_id, device_key, ts, field, val AS old_value, new_val AS new_value
 FROM seq
-WHERE ts IS NOT NULL AND new_val IS NOT NULL AND new_val <> val;
-COMMENT ON VIEW ap_config_changes IS
-  'Changes of an AP''s advertised configuration, one row per changed field (old -> new), with the pre-v5 incomplete-record churn, Kismet''s missing-field crypt_bits 0 and the hidden-beacon/named-record alternation read as unknown. History is not rewritten.';
+WHERE ts IS NOT NULL AND new_val IS NOT NULL AND new_val <> val
+WITH DATA;
+-- One row per (AP, ts, field): the unique index serves the per-AP lookups
+-- (sensor_id, device_key, ts) and REFRESH ... CONCURRENTLY.
+CREATE UNIQUE INDEX IF NOT EXISTS ap_config_changes_key
+  ON ap_config_changes (sensor_id, device_key, ts, field);
+COMMENT ON MATERIALIZED VIEW ap_config_changes IS
+  'Changes of an AP''s advertised configuration, one row per changed field (old -> new), with the pre-v5 incomplete-record churn, Kismet''s missing-field crypt_bits 0 and the hidden-beacon/named-record alternation read as unknown. History is not rewritten. Materialized (schema 6), refreshed by refresh_rollups().';
 
 -- Changes of an AP's advertised channel: the adv_channel rows of
 -- ap_config_changes (same rows as its schema-4 definition: 11,388 on 138 APs,
 -- compared 2026-09-28). Used by the evil_twin channel guard and fp-audit.
+-- A plain view on the materialized one: as current as its last refresh.
 CREATE OR REPLACE VIEW ap_channel_changes AS
 SELECT sensor_id, device_key, ts, old_value AS from_channel, new_value AS to_channel
 FROM ap_config_changes
 WHERE field = 'adv_channel';
+
+-- --- dashboard read tables (schema 6) ------------------------------------------------
+--
+-- Small tables the dashboard reads instead of the raw time series. Measured
+-- before them (2026-09-29, tests/perf/measure.sh): /api/aps read 580 APs
+-- scattered over 108k devices rows, the AP page recomputed the usual country
+-- over all APs and read the AP's whole history, the overview ran two window
+-- scans over every poll. Derived data only: written by refresh_rollups() and
+-- nothing else, so together they are one snapshot of the source tables as of
+-- sensor_summary.refreshed_at, from which the api derives its ETag. RSSI goes
+-- through rssi_valid() / rssi_is_floor() as everywhere (floors are counted,
+-- never a level). Hours are UTC hours (date_trunc('hour', ts, 'UTC')).
+
+CREATE TABLE IF NOT EXISTS ap_rssi_hourly (
+  sensor_id  integer NOT NULL,
+  device_key text NOT NULL,
+  hour       timestamptz NOT NULL,           -- start of the UTC hour
+  n_obs      integer NOT NULL,               -- observation rows of the AP in the hour
+  n_valid    integer NOT NULL,               -- readings with rssi_valid() not NULL
+  n_floor    integer NOT NULL,               -- floor readings, rssi_is_floor() (censored)
+  median     real,                           -- percentiles and extremes of the valid
+  p10        real,                           --   readings only; NULL when n_valid = 0
+  p90        real,
+  min        smallint,
+  max        smallint,
+  PRIMARY KEY (sensor_id, device_key, hour),
+  FOREIGN KEY (sensor_id, device_key) REFERENCES devices (sensor_id, device_key));
+COMMENT ON TABLE ap_rssi_hourly IS
+  'Per AP and UTC hour: observation count and the valid-RSSI distribution (floor readings counted in n_floor, never in the statistics). Filled by refresh_rollups().';
+
+CREATE TABLE IF NOT EXISTS sensor_hourly (
+  sensor_id       integer NOT NULL REFERENCES sensors(id),
+  hour            timestamptz NOT NULL,      -- start of the UTC hour
+  polls           integer NOT NULL,          -- collector polls in the hour
+  polls_ok        integer NOT NULL,
+  hop_ok_polls    integer NOT NULL,          -- polls with ds_hop_ok = true (full channel coverage)
+  hop_known_polls integer NOT NULL,          -- polls with ds_hop_ok not NULL (buffer v4+)
+  gap_s           real NOT NULL,             -- seconds of the hour inside a poll gap > 90 s
+  active_aps      integer NOT NULL,          -- APs with an observation in the hour
+  new_aps         integer NOT NULL,          -- APs first observed in the hour
+  alerts          integer NOT NULL,          -- Kismet alerts with ts in the hour
+  ap_obs          integer NOT NULL,          -- AP observation rows in the hour
+  PRIMARY KEY (sensor_id, hour));
+COMMENT ON TABLE sensor_hourly IS
+  'Per sensor and UTC hour: poll health, hop coverage, gap time, AP activity and alerts. An hour inside a long gap has a row with polls = 0. Filled by refresh_rollups().';
+
+CREATE TABLE IF NOT EXISTS ap_summary (
+  sensor_id    integer NOT NULL,
+  device_key   text NOT NULL,
+  -- identity and advertised configuration: devices, as in ap_inventory
+  bssid        macaddr NOT NULL,
+  random_bssid boolean NOT NULL,             -- locally administered bit
+  manuf        text,
+  ssid         text,
+  hidden       boolean NOT NULL,             -- no SSID in the current record
+  cloaked      boolean,
+  crypt        text,
+  crypt_bits   bigint,
+  mfp_sup      boolean,
+  mfp_req      boolean,
+  adv_channel  text,
+  ht_mode      text,
+  beacon_rate  integer,
+  country      text,
+  first_seen   timestamptz NOT NULL,
+  last_seen    timestamptz NOT NULL,
+  config_changed_at timestamptz,
+  -- hidden APs (ap_config_changes rule 4): a cloaked beacon ('' + cloaked)
+  -- seen now or in the history, and the current or latest name seen
+  hidden_beacon boolean NOT NULL,
+  name_seen     text,
+  -- baseline: the ap_baselines row (has_baseline false = none; a row whose
+  -- statistics refresh_ap_baselines() cleared has NULL statistics)
+  has_baseline   boolean NOT NULL,
+  trusted        boolean NOT NULL,
+  trusted_at     timestamptz,
+  note           text,
+  rssi_median    real,
+  rssi_mean      real,
+  rssi_sd        real,
+  rssi_robust_sd real,
+  rssi_p5        smallint,
+  rssi_p95       smallint,
+  main_freq_khz  integer,
+  baseline_n_obs   integer,
+  baseline_n_floor integer,
+  baseline_n_days  integer,
+  baseline_window_start timestamptz,
+  baseline_window_end   timestamptz,
+  baseline_at    timestamptz,                -- ap_baselines.computed_at
+  -- observations of the AP (sums of ap_rssi_hourly; first/last from the index)
+  n_obs        bigint NOT NULL,
+  n_valid      bigint NOT NULL,
+  n_floor      bigint NOT NULL,
+  first_obs    timestamptz,
+  last_obs     timestamptz,
+  -- configuration history
+  history_rows   integer NOT NULL,           -- raw device_config_history rows (incl. the pre-v5 churn)
+  n_changes      integer NOT NULL,           -- change events in ap_config_changes (distinct ts)
+  last_change_at timestamptz,
+  last_change    jsonb,                      -- [{field, old, new}] at last_change_at
+  PRIMARY KEY (sensor_id, device_key),
+  FOREIGN KEY (sensor_id, device_key) REFERENCES devices (sensor_id, device_key));
+COMMENT ON TABLE ap_summary IS
+  'One row per AP with everything /api/aps and the AP page header show: inventory, baseline, observation counts, hidden-AP reading, config-change count. Rebuilt by refresh_rollups(); a change to ap_baselines (e.g. trusted) shows after the next refresh.';
+
+CREATE TABLE IF NOT EXISTS sensor_summary (
+  sensor_id        integer PRIMARY KEY REFERENCES sensors(id),
+  first_poll       timestamptz,
+  last_poll        timestamptz,
+  polls            integer NOT NULL,
+  polls_ok         integer NOT NULL,
+  gap_count        integer NOT NULL,         -- poll gaps > 90 s
+  gap_total_s      double precision NOT NULL,
+  gap_max_s        double precision NOT NULL,
+  gaps             jsonb NOT NULL,           -- the 10 longest: [{gap_start, gap_end, gap_s}]
+  devices_by_type  jsonb NOT NULL,           -- {"ap": n, "client": n, ...}
+  obs_total        bigint NOT NULL,          -- sum(polls.new_obs): rows the collector wrote, all device types
+  obs_ap           bigint NOT NULL,          -- AP observation rows on the server
+  country_expected text,                     -- the country most of the sensor's APs advertise
+  alerts           integer NOT NULL,
+  alerts_last_ts   timestamptz,
+  baselines        integer NOT NULL,         -- ap_baselines rows with statistics
+  refreshed_at     timestamptz NOT NULL);    -- when refresh_rollups() last ran: the api's ETag
+COMMENT ON TABLE sensor_summary IS
+  'One row per sensor: what the overview shows, plus country_expected for the AP page. refreshed_at versions every read table of the sensor.';
+
+-- Recompute the read tables of one sensor from the hour of p_from onward
+-- (p_from NULL, or the sensor never refreshed: the whole history). Idempotent;
+-- the seed importer calls it after every load with the earliest ts it
+-- inserted. Per hour tables: the hours >= the hour of p_from - moved back to
+-- the hour of the last poll before p_from, so a poll gap ending after p_from
+-- is split over all its hours again - are deleted and recomputed; an AP with
+-- no hourly row left (new, or re-classified as an AP) is computed over its
+-- whole history, rows of devices that are no longer APs are dropped, and the
+-- sensor hours go back to the earliest hour either touched. Invariant: an
+-- incremental run leaves the same rows as a full one (fixture test
+-- tests/sql/refresh_rollups_test.sql). Then ap_config_changes is refreshed
+-- (all sensors) and ap_summary / sensor_summary are rebuilt. Measured on the 12-day seed (2026-09-29, read-only): the
+-- full-history AP hour aggregate took 16 s cold, the config view 4.7 s.
+CREATE OR REPLACE FUNCTION refresh_rollups(p_sensor_id integer, p_from timestamptz DEFAULT NULL)
+RETURNS TABLE (from_hour timestamptz, ap_hours integer, sensor_hours integer, aps integer,
+               refreshed_at timestamptz)
+LANGUAGE plpgsql
+SET work_mem = '32MB'      -- the hour aggregate sorts ~1.8M rows on a full run
+SET jit = off              -- JIT compilation costs more than it saves on these statements
+AS $$
+#variable_conflict use_column
+DECLARE
+  v_from timestamptz;        -- first hour recomputed for every AP
+  v_sfrom timestamptz;       -- first hour recomputed per sensor (earlier after a re-classification)
+  v_gone timestamptz;        -- first hour of rows dropped for devices that are no longer APs
+  v_new  timestamptz;        -- first hour of APs computed over their whole history
+  v_now  timestamptz := clock_timestamp();
+  v_ap_hours integer;
+  v_sensor_hours integer;
+  v_aps integer;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM sensors WHERE id = p_sensor_id) THEN
+    RAISE EXCEPTION 'refresh_rollups: unknown sensor_id %', p_sensor_id;
+  END IF;
+  -- one refresh per sensor at a time: two would delete and insert the same rows
+  PERFORM pg_advisory_xact_lock(hashtext('refresh_rollups'), p_sensor_id);
+
+  -- 1. first hour to recompute
+  IF p_from IS NULL OR NOT EXISTS (SELECT 1 FROM sensor_summary WHERE sensor_id = p_sensor_id) THEN
+    v_from := '-infinity';
+  ELSE
+    v_from := date_trunc('hour',
+                least(p_from, (SELECT max(ts) FROM polls WHERE sensor_id = p_sensor_id AND ts < p_from)),
+                'UTC');
+  END IF;
+
+  -- 2. per AP and hour
+  WITH gone AS (
+    DELETE FROM ap_rssi_hourly h
+    WHERE h.sensor_id = p_sensor_id
+      AND NOT EXISTS (SELECT 1 FROM devices d
+                      WHERE d.sensor_id = h.sensor_id AND d.device_key = h.device_key
+                        AND d.type = 'ap')
+    RETURNING h.hour)
+  SELECT min(hour) INTO v_gone FROM gone;
+  DELETE FROM ap_rssi_hourly WHERE sensor_id = p_sensor_id AND hour >= v_from;
+  SELECT min(date_trunc('hour', (SELECT min(o.ts) FROM observations o
+                                 WHERE o.sensor_id = d.sensor_id AND o.device_key = d.device_key),
+                        'UTC'))
+    INTO v_new
+  FROM devices d
+  WHERE d.sensor_id = p_sensor_id AND d.type = 'ap'
+    AND NOT EXISTS (SELECT 1 FROM ap_rssi_hourly h
+                    WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key);
+  v_sfrom := least(v_from, v_gone, v_new);
+  INSERT INTO ap_rssi_hourly (sensor_id, device_key, hour, n_obs, n_valid, n_floor,
+                              median, p10, p90, min, max)
+  SELECT p_sensor_id, device_key, hour, n_obs, n_valid, n_floor, pct[1], pct[2], pct[3], lo, hi
+  FROM (
+    SELECT a.device_key, date_trunc('hour', o.ts, 'UTC') AS hour,
+           count(*)::integer AS n_obs,
+           count(rssi_valid(o.rssi))::integer AS n_valid,
+           (count(*) FILTER (WHERE rssi_is_floor(o.rssi, o.rssi_floor)))::integer AS n_floor,
+           percentile_cont(ARRAY[0.5, 0.1, 0.9]) WITHIN GROUP (ORDER BY rssi_valid(o.rssi)) AS pct,
+           min(rssi_valid(o.rssi)) AS lo,
+           max(rssi_valid(o.rssi)) AS hi
+    FROM (SELECT d.device_key,
+                 CASE WHEN EXISTS (SELECT 1 FROM ap_rssi_hourly h
+                                   WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key)
+                      THEN v_from ELSE '-infinity'::timestamptz END AS since
+          FROM devices d
+          WHERE d.sensor_id = p_sensor_id AND d.type = 'ap') a
+    JOIN observations o
+      ON o.sensor_id = p_sensor_id AND o.device_key = a.device_key AND o.ts >= a.since
+    GROUP BY 1, 2) s;
+  GET DIAGNOSTICS v_ap_hours = ROW_COUNT;
+
+  -- 3. per sensor and hour (from v_sfrom: a re-classified device changed
+  --    the AP counts of its hours before v_from too)
+  DELETE FROM sensor_hourly WHERE sensor_id = p_sensor_id AND hour >= v_sfrom;
+  INSERT INTO sensor_hourly (sensor_id, hour, polls, polls_ok, hop_ok_polls, hop_known_polls,
+                             gap_s, active_aps, new_aps, alerts, ap_obs)
+  WITH p AS (
+    SELECT date_trunc('hour', ts, 'UTC') AS hour, count(*) AS polls,
+           count(*) FILTER (WHERE ok) AS polls_ok,
+           count(*) FILTER (WHERE ds_hop_ok) AS hop_ok, count(ds_hop_ok) AS hop_known
+    FROM polls WHERE sensor_id = p_sensor_id AND ts >= v_sfrom
+    GROUP BY 1
+  ), g AS (    -- poll gaps > 90 s as on the overview, incl. one ending at the first poll >= v_sfrom
+    SELECT prev_ts, ts
+    FROM (SELECT ts, lag(ts) OVER (ORDER BY ts) AS prev_ts
+          FROM polls
+          WHERE sensor_id = p_sensor_id
+            AND ts >= coalesce((SELECT max(ts) FROM polls
+                                WHERE sensor_id = p_sensor_id AND ts < v_sfrom), v_sfrom)) x
+    WHERE ts - prev_ts > interval '90 seconds'
+  ), gh AS (   -- ... split over the hours they cover
+    SELECT h.hour,
+           sum(extract(epoch FROM least(g.ts, h.hour + interval '1 hour') - greatest(g.prev_ts, h.hour))) AS gap_s
+    FROM g
+    CROSS JOIN LATERAL generate_series(date_trunc('hour', g.prev_ts, 'UTC'), g.ts,
+                                       interval '1 hour') AS h(hour)
+    WHERE h.hour >= v_sfrom AND h.hour < g.ts
+    GROUP BY h.hour
+  ), a AS (
+    SELECT hour, count(*) AS active_aps, sum(n_obs) AS ap_obs
+    FROM ap_rssi_hourly WHERE sensor_id = p_sensor_id AND hour >= v_sfrom
+    GROUP BY hour
+  ), f AS (    -- the first hour in which each AP was observed
+    SELECT first_hour AS hour, count(*) AS new_aps
+    FROM (SELECT min(hour) AS first_hour FROM ap_rssi_hourly
+          WHERE sensor_id = p_sensor_id GROUP BY device_key) x
+    WHERE first_hour >= v_sfrom
+    GROUP BY first_hour
+  ), al AS (
+    SELECT date_trunc('hour', ts, 'UTC') AS hour, count(*) AS alerts
+    FROM alerts WHERE sensor_id = p_sensor_id AND ts >= v_sfrom
+    GROUP BY 1
+  ), hrs AS (
+    SELECT hour FROM p UNION SELECT hour FROM gh UNION SELECT hour FROM a UNION SELECT hour FROM al
+  )
+  SELECT p_sensor_id, hrs.hour, coalesce(p.polls, 0), coalesce(p.polls_ok, 0),
+         coalesce(p.hop_ok, 0), coalesce(p.hop_known, 0), coalesce(gh.gap_s, 0),
+         coalesce(a.active_aps, 0), coalesce(f.new_aps, 0), coalesce(al.alerts, 0),
+         coalesce(a.ap_obs, 0)
+  FROM hrs
+  LEFT JOIN p  ON p.hour  = hrs.hour
+  LEFT JOIN gh ON gh.hour = hrs.hour
+  LEFT JOIN a  ON a.hour  = hrs.hour
+  LEFT JOIN f  ON f.hour  = hrs.hour
+  LEFT JOIN al ON al.hour = hrs.hour;
+  GET DIAGNOSTICS v_sensor_hours = ROW_COUNT;
+
+  -- 4. the configuration timeline (all sensors; history only changes with an
+  --    import). CONCURRENTLY: AP pages and detectors keep reading meanwhile.
+  IF (SELECT relispopulated FROM pg_class WHERE oid = to_regclass('ap_config_changes')) THEN
+    REFRESH MATERIALIZED VIEW CONCURRENTLY ap_config_changes;
+  ELSE
+    REFRESH MATERIALIZED VIEW ap_config_changes;
+  END IF;
+
+  -- 5. one row per AP, rebuilt
+  DELETE FROM ap_summary WHERE sensor_id = p_sensor_id;
+  INSERT INTO ap_summary (
+      sensor_id, device_key, bssid, random_bssid, manuf, ssid, hidden, cloaked, crypt, crypt_bits,
+      mfp_sup, mfp_req, adv_channel, ht_mode, beacon_rate, country, first_seen, last_seen,
+      config_changed_at, hidden_beacon, name_seen,
+      has_baseline, trusted, trusted_at, note, rssi_median, rssi_mean, rssi_sd, rssi_robust_sd,
+      rssi_p5, rssi_p95, main_freq_khz, baseline_n_obs, baseline_n_floor, baseline_n_days,
+      baseline_window_start, baseline_window_end, baseline_at,
+      n_obs, n_valid, n_floor, first_obs, last_obs,
+      history_rows, n_changes, last_change_at, last_change)
+  SELECT d.sensor_id, d.device_key, d.mac,
+         (d.mac & macaddr '02:00:00:00:00:00') <> macaddr '00:00:00:00:00:00',
+         d.manuf, d.ssid, (d.ssid IS NULL OR d.ssid = ''), d.cloaked, d.crypt, d.crypt_bits,
+         d.mfp_sup, d.mfp_req, d.adv_channel, d.ht_mode, d.beacon_rate, d.country,
+         d.first_seen, d.last_seen, d.config_changed_at,
+         coalesce(hi.hidden_beacon, false) OR (coalesce(d.cloaked, false) AND coalesce(d.ssid, '') = ''),
+         coalesce(nullif(d.ssid, ''), hi.name_seen),
+         b.device_key IS NOT NULL, coalesce(b.trusted, false), b.trusted_at, b.note,
+         b.rssi_median, b.rssi_mean, b.rssi_sd, b.rssi_robust_sd, b.rssi_p5, b.rssi_p95,
+         b.main_freq_khz, b.n_obs, b.n_floor, b.n_days, b.window_start, b.window_end, b.computed_at,
+         coalesce(r.n_obs, 0), coalesce(r.n_valid, 0), coalesce(r.n_floor, 0),
+         (SELECT min(o.ts) FROM observations o
+          WHERE o.sensor_id = d.sensor_id AND o.device_key = d.device_key),
+         (SELECT max(o.ts) FROM observations o
+          WHERE o.sensor_id = d.sensor_id AND o.device_key = d.device_key),
+         coalesce(hi.n_rows, 0), coalesce(c.n_changes, 0), c.last_change_at, c.last_change
+  FROM devices d
+  LEFT JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.device_key
+  LEFT JOIN (SELECT device_key, sum(n_obs) AS n_obs, sum(n_valid) AS n_valid, sum(n_floor) AS n_floor
+             FROM ap_rssi_hourly WHERE sensor_id = p_sensor_id
+             GROUP BY device_key) r ON r.device_key = d.device_key
+  LEFT JOIN (SELECT device_key, count(*) AS n_rows,
+                    bool_or(cloaked AND ssid = '') AS hidden_beacon,
+                    (array_agg(ssid ORDER BY ts DESC) FILTER (WHERE ssid <> ''))[1] AS name_seen
+             FROM device_config_history WHERE sensor_id = p_sensor_id
+             GROUP BY device_key) hi ON hi.device_key = d.device_key
+  LEFT JOIN (SELECT device_key, count(*) AS n_changes, max(ts) AS last_change_at,
+                    (array_agg(changes ORDER BY ts DESC))[1] AS last_change
+             FROM (SELECT device_key, ts,
+                          jsonb_agg(jsonb_build_object('field', field, 'old', old_value,
+                                                       'new', new_value) ORDER BY field) AS changes
+                   FROM ap_config_changes WHERE sensor_id = p_sensor_id
+                   GROUP BY device_key, ts) e
+             GROUP BY device_key) c ON c.device_key = d.device_key
+  WHERE d.sensor_id = p_sensor_id AND d.type = 'ap';
+  GET DIAGNOSTICS v_aps = ROW_COUNT;
+
+  -- 6. one row per sensor
+  WITH gap AS (
+    SELECT prev_ts AS gap_start, ts AS gap_end, ts - prev_ts AS len
+    FROM (SELECT ts, lag(ts) OVER (ORDER BY ts) AS prev_ts
+          FROM polls WHERE sensor_id = p_sensor_id) x
+    WHERE ts - prev_ts > interval '90 seconds'
+  )
+  INSERT INTO sensor_summary (sensor_id, first_poll, last_poll, polls, polls_ok,
+                              gap_count, gap_total_s, gap_max_s, gaps, devices_by_type,
+                              obs_total, obs_ap, country_expected, alerts, alerts_last_ts,
+                              baselines, refreshed_at)
+  SELECT p_sensor_id, pl.first_poll, pl.last_poll, pl.polls, pl.polls_ok,
+         (SELECT count(*) FROM gap),
+         (SELECT coalesce(extract(epoch FROM sum(len)), 0) FROM gap),
+         (SELECT coalesce(extract(epoch FROM max(len)), 0) FROM gap),
+         (SELECT coalesce(jsonb_agg(jsonb_build_object('gap_start', gap_start, 'gap_end', gap_end,
+                                                       'gap_s', extract(epoch FROM len)::float8)
+                                    ORDER BY len DESC), '[]'::jsonb)
+          FROM (SELECT * FROM gap ORDER BY len DESC LIMIT 10) t),
+         (SELECT coalesce(jsonb_object_agg(type, n), '{}'::jsonb)
+          FROM (SELECT type, count(*) AS n FROM devices WHERE sensor_id = p_sensor_id
+                GROUP BY type) t),
+         pl.obs_total,
+         (SELECT coalesce(sum(n_obs), 0) FROM ap_rssi_hourly WHERE sensor_id = p_sensor_id),
+         (SELECT mode() WITHIN GROUP (ORDER BY country) FROM devices
+          WHERE sensor_id = p_sensor_id AND type = 'ap' AND country IS NOT NULL),
+         (SELECT count(*) FROM alerts WHERE sensor_id = p_sensor_id),
+         (SELECT max(ts) FROM alerts WHERE sensor_id = p_sensor_id),
+         (SELECT count(*) FROM ap_baselines WHERE sensor_id = p_sensor_id AND rssi_median IS NOT NULL),
+         v_now
+  FROM (SELECT min(ts) AS first_poll, max(ts) AS last_poll, count(*) AS polls,
+               count(*) FILTER (WHERE ok) AS polls_ok, coalesce(sum(new_obs), 0) AS obs_total
+        FROM polls WHERE sensor_id = p_sensor_id) pl
+  ON CONFLICT (sensor_id) DO UPDATE SET
+      first_poll = EXCLUDED.first_poll, last_poll = EXCLUDED.last_poll,
+      polls = EXCLUDED.polls, polls_ok = EXCLUDED.polls_ok,
+      gap_count = EXCLUDED.gap_count, gap_total_s = EXCLUDED.gap_total_s,
+      gap_max_s = EXCLUDED.gap_max_s, gaps = EXCLUDED.gaps,
+      devices_by_type = EXCLUDED.devices_by_type, obs_total = EXCLUDED.obs_total,
+      obs_ap = EXCLUDED.obs_ap, country_expected = EXCLUDED.country_expected,
+      alerts = EXCLUDED.alerts, alerts_last_ts = EXCLUDED.alerts_last_ts,
+      baselines = EXCLUDED.baselines, refreshed_at = EXCLUDED.refreshed_at;
+
+  RETURN QUERY SELECT v_sfrom, v_ap_hours, v_sensor_hours, v_aps, v_now;
+END
+$$;
 
 COMMIT;
 

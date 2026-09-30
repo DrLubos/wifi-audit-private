@@ -1,11 +1,12 @@
--- Fixture test of the view ap_config_changes (schema.sql, schema 5) and of
--- ap_channel_changes, which is derived from it.
+-- Fixture test of the materialized view ap_config_changes (schema.sql, schema 5,
+-- materialized in schema 6) and of ap_channel_changes, which is derived from it.
 --
 -- Writes nothing: everything runs in one transaction that is rolled back. The
--- DEPLOYED view definitions are read with pg_get_viewdef() first, then TEMP
--- copies of devices and device_config_history (which shadow the real tables in
--- this session) get the fixtures, and TEMP views are built from those
--- definitions over them. No real row is read or written.
+-- DEPLOYED definitions are read with pg_get_viewdef() first; then a scratch
+-- schema (a materialized view cannot be TEMP) gets empty copies of devices and
+-- device_config_history, the view is built there from those definitions, the
+-- fixtures go in and the view is refreshed. No real row is read or written.
+-- Run it as the owner (CREATE SCHEMA):
 --
 --   docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
 --     -v ON_ERROR_STOP=1 < tests/sql/ap_config_changes_test.sql
@@ -21,17 +22,22 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
--- 1. definitions first (before any temp table shadows the real names, or
---    pg_get_viewdef() would schema-qualify them), then the temp copies
+-- 1. definitions first (while the names resolve to public, so pg_get_viewdef()
+--    leaves them unqualified), then the scratch schema, first on the search path
 DO $$
 DECLARE
   cfg text := rtrim(pg_get_viewdef('public.ap_config_changes'::regclass), E'; \n');
   chan text := rtrim(pg_get_viewdef('public.ap_channel_changes'::regclass), E'; \n');
 BEGIN
-  EXECUTE 'CREATE TEMP TABLE devices (LIKE public.devices INCLUDING DEFAULTS)';
-  EXECUTE 'CREATE TEMP TABLE device_config_history (LIKE public.device_config_history INCLUDING DEFAULTS)';
-  EXECUTE 'CREATE TEMP VIEW ap_config_changes AS ' || cfg;
-  EXECUTE 'CREATE TEMP VIEW ap_channel_changes AS ' || chan;
+  IF (SELECT relkind FROM pg_class WHERE oid = 'public.ap_config_changes'::regclass) <> 'm' THEN
+    RAISE EXCEPTION 'ap_config_changes is not a materialized view: apply schema.sql (schema 6) first';
+  END IF;
+  CREATE SCHEMA ap_config_changes_test;
+  PERFORM set_config('search_path', 'ap_config_changes_test, public', true);
+  CREATE TABLE devices (LIKE public.devices INCLUDING DEFAULTS);
+  CREATE TABLE device_config_history (LIKE public.device_config_history INCLUDING DEFAULTS);
+  EXECUTE 'CREATE MATERIALIZED VIEW ap_config_changes AS ' || cfg || ' WITH NO DATA';
+  EXECUTE 'CREATE VIEW ap_channel_changes AS ' || chan;
 END $$;
 
 -- 2. fixtures. W = a WPA2 crypt string, X = its bitfield. History rows hold
@@ -92,6 +98,8 @@ FROM (VALUES
   ('T9', 'Net', false, 'WPA2 WPA2-PSK AES-CCMP', 274945016842, true,  false, '6',  'HT20', 1024, 'SK'),
   ('T10', 'Net', false, 'WPA2 WPA2-PSK AES-CCMP', 274945016842, true, false, '6',  'HT20', 100,  'US')
 ) AS f(k, s, c, cr, cb, ms, mr, ch, ht, br, co);
+
+REFRESH MATERIALIZED VIEW ap_config_changes;
 
 -- 3. expected rows: (key, minute of the replaced row, field, old, new)
 CREATE TEMP TABLE expected (device_key text, t int, field text, old_value text, new_value text);

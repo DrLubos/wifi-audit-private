@@ -100,7 +100,8 @@ Conventions for the stack:
   - **`device_config_history` before the v5 collector is ~42 % artefact**
     (A -> incomplete beacon record -> A: channel/HT/beacon rate/country NULL).
     Never read raw history rows as changes: the view **`ap_config_changes`**
-    (schema 5) is the one reading of the configuration timeline - no-record
+    (schema 5; materialized since schema 6, refreshed by `refresh_rollups()`)
+    is the one reading of the configuration timeline - no-record
     states skipped, NULL = unknown per field, `crypt_bits` 0 unknown unless
     crypt is `Open` (so a WPA2 -> Open downgrade still shows), a hidden AP's
     cloaked beacon (`ssid` '') vs its named record is one state.
@@ -108,6 +109,15 @@ Conventions for the stack:
     history column (crypt/MFP/country/beacon-rate changes are security signals).
     Fixture test: `tests/sql/ap_config_changes_test.sql` (must stay green; it
     proves the rules cannot hide a downgrade).
+  - **The dashboard reads read tables, not the time series (schema 6,
+    2026-09-29):** `ap_rssi_hourly`, `sensor_hourly`, `ap_summary`,
+    `sensor_summary` and the materialized `ap_config_changes` are derived data,
+    written only by `refresh_rollups(sensor_id, from)` (the importer calls it
+    after every load; idempotent; incremental = full, fixture test
+    `tests/sql/refresh_rollups_test.sql`). `sensor_summary.refreshed_at` is the
+    api's ETag. `/api/overview`, `/api/aps`, `/api/aps/{key}` never read raw
+    observations; raw 15-min RSSI buckets only for a window of at most 48 h.
+    Measurements before/after: `docs/performance.md`.
   - **AP queries must stay index-only scans** on
     `observations_device_ts_rssi_floor` (INCLUDE rssi, rssi_floor): a column
     outside the index makes every AP page read ~30k heap pages (7-9 s cold,
