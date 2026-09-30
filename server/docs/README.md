@@ -1,5 +1,8 @@
 # server/docs
 
+- `performance.md` - the dashboard's performance on the demo box: diagnosis,
+  what server schema 6 changed, before/after measurements (thesis material).
+
 Generated evaluation output and its inputs. This directory is the writable mount
 of the `evaluate` compose service (`../evaluation/`).
 
