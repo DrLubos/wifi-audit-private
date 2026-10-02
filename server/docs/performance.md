@@ -207,7 +207,9 @@ What each change did:
   worse; it did not remove the remaining cost. What the first visit still
   pays is the api, Caddy and file pages coming back from disk after hours of
   idle - outside the schema's reach; keeping them resident would take a
-  periodic warm request or more RAM, not a schema change.
+  periodic warm request or more RAM, not a schema change. **Reverted:** the
+  developer removed the sysctl.d file and set `vm.swappiness` back to 60
+  (the Ubuntu default) after run C; later measurements run at 60.
 
 Warm pass right after each idle run: every API call 288-350 ms, `/api/aps`
 447-454 ms - the network floor, as in the warm table above.
