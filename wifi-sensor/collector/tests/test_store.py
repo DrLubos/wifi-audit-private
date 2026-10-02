@@ -46,17 +46,52 @@ class StoreTest(unittest.TestCase):
 
     def test_ap_observation_columns(self):
         self.poll(TS, [AP_RAW])
-        row = self.q("SELECT rssi, n_clients, disconnects, disconnects_last, qbss_stations, "
-                     "util_pct, bss_timestamp, ie_checksum, beacon_fp, bssid FROM observations")[0]
-        self.assertEqual(row[:5], (-54, 2, 3, 1789481102, 1))
-        self.assertAlmostEqual(row[5], 2.352941)
-        self.assertEqual(row[6:], (1628729078212, 1851240727, 563282674, None))
+        row = self.q("SELECT ts, last_time, rssi, rssi_floor, pk_total, pk_data, disconnects, "
+                     "disconnects_last, bss_timestamp FROM observations")[0]
+        self.assertEqual(row, (TS, 1789481148, -54, None, 99, 0, 3, 1789481102, 1628729078212))
 
-    def test_client_observation_columns(self):
+    def test_v6_writes_null_into_the_dropped_columns(self):
+        self.poll(TS, [AP_RAW, CLIENT_RAW])
+        rows = self.q("SELECT freq_khz, channel, rssi_min, rssi_max, pk_tx, pk_rx, bytes, "
+                      "n_clients, qbss_stations, util_pct, ie_checksum, beacon_fp, bssid "
+                      "FROM observations")
+        self.assertEqual(rows, [(None,) * 13] * 2)
+
+    def test_ap_load_is_the_latest_value_on_devices(self):
+        self.poll(TS, [AP_RAW])
+        row = self.q("SELECT cur_n_clients, cur_qbss_stations, cur_util_pct, cur_at FROM devices")[0]
+        self.assertEqual(row[:2], (2, 1))
+        self.assertAlmostEqual(row[2], 2.352941)
+        self.assertEqual(row[3], TS)
+        raw = dict(AP_RAW, n_clients=5, qbss_stations=4, util_pct=40.0)
+        raw["kismet.device.base.last_time"] += 10
+        self.poll(TS + 30, [raw])
+        self.assertEqual(self.q("SELECT cur_n_clients, cur_qbss_stations, cur_util_pct, cur_at "
+                                "FROM devices"), [(5, 4, 40.0, TS + 30)])
+        # AP load is not configuration: no history row, config_changed_at untouched
+        self.assertEqual(self.q("SELECT COUNT(*) FROM device_config_history")[0][0], 0)
+        self.assertEqual(self.q("SELECT config_changed_at FROM devices"), [(TS,)])
+
+    def test_client_has_no_ap_load(self):
         self.poll(TS, [CLIENT_RAW])
-        row = self.q("SELECT rssi, n_clients, disconnects, disconnects_last, bssid "
-                     "FROM observations")[0]
-        self.assertEqual(row, (-76, None, None, None, "02:0B:0A:03:02:01"))
+        self.assertEqual(self.q("SELECT cur_n_clients, cur_qbss_stations, cur_util_pct, cur_at "
+                                "FROM devices"), [(None, None, None, None)])
+
+    def test_client_bssids_are_merged(self):
+        self.poll(TS, [CLIENT_RAW])
+        raw = dict(CLIENT_RAW)
+        raw["kismet.device.base.last_time"] += 10
+        self.poll(TS + 30, [raw])
+        moved = dict(CLIENT_RAW, last_bssid="02:0B:0A:03:02:99")
+        moved["kismet.device.base.last_time"] += 20
+        self.poll(TS + 60, [moved])
+        self.assertEqual(self.q("SELECT bssid, first_seen, last_seen, sent FROM client_bssids "
+                                "ORDER BY bssid"),
+                         [("02:0B:0A:03:02:01", TS, TS + 30, 0),
+                          ("02:0B:0A:03:02:99", TS + 60, TS + 60, 0)])
+        # an AP's own last_bssid is not a client BSSID
+        self.poll(TS + 90, [AP_RAW])
+        self.assertEqual(self.q("SELECT COUNT(*) FROM client_bssids")[0][0], 2)
 
     def test_signal_sentinel_stored_as_null(self):
         raw = dict(CLIENT_RAW, sig_last=0)
@@ -92,14 +127,12 @@ class StoreTest(unittest.TestCase):
         self.poll(TS + 60, [changed])
         self.assertEqual(self.q("SELECT COUNT(*) FROM device_config_history")[0][0], 1)
 
-    def test_varying_ie_checksum_does_not_log_config_change(self):
+    def test_varying_load_does_not_log_config_change(self):
         self.poll(TS, [AP_RAW])
-        raw = dict(AP_RAW, ie_sum=1, beacon_fp=2, util_pct=40.0)
+        raw = dict(AP_RAW, util_pct=40.0, qbss_stations=7)
         raw["kismet.device.base.last_time"] += 10
         self.poll(TS + 30, [raw])
         self.assertEqual(self.q("SELECT COUNT(*) FROM device_config_history")[0][0], 0)
-        self.assertEqual(self.q("SELECT ie_checksum FROM observations ORDER BY ts"),
-                         [(1851240727,), (1,)])
 
     def test_probes_are_merged(self):
         self.poll(TS, [CLIENT_RAW])
@@ -149,6 +182,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(self.q("SELECT COUNT(*) FROM devices")[0][0], 2)
         self.assertEqual(self.q("SELECT COUNT(*) FROM associations")[0][0], 2)
         self.assertEqual(self.q("SELECT COUNT(*) FROM probes")[0][0], 2)
+        self.assertEqual(self.q("SELECT COUNT(*) FROM client_bssids")[0][0], 1)
 
     def test_reopen_keeps_schema_version(self):
         path = self.store.db.execute("PRAGMA database_list").fetchone()[2]
@@ -252,7 +286,7 @@ class StoreTest(unittest.TestCase):
         v4.close()
         store = Store(path)
         try:
-            self.assertEqual(store.get_meta("schema_version"), "5")
+            self.assertEqual(store.get_meta("schema_version"), str(SCHEMA_VERSION))
             # the pre-v5 row keeps its raw value; readers apply dataset_rules
             self.assertEqual(store.db.execute("SELECT rssi, rssi_floor FROM observations").fetchall(),
                              [(-106, None)])
@@ -260,10 +294,9 @@ class StoreTest(unittest.TestCase):
             store.close()
 
     def test_floor_reading_is_stored_as_null_with_flag(self):
-        raw = dict(AP_RAW, sig_last=-106, sig_min=-106, sig_max=-60)
+        raw = dict(AP_RAW, sig_last=-106)
         self.poll(TS, [raw])
-        self.assertEqual(self.q("SELECT rssi, rssi_min, rssi_max, rssi_floor FROM observations"),
-                         [(None, None, -60, 1)])
+        self.assertEqual(self.q("SELECT rssi, rssi_floor FROM observations"), [(None, 1)])
         raw2 = dict(raw, sig_last=-70)
         raw2["kismet.device.base.last_time"] += 10
         self.poll(TS + 30, [raw2])
@@ -302,6 +335,45 @@ class StoreTest(unittest.TestCase):
         self.poll(TS + 60, [moved])
         self.assertEqual(self.q("SELECT ts, adv_channel FROM device_config_history"), [(TS + 60, "8")])
         self.assertEqual(self.q("SELECT adv_channel, config_changed_at FROM devices"), [("11", TS + 60)])
+
+    def test_migrates_v5_to_v6_without_rewriting_observations(self):
+        path = os.path.join(self.tmp.name, "v5.db")
+        v5 = Store(path)
+        v5.close()
+        db = sqlite3.connect(path)       # make it a v5 buffer: no cur_* columns, no client_bssids
+        db.executescript("""
+            UPDATE meta SET value = '5' WHERE key = 'schema_version';
+            DROP TABLE client_bssids;
+            CREATE TABLE d5 AS SELECT key, mac, type, manuf, first_seen, last_seen, ssid, cloaked,
+              crypt, crypt_bits, mfp_sup, mfp_req, adv_channel, ht_mode, beacon_rate, country,
+              config_changed_at FROM devices;
+            DROP TABLE devices;
+            CREATE TABLE devices (key TEXT PRIMARY KEY, mac TEXT NOT NULL, type TEXT NOT NULL,
+              manuf TEXT, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL, ssid TEXT,
+              cloaked INTEGER, crypt TEXT, crypt_bits INTEGER, mfp_sup INTEGER, mfp_req INTEGER,
+              adv_channel TEXT, ht_mode TEXT, beacon_rate INTEGER, country TEXT,
+              config_changed_at INTEGER);
+            DROP TABLE d5;
+            INSERT INTO devices (key, mac, type, first_seen, last_seen) VALUES ('AP', 'A', 'ap', 1, 99);
+            INSERT INTO observations (ts, key, last_time, freq_khz, rssi, n_clients, bssid)
+              VALUES (100, 'AP', 99, 2412000, -50, 3, 'B');
+        """)
+        db.close()
+        store = Store(path)
+        try:
+            self.assertEqual(store.get_meta("schema_version"), "6")
+            cols = [r[1] for r in store.db.execute("PRAGMA table_info(devices)")]
+            for c in ("cur_n_clients", "cur_qbss_stations", "cur_util_pct", "cur_at"):
+                self.assertIn(c, cols)
+            # the v5 row is untouched, its old columns included
+            self.assertEqual(store.db.execute(
+                "SELECT ts, freq_khz, rssi, n_clients, bssid FROM observations").fetchall(),
+                [(100, 2412000, -50, 3, "B")])
+            self.assertEqual(store.db.execute("SELECT COUNT(*) FROM client_bssids").fetchone()[0], 0)
+            store.write_poll(TS, HEALTH, [shape_device(AP_RAW, TS), shape_device(CLIENT_RAW, TS)], [], 1)
+            self.assertEqual(store.db.execute("SELECT COUNT(*) FROM client_bssids").fetchone()[0], 1)
+        finally:
+            store.close()
 
     def test_merge_config(self):
         self.assertEqual(merge_config(("a", "8"), (None, None)), (("a", "8"), False))

@@ -99,6 +99,17 @@ class DeviceFieldsTest(unittest.TestCase):
         aliases = [f[1] for f in DEVICE_FIELDS if isinstance(f, list)]
         self.assertEqual(len(aliases), len(set(aliases)))
 
+    def test_v6_requests_only_stored_fields(self):
+        paths = [f[0] if isinstance(f, list) else f for f in DEVICE_FIELDS]
+        for gone in ("kismet.device.base.channel", "kismet.device.base.frequency",
+                     "kismet.device.base.packets.tx_total", "kismet.device.base.packets.rx_total",
+                     "kismet.device.base.datasize", "min_signal", "max_signal",
+                     "beacon_fingerprint", "ietag_checksum"):
+            self.assertFalse([p for p in paths if p.endswith(gone)], gone)
+        for kept in ("kismet.device.base.last_time", "num_associated_clients", "last_bssid",
+                     "dot11e_qbss_stations", "dot11e_channel_utilization_perc", "freq_khz_map"):
+            self.assertTrue([p for p in paths if p.endswith(kept)], kept)
+
 
 class ShapeApTest(unittest.TestCase):
     def setUp(self):
@@ -110,11 +121,15 @@ class ShapeApTest(unittest.TestCase):
         self.assertEqual(r["key"], AP_RAW["kismet.device.base.key"])
         self.assertEqual(r["type"], "ap")
         self.assertEqual(r["last"], 1789481148)
-        self.assertEqual(r["freq"], 2447000)
-        self.assertEqual(r["ch"], "8")
-        self.assertEqual((r["rssi"], r["rssi_min"], r["rssi_max"]), (-54, -72, -49))
-        self.assertEqual((r["pk"], r["tx"], r["rx"], r["data"], r["bytes"]), (99, 99, 0, 0, 0))
+        self.assertEqual(r["rssi"], -54)
+        self.assertEqual((r["pk"], r["data"]), (99, 0))
         self.assertEqual(r["freqs"], {2447000: 90, 2412000: 9})
+
+    def test_fields_dropped_in_v6_are_not_in_the_record(self):
+        for k in ("freq", "ch", "rssi_min", "rssi_max", "tx", "rx", "bytes"):
+            self.assertNotIn(k, self.rec)
+        for k in ("ie_sum", "beacon_fp"):
+            self.assertNotIn(k, self.rec["ap"])
 
     def test_ap_block(self):
         ap = self.rec["ap"]
@@ -125,8 +140,6 @@ class ShapeApTest(unittest.TestCase):
         self.assertEqual(ap["ht"], "HT20")
         self.assertEqual(ap["beacon_rate"], 10)
         self.assertEqual(ap["country"], "SK")
-        self.assertEqual(ap["ie_sum"], 1851240727)
-        self.assertEqual(ap["beacon_fp"], 563282674)
         self.assertEqual(ap["bss_ts"], 1628729078212)
         self.assertEqual(ap["qbss_stations"], 1)
         self.assertAlmostEqual(ap["util_pct"], 2.352941)
@@ -174,19 +187,16 @@ class ShapeClientTest(unittest.TestCase):
                                         ["Example-Net", 1789480400, 1789481100]])
 
     def test_signal_zero_is_unknown(self):
-        raw = dict(CLIENT_RAW, sig_last=0, sig_min=0, sig_max=-60)
+        raw = dict(CLIENT_RAW, sig_last=0)
         r = shape_device(raw, TS)
         self.assertIsNone(r["rssi"])
-        self.assertIsNone(r["rssi_min"])
-        self.assertEqual(r["rssi_max"], -60)
+        self.assertIsNone(r["rssi_floor"])
 
     def test_signal_floor_is_censored(self):
-        raw = dict(CLIENT_RAW, sig_last=-106, sig_min=-120, sig_max=-60)
-        r = shape_device(raw, TS)
-        self.assertIsNone(r["rssi"])
-        self.assertEqual(r["rssi_floor"], 1)
-        self.assertIsNone(r["rssi_min"])
-        self.assertEqual(r["rssi_max"], -60)
+        for v in (-106, -120):
+            r = shape_device(dict(CLIENT_RAW, sig_last=v), TS)
+            self.assertIsNone(r["rssi"])
+            self.assertEqual(r["rssi_floor"], 1)
 
     def test_values_next_to_the_floor_are_levels(self):
         for v in (-105, -107, -104):
@@ -197,14 +207,6 @@ class ShapeClientTest(unittest.TestCase):
         raw = {k: v for k, v in CLIENT_RAW.items() if not k.startswith("sig_")}
         r = shape_device(raw, TS)
         self.assertIsNone(r["rssi"])
-
-    def test_empty_channel_and_zero_frequency_are_unknown(self):
-        raw = dict(CLIENT_RAW)
-        raw["kismet.device.base.channel"] = ""
-        raw["kismet.device.base.frequency"] = 0
-        r = shape_device(raw, TS)
-        self.assertIsNone(r["ch"])
-        self.assertIsNone(r["freq"])
 
     def test_null_bssid_and_no_probes_gives_no_client_block(self):
         raw = dict(CLIENT_RAW, last_bssid="00:00:00:00:00:00", probed=0)

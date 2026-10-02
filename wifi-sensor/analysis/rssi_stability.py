@@ -48,6 +48,13 @@ Caveats printed with the report: an observation's `rssi` is Kismet's
 sample, not a poll-window average), and an observation exists only for polls
 in which the device was active. `rssi_min`/`rssi_max` are Kismet's lifetime
 extremes and are not used here.
+
+Band: from the AP's advertised channel (devices.adv_channel), falling back to
+the frequency with the most packets in device_freq_hist. Buffer v6 no longer
+stores observations.freq_khz (it was Kismet's device frequency, not the
+reception channel of the reading anyway). "nfreq" is the number of
+frequencies in the AP's device_freq_hist (Kismet's lifetime map, not limited
+to the --since/--until window).
 """
 
 import argparse
@@ -223,6 +230,21 @@ def band_of(freq_khz):
     return "6"
 
 
+def band_of_channel(channel):
+    """Band of an advertised channel number: 1-14 is 2.4 GHz, 32-177 is 5 GHz.
+    The RTL8821CU captures no 6 GHz, whose channel numbers would overlap -
+    an adapter that does needs a frequency-based rule. None when unknown."""
+    try:
+        ch = int(channel)
+    except (TypeError, ValueError):
+        return None
+    if 1 <= ch <= 14:
+        return "2.4"
+    if 32 <= ch <= 177:
+        return "5"
+    return None
+
+
 def bucket_of(mean_rssi):
     for limit, name in RSSI_BUCKETS:
         if limit is None or mean_rssi > limit:
@@ -281,21 +303,19 @@ def parse_when(text):
 def load_ap(db, key, scope):
     """Observations of one AP with an RSSI reading, in time order."""
     return db.execute(
-        "SELECT o.ts, %s AS rssi, o.freq_khz FROM observations o "
+        "SELECT o.ts, %s AS rssi FROM observations o "
         "WHERE o.key = ? AND %s IS NOT NULL%s ORDER BY o.ts" % (scope.rssi, scope.rssi, scope.where),
         [key] + scope.args).fetchall()
 
 
-def analyze_ap(dev, obs, args, thresholds):
+def analyze_ap(dev, obs, freqs, args, thresholds):
+    """freqs: {freq_khz: packets} of the AP's device_freq_hist."""
     ts = [r["ts"] for r in obs]
     rssi = [r["rssi"] for r in obs]
     n = len(rssi)
 
-    freqs = defaultdict(int)
-    for r in obs:
-        if r["freq_khz"]:
-            freqs[r["freq_khz"]] += 1
     main_freq = max(freqs, key=freqs.get) if freqs else None
+    band = band_of_channel(dev["adv_channel"]) or band_of(main_freq)
 
     mean = statistics.fmean(rssi)
     med = statistics.median(rssi)
@@ -341,7 +361,7 @@ def analyze_ap(dev, obs, args, thresholds):
 
     return {
         "key": dev["key"], "mac": dev["mac"], "ssid": dev["ssid"],
-        "band": band_of(main_freq), "nfreq": len(freqs),
+        "band": band, "nfreq": len(freqs),
         "n": n, "first": ts[0], "last": ts[-1], "ndays": len(per_day),
         "mean": mean, "med": med, "sd": sd, "rsd": rsd,
         "iqr": pct(srt, 75) - pct(srt, 25),
@@ -690,7 +710,7 @@ def main():
     since, until = parse_when(args.since), parse_when(args.until)
     scope = Scope(db, args.keep_floor, since, until)
     candidates = db.execute(
-        "SELECT d.key, d.mac, d.ssid, COUNT(%s) AS n "
+        "SELECT d.key, d.mac, d.ssid, d.adv_channel, COUNT(%s) AS n "
         "FROM devices d JOIN observations o ON o.key = d.key "
         "WHERE d.type = 'ap' AND %s IS NOT NULL%s "
         "GROUP BY d.key HAVING n >= ? ORDER BY n DESC" % (scope.rssi, scope.rssi, scope.where),
@@ -715,7 +735,9 @@ def main():
             args.floor_removed += 1
             continue
         obs = load_ap(db, dev["key"], scope)
-        a = analyze_ap(dev, obs, args, thresholds)
+        freqs = dict(db.execute("SELECT freq_khz, packets FROM device_freq_hist "
+                                "WHERE key = ? AND packets > 0", (dev["key"],)).fetchall())
+        a = analyze_ap(dev, obs, freqs, args, thresholds)
         if a["ndays"] < args.min_days:
             skipped += 1
             continue

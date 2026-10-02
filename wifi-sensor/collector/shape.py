@@ -41,31 +41,28 @@ _SIG = _BASE + "signal/kismet.common.signal."
 # Entries are "path" (kept under that name) or ["path", "alias"]. Nested paths
 # use "/". Everything under seenby[] is excluded on purpose: it embeds the whole
 # datasource object and is by far the largest part of a device record.
+# Buffer v6 no longer stores Kismet's device channel / frequency, min/max
+# signal, tx/rx packet and byte counts, the beacon IE checksum and the beacon
+# fingerprint, so they are not requested either. last_time stays (devices and
+# the new-packets check), so do the AP load fields (devices.cur_*) and
+# last_bssid (client_bssids).
 DEVICE_FIELDS = [
     _BASE + "key",
     _BASE + "macaddr",
     _BASE + "type",
     _BASE + "manuf",
-    _BASE + "channel",
-    _BASE + "frequency",
     _BASE + "first_time",
     _BASE + "last_time",
     _BASE + "packets.total",
-    _BASE + "packets.tx_total",
-    _BASE + "packets.rx_total",
     _BASE + "packets.data",
-    _BASE + "datasize",
     _BASE + "num_alerts",
     _BASE + "freq_khz_map",
     [_SIG + "last_signal", "sig_last"],
-    [_SIG + "min_signal", "sig_min"],
-    [_SIG + "max_signal", "sig_max"],
     # dot11 fields present on every 802.11 device (0 when not applicable)
     [_DOT11 + "last_bssid", "last_bssid"],
     [_DOT11 + "num_associated_clients", "n_clients"],
     [_DOT11 + "client_disconnects", "disconnects"],
     [_DOT11 + "client_disconnects_last", "disconnects_last"],
-    [_DOT11 + "beacon_fingerprint", "beacon_fp"],
     [_DOT11 + "bss_timestamp", "bss_ts"],
     [_DOT11 + "associated_client_map", "clients"],
     [_DOT11 + "probed_ssid_map", "probed"],
@@ -80,7 +77,6 @@ DEVICE_FIELDS = [
     [_ADV + "ht_mode", "ht"],
     [_ADV + "beaconrate", "beacon_rate"],
     [_ADV + "dot11d_country", "country"],
-    [_ADV + "ietag_checksum", "ie_sum"],
     [_ADV + "dot11e_qbss_stations", "qbss_stations"],
     [_ADV + "dot11e_channel_utilization_perc", "util_pct"],
 ]
@@ -185,17 +181,10 @@ def shape_device(raw, ts):
         "manuf": _nonempty(raw.get(_BASE + "manuf")),
         "first": _positive(raw.get(_BASE + "first_time")),
         "last": _positive(raw.get(_BASE + "last_time")) or ts,
-        "freq": _positive(raw.get(_BASE + "frequency")),
-        "ch": _nonempty(raw.get(_BASE + "channel")),
         "rssi": _dbm(raw.get("sig_last")),
         "rssi_floor": _dbm_floor(raw.get("sig_last")),   # censoring kept (v5)
-        "rssi_min": _dbm(raw.get("sig_min")),
-        "rssi_max": _dbm(raw.get("sig_max")),
         "pk": _counter(raw.get(_BASE + "packets.total")),
-        "tx": _counter(raw.get(_BASE + "packets.tx_total")),
-        "rx": _counter(raw.get(_BASE + "packets.rx_total")),
         "data": _counter(raw.get(_BASE + "packets.data")),
-        "bytes": _counter(raw.get(_BASE + "datasize")),
         "alerts": _counter(raw.get(_BASE + "num_alerts")),
         "freqs": _freq_map(raw.get(_BASE + "freq_khz_map")),
     }
@@ -240,8 +229,6 @@ def _shape_ap(raw, dtype):
         "ht": _nonempty(raw.get("ht")),
         "beacon_rate": _positive(raw.get("beacon_rate")),
         "country": _nonempty(raw.get("country")),
-        "ie_sum": _positive(raw.get("ie_sum")),
-        "beacon_fp": _positive(raw.get("beacon_fp")),
         "bss_ts": _positive(raw.get("bss_ts")),
         "qbss_stations": _counter(raw.get("qbss_stations")),
         "util_pct": _num(raw.get("util_pct")),

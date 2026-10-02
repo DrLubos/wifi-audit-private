@@ -74,10 +74,11 @@ with `ok = 0` and the loop continues; the service is never taken down by it.
 | Table | One row per | Contents |
 |---|---|---|
 | `polls` | poll | collector/Kismet timestamps, device counts, datasource state, hop-list coverage (`ds_hop_n`, `ds_hop_visited`, `ds_hop_ok`), duration, error |
-| `devices` | device | key, MAC, type, manufacturer, first/last seen; for APs the advertised configuration: SSID, cloaked, `crypt` (Kismet crypt string), `crypt_bits`, MFP supported/required, advertised channel, HT mode, beacon rate, country |
+| `devices` | device | key, MAC, type, manufacturer, first/last seen; for APs the advertised configuration: SSID, cloaked, `crypt` (Kismet crypt string), `crypt_bits`, MFP supported/required, advertised channel, HT mode, beacon rate, country; and (v6) the latest AP load: `cur_n_clients`, `cur_qbss_stations`, `cur_util_pct`, `cur_at` |
 | `device_config_history` | AP configuration change | the configuration that was replaced, with the poll time of the change; only when a known value changes to a different known value (field-wise merge, see below) |
-| `observations` | active device per poll | Kismet `last_time`, Kismet's device frequency (`freq_khz`, not the channel the RSSI frame was received on - see below) and channel, RSSI last/min/max (adapter floor values stored as NULL with `rssi_floor = 1`, v5), cumulative packet and byte counters; AP only: associated client count, `disconnects` (size of the current deauth/disassoc burst, not a counter) and `disconnects_last` (unix second of the last deauth/disassoc frame, NULL until one is seen), QBSS station count and channel utilisation, BSS timestamp (uptime), beacon IE checksum and fingerprint; client only: BSSID |
+| `observations` | active device per poll | written from v6: Kismet `last_time`, RSSI (`rssi`, adapter floor values stored as NULL with `rssi_floor = 1`, v5), cumulative `pk_total` and `pk_data`; AP only: `disconnects` (size of the current deauth/disassoc burst, not a counter), `disconnects_last` (unix second of the last deauth/disassoc frame, NULL until one is seen), `bss_timestamp` (uptime). The other columns (`freq_khz`, `channel`, `rssi_min`/`rssi_max`, `pk_tx`, `pk_rx`, `bytes`, `n_clients`, `qbss_stations`, `util_pct`, `ie_checksum`, `beacon_fp`, `bssid`) are NULL from v6 and hold values only in rows written before it |
 | `device_freq_hist` | device × frequency | cumulative packet count per frequency (Kismet `freq_khz_map`) |
+| `client_bssids` | client × BSSID | (v6) first/last poll at which the client's Kismet `last_bssid` was this BSSID; replaces `observations.bssid` |
 | `associations` | AP × client MAC | first/last poll at which the client MAC was listed in the AP's associated-client map (Kismet gives no per-client times and never drops entries, so `last_seen` is "still listed", not "last frame") |
 | `probes` | client × SSID | first/last time the SSID was probed for (`""` = wildcard) |
 | `alerts` | Kismet alert | header, class, severity, MACs, channel, text, full JSON; deduplicated by Kismet's hash |
@@ -86,6 +87,26 @@ with `ok = 0` and the loop continues; the service is never taken down by it.
 Cumulative counters are stored as Kismet reports them; deltas are derived when
 the data is analysed, which keeps the collector free of state and robust to
 missed polls. `sent` columns exist for the later upload step.
+
+Schema v6 slims the observation row (`docs/findings.md` section 7 for the
+effective time). It keeps what the server's detectors and dashboard read -
+`last_time`, `rssi`/`rssi_floor`, `pk_total`, `pk_data`, `disconnects`,
+`disconnects_last`, `bss_timestamp` - and writes NULL into the other columns
+instead of dropping them: no rewrite of the buffer's largest table on the Pi,
+the 14-day retention ages the old values out, and the v5 code can still run on
+the file. `last_time` stays because the collector needs Kismet's last_time
+anyway (devices, the new-packets check) and the column is `NOT NULL`. The AP
+load moves to `devices` as the latest value (`cur_n_clients`,
+`cur_qbss_stations`, `cur_util_pct`, `cur_at` = the poll ts), written by the
+devices upsert of every poll the AP is seen and never through `merge_config`
+or `device_config_history`: it is not configuration. A client's BSSID goes to
+`client_bssids`, deduplicated like `associations`. The fields no longer stored
+are not requested from Kismet either (`shape.DEVICE_FIELDS`: no device
+channel/frequency, min/max signal, tx/rx packets, data size, IE checksum,
+beacon fingerprint). Migration: `ALTER TABLE devices ADD COLUMN` and the new
+table, metadata only; to roll the code back set `meta.schema_version` to `5`.
+Analysis scripts take an AP's band from `devices.adv_channel` (fallback: the
+busiest frequency of `device_freq_hist`).
 
 Schema v5 added `observations.rssi_floor`. The RTL8821CU (`rtw88_8821cu`)
 reports two clamp values: **-106 dBm** for CCK frames (every 2.4 GHz beacon;
@@ -180,10 +201,11 @@ SELECT header, COUNT(*) FROM alerts GROUP BY header;
   advertised crypto is `dot11.advertisedssid.crypt_string` plus the 64-bit
   `crypt_bitfield`. Both are stored.
 - `ietag_checksum` and `beacon_fingerprint` vary between beacons (TIM/QBSS IEs
-  change constantly), so they are per-poll observation values, not part of the
-  configuration diff.
+  change constantly), so they were per-poll observation values, never part of
+  the configuration diff; not requested from v6 on.
 - `kismet.device.base.channel` is the last *known* channel and can disagree
-  with `frequency` on clients. `frequency` (stored as `freq_khz`) is the
+  with `frequency` on clients (neither is requested from v6 on). `frequency`
+  (stored as `freq_khz` until v5) is the
   frequency Kismet attributed to the frame that last updated the device's
   frequency (`devicetracker.cc`: the frame's own channel information if any,
   else the tuned channel) - a different subset of frames than the one that sets

@@ -292,8 +292,19 @@ Eventbus (push) for alerts later. Fields of interest:
 - Kismet quirks the code depends on: field-filtered responses return `0` (not `null`)
   for missing fields, so `0` is mapped to NULL for all non-counter fields, RSSI included;
   there are no `wpa_version`/RSN fields, only `crypt_string` + `crypt_bitfield`;
-  `ietag_checksum`/`beacon_fingerprint` vary per beacon (stored per-observation, not
-  treated as a stable identity); `/alerts/alerts.json` is 404.
+  `ietag_checksum`/`beacon_fingerprint` vary per beacon (never a stable identity; not
+  requested from buffer v6); `/alerts/alerts.json` is 404.
+- **Slim observations (buffer schema v6; effective time in `docs/findings.md`
+  section 7):** an observation row is written with `ts`, `key`, `last_time`,
+  `rssi`/`rssi_floor`, `pk_total`, `pk_data`, `disconnects`,
+  `disconnects_last`, `bss_timestamp` only; the other columns stay in the table
+  as NULL (no rewrite on the Pi; retention ages the old values out; roll back by
+  setting `meta.schema_version` to 5). AP load is the latest value on `devices`
+  (`cur_n_clients`, `cur_qbss_stations`, `cur_util_pct`, `cur_at`), written by
+  the devices upsert every poll and never through `merge_config` or
+  `device_config_history`. A client's BSSID is in `client_bssids` (deduplicated
+  like `associations`). The dropped fields are not requested from Kismet. An
+  AP's band comes from `devices.adv_channel` (analysis scripts, server).
 - **Dataset rules (buffer schema v5, deployed 2026-09-27 19:57:29 UTC;
   `docs/findings.md` sections 7 and 11):**
   - **RSSI floors are censored values, not levels.** The RTL8821CU reports
@@ -318,7 +329,7 @@ Eventbus (push) for alerts later. Fields of interest:
     writes one history row.
   - **`observations.freq_khz` is not the reception channel of `rssi`** (Kismet's
     device frequency, set from other frames); the AP's channel is
-    `devices.adv_channel`.
+    `devices.adv_channel`. Not written from buffer v6 on.
 - **Privacy rule:** never collect bystander PII - no `dot11.client.ipdata` (client IPs)
   and no WPS serial/model/manufacturer/device-name fields. Associations and probed
   SSIDs are fine.

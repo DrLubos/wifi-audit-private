@@ -39,6 +39,18 @@ so the per-AP floor share (an eligibility criterion) stays countable. Rows
 written before v5 keep the raw value in rssi; readers apply
 dataset_rules.rssi_value() / sql_rssi().
 
+Schema v6 slims the observations: a row keeps ts, key, last_time (Kismet's
+last_time, still needed to tell whether a device has new packets), rssi /
+rssi_floor, pk_total, pk_data, disconnects / disconnects_last and
+bss_timestamp. The other columns stay in the table (no rewrite of the
+million-row table on the Pi, and the v5 code can still run on the file) but
+are written as NULL and age out with the retention. An AP's client count,
+QBSS station count and channel utilisation are kept as the latest value on
+devices (cur_n_clients, cur_qbss_stations, cur_util_pct, cur_at), written by
+the devices upsert of every poll - never through merge_config or the
+configuration history. A client's BSSID goes to client_bssids, one row per
+(client, BSSID) pair with first/last poll, as associations does for APs.
+
 Device configuration (the AP's advertised channel, HT mode, beacon rate, ...)
 is merged field by field: a NULL from Kismet means "not in this record",
 never "changed to nothing". Only a known value replaced by a different known
@@ -62,7 +74,7 @@ import sqlite3
 
 log = logging.getLogger("collector.store")
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -106,7 +118,12 @@ CREATE TABLE IF NOT EXISTS devices (
   ht_mode     TEXT,
   beacon_rate INTEGER,
   country     TEXT,
-  config_changed_at INTEGER);        -- poll ts of the last configuration change
+  config_changed_at INTEGER,         -- poll ts of the last configuration change
+  -- AP load, latest value, written every poll the AP is seen (v6)
+  cur_n_clients     INTEGER,         -- Kismet num_associated_clients
+  cur_qbss_stations INTEGER,         -- AP-reported station count (QBSS IE)
+  cur_util_pct      REAL,            -- AP-reported channel utilisation (QBSS IE)
+  cur_at            INTEGER);        -- poll ts of these values
 
 CREATE TABLE IF NOT EXISTS device_config_history (
   id          INTEGER PRIMARY KEY,
@@ -125,6 +142,9 @@ CREATE TABLE IF NOT EXISTS device_config_history (
   country     TEXT);
 CREATE INDEX IF NOT EXISTS device_config_history_key ON device_config_history(key, ts);
 
+-- From v6 only ts, key, last_time, rssi, rssi_floor, pk_total, pk_data,
+-- disconnects, disconnects_last and bss_timestamp are written; the other
+-- columns are NULL in new rows (kept for the v5 code and the older rows).
 CREATE TABLE IF NOT EXISTS observations (
   id        INTEGER PRIMARY KEY,
   ts        INTEGER NOT NULL,        -- poll ts
@@ -172,6 +192,14 @@ CREATE TABLE IF NOT EXISTS associations (
   sent       INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (ap_key, client_mac)) WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS client_bssids (
+  client_key TEXT NOT NULL,          -- device key of the client
+  bssid      TEXT NOT NULL,          -- Kismet last_bssid of the client
+  first_seen INTEGER NOT NULL,       -- poll ts at which the pair was first seen
+  last_seen  INTEGER NOT NULL,       -- poll ts at which the pair was last seen
+  sent       INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (client_key, bssid)) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS probes (
   key        TEXT NOT NULL,          -- client device key
   ssid       TEXT NOT NULL,          -- "" is a wildcard probe
@@ -202,6 +230,8 @@ CREATE INDEX IF NOT EXISTS alerts_ts ON alerts(ts);
 
 _CONFIG_COLS = ("ssid", "cloaked", "crypt", "crypt_bits", "mfp_sup", "mfp_req",
                 "adv_channel", "ht_mode", "beacon_rate", "country")
+# Latest AP load on devices (v6): overwritten every poll, never merged or historised.
+_CUR_COLS = ("cur_n_clients", "cur_qbss_stations", "cur_util_pct", "cur_at")
 
 
 def merge_config(old, new):
@@ -238,6 +268,9 @@ class Store:
         if v == "4":
             self._migrate_v4_to_v5()
             v = "5"
+        if v == "5":
+            self._migrate_v5_to_v6()
+            v = "6"
         if v is not None and int(v) != SCHEMA_VERSION:
             raise RuntimeError("database schema version %s, collector expects %d"
                                % (v, SCHEMA_VERSION))
@@ -307,6 +340,26 @@ class Store:
             if cols and "rssi_floor" not in cols:
                 self.db.execute("ALTER TABLE observations ADD COLUMN rssi_floor INTEGER")
             self.set_meta("schema_version", "5")
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+
+    def _migrate_v5_to_v6(self):
+        """v6 adds devices.cur_* (latest AP load) and the client_bssids table
+        (from _SCHEMA). ALTER TABLE ADD COLUMN only: the observations columns
+        that v6 no longer writes stay, so nothing is rewritten. To roll the
+        code back, set meta.schema_version to 5; the extra columns and table
+        are harmless to the v5 code."""
+        log.info("migrating buffer schema v5 -> v6: adding devices.cur_*, client_bssids")
+        self.db.execute("BEGIN")
+        try:
+            cols = [r[1] for r in self.db.execute("PRAGMA table_info(devices)")]
+            for c, t in (("cur_n_clients", "INTEGER"), ("cur_qbss_stations", "INTEGER"),
+                         ("cur_util_pct", "REAL"), ("cur_at", "INTEGER")):
+                if cols and c not in cols:
+                    self.db.execute("ALTER TABLE devices ADD COLUMN %s %s" % (c, t))
+            self.set_meta("schema_version", "6")
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
@@ -395,15 +448,20 @@ class Store:
                           ap["mfp"][0], ap["mfp"][1], ap["adv_ch"], ap["ht"],
                           ap["beacon_rate"], ap["country"])
 
+        # AP load: the latest value, not configuration (no history, no merge)
+        cur = ((ap["n_clients"], ap["qbss_stations"], ap["util_pct"], rec["ts"])
+               if ap is not None else None)
+
         first_seen = rec["first"] or rec["last"]
         if row is None:
             self.db.execute(
                 "INSERT INTO devices(key, mac, type, manuf, first_seen, last_seen, " +
-                ", ".join(_CONFIG_COLS) + ", config_changed_at) VALUES (" +
-                ", ".join("?" * (6 + len(_CONFIG_COLS) + 1)) + ")",
+                ", ".join(_CONFIG_COLS) + ", config_changed_at, " + ", ".join(_CUR_COLS) +
+                ") VALUES (" + ", ".join("?" * (6 + len(_CONFIG_COLS) + 1 + len(_CUR_COLS))) + ")",
                 (key, rec["mac"], rec["type"], rec["manuf"], first_seen, rec["last"])
                 + (new_config or (None,) * len(_CONFIG_COLS))
-                + (rec["ts"] if new_config else None,))
+                + (rec["ts"] if new_config else None,)
+                + (cur or (None,) * len(_CUR_COLS)))
             is_new_obs = True
         else:
             last_seen = row[0]
@@ -425,6 +483,9 @@ class Store:
                 if merged != old_config:
                     sets += ["%s = ?" % c for c in _CONFIG_COLS]
                     args += list(merged)
+            if cur is not None:
+                sets += ["%s = ?" % c for c in _CUR_COLS]
+                args += list(cur)
             args.append(key)
             self.db.execute("UPDATE devices SET " + ", ".join(sets) + " WHERE key = ?", args)
 
@@ -432,24 +493,24 @@ class Store:
             return False
 
         cl = rec.get("cl") or {}
+        # v6: the slim row; the table's other columns stay NULL
         self.db.execute(
-            "INSERT INTO observations(ts, key, last_time, freq_khz, channel, "
-            "rssi, rssi_min, rssi_max, rssi_floor, pk_total, pk_tx, pk_rx, pk_data, bytes, "
-            "n_clients, disconnects, disconnects_last, qbss_stations, util_pct, bss_timestamp, "
-            "ie_checksum, beacon_fp, bssid) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (rec["ts"], key, rec["last"], rec["freq"], rec["ch"],
-             rec["rssi"], rec["rssi_min"], rec["rssi_max"], rec.get("rssi_floor"),
-             rec["pk"], rec["tx"], rec["rx"], rec["data"], rec["bytes"],
-             ap["n_clients"] if ap else None,
+            "INSERT INTO observations(ts, key, last_time, rssi, rssi_floor, pk_total, pk_data, "
+            "disconnects, disconnects_last, bss_timestamp) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (rec["ts"], key, rec["last"], rec["rssi"], rec.get("rssi_floor"),
+             rec["pk"], rec["data"],
              ap["disconnects"] if ap else None,
              ap["disconnects_last"] if ap else None,
-             ap["qbss_stations"] if ap else None,
-             ap["util_pct"] if ap else None,
-             ap["bss_ts"] if ap else None,
-             ap["ie_sum"] if ap else None,
-             ap["beacon_fp"] if ap else None,
-             cl.get("bssid")))
+             ap["bss_ts"] if ap else None))
+        if cl.get("bssid"):
+            self.db.execute(
+                "INSERT INTO client_bssids(client_key, bssid, first_seen, last_seen) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(client_key, bssid) DO UPDATE SET "
+                "first_seen = MIN(first_seen, excluded.first_seen), "
+                "last_seen = MAX(last_seen, excluded.last_seen), "
+                "sent = CASE WHEN excluded.last_seen > last_seen THEN 0 ELSE sent END",
+                (key, cl["bssid"], rec["ts"], rec["ts"]))
 
         if rec["freqs"]:
             self.db.executemany(
@@ -494,7 +555,8 @@ class Store:
 
     def prune(self, before_ts):
         """Delete time-series rows older than before_ts. Device identity,
-        configuration history, associations, probes and alerts are kept.
+        configuration history, associations, client_bssids, probes and alerts
+        are kept.
 
         TODO(retention): the deduplicated tables (associations, probes, devices)
         are never pruned, so distinct pairs accumulate for the life of the sensor.
