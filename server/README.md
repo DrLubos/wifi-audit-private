@@ -10,7 +10,7 @@ docker-compose stack.
 
 | Part | State |
 |---|---|
-| `schema.sql` | done - idempotent PostgreSQL schema: the collector's tables mirrored with a `sensor_id` on every row, plus `sensors`, `ap_baselines`, `detections`, `refresh_ap_baselines()` and the `ap_inventory` view. Schema 6: the dashboard read tables `ap_rssi_hourly`, `sensor_hourly`, `ap_summary`, `sensor_summary`, built by `refresh_rollups(sensor_id, from)` (the importer calls it), and `ap_config_changes` materialized. TimescaleDB-ready (`observations` keyed `(ts, sensor_id, device_key)`), not enabled. |
+| `schema.sql` | done - idempotent PostgreSQL schema: the collector's tables mirrored with a `sensor_id` on every row, plus `sensors`, `ap_baselines`, `detections`, `refresh_ap_baselines()` and the `ap_inventory` view. Schema 6: the dashboard read tables `ap_rssi_hourly`, `sensor_hourly`, `ap_summary`, `sensor_summary`, built by `refresh_rollups(sensor_id, from)` (the importer calls it), and `ap_config_changes` materialized. Schema 7 (`ops/migrate_schema7.sh`): `observations` slim and AP-only, keyed `(sensor_id, device_key, ts)` INCLUDE (rssi, rssi_floor) + BRIN on ts, `devices.cur_*`, `client_bssids`, `ap_baselines.band`. TimescaleDB-ready (ts in the key), not enabled. |
 | `seed/` | done - `export_snapshot.py` (consistent copy of the Pi buffer) and `import_snapshot.py` (SQL + COPY stream piped into psql, idempotent merge). See `seed/README.md`. |
 | `docker-compose.yml`, `api/`, `frontend/` | done - the stack below |
 | dashboard (read-only) | done - `/api/overview`, `/api/aps`, `/api/aps/{key}` (all three from the schema-6 read tables, never raw observations; ETag from `sensor_summary.refreshed_at`), `/api/aps/{key}/rssi` (hourly from `ap_rssi_hourly`; `bucket=900` with `from`/`to` at most 48 h apart reads raw observations), `/api/alerts`, `/api/findings`, `/api/detections` (filters `severity`, `type`, `acked`; no evidence) and `/api/detections/{id}` (with evidence); React pages Overview, Access points, AP detail with the RSSI timeline vs baseline (uPlot), Detections with a per-row evidence expand. Before/after measurements: `docs/performance.md` |
@@ -52,7 +52,7 @@ docker compose build frontend                 # the node build is the memory pea
 docker compose build api
 docker compose up -d
 docker compose ps                             # db healthy -> api healthy -> frontend running
-curl -s http://localhost/api/health           # {"status":"ok","database":"ok","schema_version":"6"}
+curl -s http://localhost/api/health           # {"status":"ok","database":"ok","schema_version":"7"}
 ```
 
 `SITE_ADDRESS=:80` serves plain HTTP; a domain name switches Caddy to automatic
@@ -84,7 +84,10 @@ of the tables in a scratch schema, inside a transaction that is rolled back (no
 real row is read or written); each prints `PASS` or raises. Run them after
 applying `schema.sql`, as `$POSTGRES_USER` (they create the scratch schema).
 Unit tests without a database: `python3 -m unittest discover -s api/tests`,
-`-s seed/tests`, `-s detection/tests`, `-s evaluation/tests` (from `server/`).
+`-s seed/tests`, `-s detection/tests`, `-s evaluation/tests`, and
+`-s tests -p 'test_*.py'` (schema/migration files) (from `server/`). Read-only
+check of the schema-7 migration on the real data: `tests/sql/check_schema7.sql`
+(also as `claude_ro`).
 
 The dashboard reads the schema-6 tables, which only `refresh_rollups()` writes:
 the importer calls it after every load; after changing `ap_baselines` by hand

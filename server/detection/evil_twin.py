@@ -103,7 +103,7 @@ WHERE d.sensor_id = %(sid)s AND d.type = 'ap'
   AND b.rssi_median IS NOT NULL AND b.rssi_robust_sd IS NOT NULL"""
 
 # Signal (b), part 2: the RSSI readings of those APs, ordered by (device_key, ts)
-# (served in order by observations_device_ts_rssi) and STREAMED through a
+# (served in order by the primary key observations_pkey) and STREAMED through a
 # server-side cursor - never fetched whole. rssi is Kismet sig_last (one frame
 # per poll), NULL when absent; the adapter's floor values are censored readings
 # and never a level (rssi_valid(), schema.sql).

@@ -2,16 +2,23 @@
 --
 -- Idempotent: run as often as you like with
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema.sql
+-- It is the complete definition at the current version: a fresh volume is
+-- created from it, and re-applying it to a database at the same version only
+-- replaces functions and views. Upgrades between versions are separate
+-- migration scripts (ops/migrate_schema7.sh for 6 -> 7).
 --
--- Mirrors the sensor's SQLite buffer (wifi-sensor/collector/store.py, schema v3)
+-- Mirrors the sensor's SQLite buffer (wifi-sensor/collector/store.py, schema v6)
 -- with a sensor_id on every row, and adds sensors, ap_baselines and detections.
 -- Differences from the buffer, all intentional:
 --   * unix seconds -> timestamptz, MAC strings -> macaddr, 0/1 -> boolean,
 --     alerts.raw -> jsonb; the buffer's `key` columns are named device_key here.
 --   * sensor-local state is not mirrored: the `id` serials, the `sent` upload
 --     flags and the `meta` table.
---   * natural keys everywhere; observations is keyed (ts, sensor_id, device_key)
---     so it converts to a TimescaleDB hypertable without a rewrite (see the end).
+--   * observations holds AP rows only, with the columns the detectors and the
+--     dashboard read (schema 7); the Pi keeps every device type for its 14 days.
+--   * natural keys everywhere; observations is keyed (sensor_id, device_key, ts):
+--     ts is in the key, so it still converts to a TimescaleDB hypertable
+--     without a rewrite (see the end).
 -- Privacy: no column for client IP addresses or WPS identity fields exists and
 -- none may be added (see CLAUDE.md).
 
@@ -32,7 +39,11 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 -- 6: dashboard read tables ap_rssi_hourly, sensor_hourly, ap_summary,
 --    sensor_summary, filled by refresh_rollups(); ap_config_changes is a
 --    materialized view refreshed there (ap_channel_changes stays a view on it)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '6')
+-- 7: slim observations, AP rows only, keyed (sensor_id, device_key, ts)
+--    INCLUDE (rssi, rssi_floor) + BRIN on ts; devices.cur_* (latest AP load);
+--    client_bssids; ap_baselines.band (from devices.adv_channel) replaces
+--    main_freq_khz; collector buffer v6 (ops/migrate_schema7.sh)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '7')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- sensors ------------------------------------------------------------------
@@ -66,13 +77,9 @@ CREATE TABLE IF NOT EXISTS polls (
   ok             boolean NOT NULL DEFAULT true,
   error          text,
   PRIMARY KEY (sensor_id, ts));
--- Schema 3: hop-list coverage on a polls table created by an earlier schema
--- (metadata only; rows from older buffers keep NULL). Degraded channel coverage
+-- ds_hop_*: rows from buffers before v4 have NULL. Degraded channel coverage
 -- (Kismet 2025-09 collapsing the hop list) is invisible in ds_packets - see
 -- wifi-sensor/docs/findings.md section 7.
-ALTER TABLE polls ADD COLUMN IF NOT EXISTS ds_hop_n integer;
-ALTER TABLE polls ADD COLUMN IF NOT EXISTS ds_hop_visited integer;
-ALTER TABLE polls ADD COLUMN IF NOT EXISTS ds_hop_ok boolean;
 COMMENT ON TABLE polls IS
   'One row per collector poll (30 s): collector, Kismet and datasource health.';
 
@@ -96,6 +103,12 @@ CREATE TABLE IF NOT EXISTS devices (
   beacon_rate integer,
   country     text,
   config_changed_at timestamptz,             -- poll ts of the last configuration change
+  -- AP load, latest value (schema 7 / buffer v6; NULL for non-APs). Not
+  -- configuration: no history row, never part of the configuration diff.
+  cur_n_clients     integer,                 -- Kismet num_associated_clients
+  cur_qbss_stations integer,                 -- AP-reported station count (QBSS IE)
+  cur_util_pct      real,                    -- AP-reported channel utilisation (QBSS IE)
+  cur_at            timestamptz,             -- poll ts of these values
   PRIMARY KEY (sensor_id, device_key));
 CREATE INDEX IF NOT EXISTS devices_mac       ON devices (sensor_id, mac);
 CREATE INDEX IF NOT EXISTS devices_type      ON devices (sensor_id, type);
@@ -123,69 +136,50 @@ CREATE TABLE IF NOT EXISTS device_config_history (
   FOREIGN KEY (sensor_id, device_key) REFERENCES devices (sensor_id, device_key));
 CREATE INDEX IF NOT EXISTS device_config_history_ts ON device_config_history (sensor_id, ts);
 COMMENT ON TABLE device_config_history IS
-  'Previous AP configuration, appended when the advertised configuration changes. ie_checksum/beacon_fp are NOT part of the diff (they vary per beacon).';
+  'Previous AP configuration, appended when the advertised configuration changes. The beacon IE checksum and fingerprint were never part of the diff (they vary per beacon; not stored from schema 7).';
 
+-- The core time series: one row per AP and poll in which the AP was active.
+-- Schema 7 (ops/migrate_schema7.sh): AP rows only (other device types stay on
+-- the Pi for its 14 days and in the backups), only the columns the detectors
+-- and the dashboard read, 8-byte columns first (no alignment padding), rows
+-- written in ts order. Not stored any more: Kismet's last_time, device
+-- frequency (freq_khz, which was never the reception channel of rssi - the
+-- AP's channel is devices.adv_channel) and channel, rssi_min/rssi_max, pk_tx,
+-- pk_rx, bytes, the beacon IE checksum and fingerprint; the AP load
+-- (n_clients, qbss_stations, util_pct) is the latest value on devices, a
+-- client's BSSID is in client_bssids.
 CREATE TABLE IF NOT EXISTS observations (
-  ts         timestamptz NOT NULL,           -- poll ts
-  sensor_id  integer NOT NULL,
-  device_key text NOT NULL,
-  last_time  timestamptz NOT NULL,           -- Kismet last_time
-  freq_khz   integer,                        -- Kismet device frequency: NOT the frame behind rssi (see below)
-  channel    text,                           -- Kismet last known channel
-  rssi       smallint,                       -- Kismet sig_last (one frame), NULL when no reading;
-                                             -- may hold a raw floor value (read via rssi_valid())
-  rssi_min   smallint,                       -- Kismet lifetime extremes
-  rssi_max   smallint,
-  pk_total   bigint,                         -- cumulative counters as Kismet reports them
-  pk_tx      bigint,
-  pk_rx      bigint,
-  pk_data    bigint,
-  bytes      bigint,
-  -- AP only (NULL otherwise)
-  n_clients     integer,
-  disconnects   integer,                     -- client_disconnects: size of the current deauth/disassoc burst
+  ts               timestamptz NOT NULL,     -- poll ts
+  pk_total         bigint,                   -- cumulative counters as Kismet reports them
+  pk_data          bigint,
+  bss_timestamp    bigint,                   -- AP uptime (us); a drop means a restart
   disconnects_last timestamptz,              -- last deauth/disassoc frame (buffer v3; NULL before, or none yet)
-  qbss_stations integer,                     -- AP-reported station count
-  util_pct      real,                        -- AP-reported channel utilisation
-  bss_timestamp bigint,                      -- AP uptime (us); a drop means a restart
-  ie_checksum   bigint,                      -- beacon IE checksum (varies per beacon)
-  beacon_fp     bigint,                      -- beacon fingerprint
-  -- client only
-  bssid      macaddr,
-  PRIMARY KEY (ts, sensor_id, device_key),
-  FOREIGN KEY (sensor_id, device_key) REFERENCES devices (sensor_id, device_key));
--- Schema 2: the column above on a table created by schema 1 (metadata only, rows
--- seeded from a v2 buffer keep NULL and the detectors fall back to `disconnects`).
-ALTER TABLE observations ADD COLUMN IF NOT EXISTS disconnects_last timestamptz;
--- Schema 4: buffer v5 stores the adapter's floor readings (-106/-120) as
+  sensor_id        integer NOT NULL,
+  disconnects      integer,                  -- client_disconnects: size of the current deauth/disassoc burst
+  rssi             smallint,                 -- Kismet sig_last (one frame), NULL when no reading;
+                                             -- may hold a raw floor value (read via rssi_valid())
+  rssi_floor       boolean,                  -- buffer v5+: the reading was an adapter floor value
+  device_key       text NOT NULL,
+  -- The key leads with the device: every reader takes one AP's rows (the AP
+  -- page, the hourly rollup, evil_twin) or all APs' rows of a time window
+  -- (deauth_flood, through the BRIN index). It INCLUDEs rssi and rssi_floor,
+  -- so the RSSI readers are index-only scans: a column outside the index made
+  -- every AP page read ~30k heap pages (7-9 s cold, measured 2026-09-28).
+  -- Index-only scans need the heap pages all-visible: the seed importer
+  -- vacuums observations after each load. ts is still in the key, which is
+  -- what a TimescaleDB hypertable needs.
+  CONSTRAINT observations_pkey PRIMARY KEY (sensor_id, device_key, ts) INCLUDE (rssi, rssi_floor),
+  CONSTRAINT observations_device_fkey
+    FOREIGN KEY (sensor_id, device_key) REFERENCES devices (sensor_id, device_key));
+-- Rows arrive in ts order (seed import, migration), so a BRIN index answers
+-- time-window scans at a fraction of a b-tree's size.
+CREATE INDEX IF NOT EXISTS observations_ts_brin ON observations USING brin (ts);
+-- RSSI floors: buffer v5 stores the adapter's floor readings (-106/-120) as
 -- rssi NULL + rssi_floor true; rows imported from older buffers keep the raw
--- value in rssi and NULL here. Never rewritten - read through rssi_valid() /
--- rssi_is_floor().
-ALTER TABLE observations ADD COLUMN IF NOT EXISTS rssi_floor boolean;
-COMMENT ON COLUMN observations.freq_khz IS
-  'Kismet kismet.device.base.frequency: frequency of the frame that last updated the device frequency (Kismet prefers the frame''s own channel info, else the tuned channel, and updates it from other frames than the signal). Not the reception channel of rssi and not reliably the AP''s channel - use devices.adv_channel.';
--- The per-device time-series index (the PK is time-leading for the hypertable).
--- It covers every column the AP queries read (rssi and, since schema 4,
--- rssi_floor through rssi_is_floor()), so /api/aps/{key} and its /rssi bucket
--- query run as index-only scans. Rows of one AP are spread over the whole heap
--- (inserted in time order, ~1 row per page), so a heap fetch costs one page per
--- reading. Measured 2026-09-28 on a busy AP (~29.7k readings): with
--- INCLUDE (rssi) only, the schema-4 queries fell back to an Index Scan reading
--- ~30,000 heap pages - 6.6-9.0 s cold and 3.5-4.2 s on repeat (235 MB > 128 MB
--- shared_buffers); as index-only scans ~400 index pages, 0.3-2.4 s cold and
--- 14-30 ms warm. Index-only scans need the heap pages all-visible: the seed
--- importer vacuums observations after each load.
--- Building it on the 1 GB box: SHARE lock on observations (reads continue,
--- writes such as a seed import wait), maintenance_work_mem-bounded sort,
--- peak extra disk ~ the new index plus its sort spill (~0.6 GB); the old
--- index is freed at COMMIT.
-CREATE INDEX IF NOT EXISTS observations_device_ts_rssi_floor
-  ON observations (sensor_id, device_key, ts) INCLUDE (rssi, rssi_floor);
--- Its predecessors (same leading columns, fewer INCLUDE columns) are redundant.
-DROP INDEX IF EXISTS observations_device_ts_rssi;
-DROP INDEX IF EXISTS observations_device_ts;
+-- value in rssi and NULL in rssi_floor. Never rewritten - read through
+-- rssi_valid() / rssi_is_floor().
 COMMENT ON TABLE observations IS
-  'One row per active device per poll: the core RSSI/counter time series. A row exists only for polls in which the device was active.';
+  'One row per AP per poll in which the AP was active: the RSSI/counter time series the detectors and the dashboard read. AP rows only (schema 7).';
 
 CREATE TABLE IF NOT EXISTS device_freq_hist (
   sensor_id  integer NOT NULL,
@@ -207,6 +201,18 @@ CREATE TABLE IF NOT EXISTS associations (
 CREATE INDEX IF NOT EXISTS associations_client ON associations (sensor_id, client_mac);
 COMMENT ON TABLE associations IS
   'AP x client MAC pairs from Kismet''s associated_client_map. last_seen means "still listed at that poll", not "last frame exchanged".';
+
+CREATE TABLE IF NOT EXISTS client_bssids (
+  sensor_id  integer NOT NULL,
+  client_key text NOT NULL,                  -- device_key of the client
+  bssid      macaddr NOT NULL,               -- Kismet last_bssid of the client
+  first_seen timestamptz NOT NULL,           -- poll ts at which the pair was first seen
+  last_seen  timestamptz NOT NULL,           -- poll ts at which the pair was last seen
+  PRIMARY KEY (sensor_id, client_key, bssid),
+  FOREIGN KEY (sensor_id, client_key) REFERENCES devices (sensor_id, device_key));
+CREATE INDEX IF NOT EXISTS client_bssids_bssid ON client_bssids (sensor_id, bssid);
+COMMENT ON TABLE client_bssids IS
+  'Client x BSSID pairs (Kismet last_bssid), deduplicated like associations; replaces the per-poll observations.bssid (schema 7 / buffer v6).';
 
 CREATE TABLE IF NOT EXISTS probes (
   sensor_id  integer NOT NULL,
@@ -258,17 +264,15 @@ CREATE TABLE IF NOT EXISTS ap_baselines (
   rssi_robust_sd real,                       -- 1.4826 * MAD
   rssi_p5        smallint,
   rssi_p95       smallint,
-  main_freq_khz  integer,                    -- most frequent heard frequency
+  band           text,                       -- '2.4' / '5' / '6' (ap_band(): advertised channel, else busiest frequency)
   n_obs          integer,                    -- valid RSSI readings (floor values excluded)
-  n_floor        integer,                    -- floor readings (censored) in the same window (schema 4)
+  n_floor        integer,                    -- floor readings (censored) in the same window
   n_days         integer,                    -- distinct days (in sensors.tz) with a reading
   window_start   timestamptz,
   window_end     timestamptz,
   computed_at    timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (sensor_id, device_key),
   FOREIGN KEY (sensor_id, device_key) REFERENCES devices (sensor_id, device_key));
--- Schema 4: censored floor readings counted next to the valid ones.
-ALTER TABLE ap_baselines ADD COLUMN IF NOT EXISTS n_floor integer;
 CREATE INDEX IF NOT EXISTS ap_baselines_ssid  ON ap_baselines (sensor_id, ssid);
 CREATE INDEX IF NOT EXISTS ap_baselines_bssid ON ap_baselines (sensor_id, bssid);
 COMMENT ON TABLE ap_baselines IS
@@ -323,6 +327,35 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
   SELECT coalesce(flag, false) OR coalesce(r IN (-106, -120), false)
 $$;
 
+-- Band of an AP: from its advertised channel number (1-14: 2.4 GHz, 32-177:
+-- 5 GHz; the RTL8821CU captures no 6 GHz, whose channel numbers would
+-- overlap), else from the frequency with the most packets in
+-- device_freq_hist (Kismet's lifetime map). observations.freq_khz was never
+-- the AP's channel (findings section 11) and is no longer stored.
+CREATE OR REPLACE FUNCTION band_of_channel(ch text) RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN ch ~ '^[0-9]{1,3}$' THEN
+           CASE WHEN ch::int BETWEEN 1 AND 14 THEN '2.4'
+                WHEN ch::int BETWEEN 32 AND 177 THEN '5' END END
+$$;
+
+CREATE OR REPLACE FUNCTION band_of_freq(khz integer) RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN khz IS NULL OR khz <= 0 THEN NULL
+              WHEN khz < 3000000 THEN '2.4'
+              WHEN khz < 5925000 THEN '5' ELSE '6' END
+$$;
+
+CREATE OR REPLACE FUNCTION ap_band(p_sensor_id integer, p_device_key text) RETURNS text
+LANGUAGE sql STABLE AS $$
+  SELECT coalesce(
+    (SELECT band_of_channel(adv_channel) FROM devices
+     WHERE sensor_id = p_sensor_id AND device_key = p_device_key),
+    (SELECT band_of_freq(freq_khz) FROM device_freq_hist
+     WHERE sensor_id = p_sensor_id AND device_key = p_device_key AND packets > 0
+     ORDER BY packets DESC, freq_khz LIMIT 1))
+$$;
+
 -- Recompute the RSSI baselines of one sensor from its observations.
 -- Defaults match analysis/rssi_stability.py: an AP qualifies with >= 200
 -- valid readings on >= 2 distinct days. Floor readings are excluded from every
@@ -349,7 +382,7 @@ BEGIN
   END IF;
 
   WITH obs AS (
-    SELECT o.device_key, o.ts, rssi_valid(o.rssi) AS rssi, o.freq_khz,
+    SELECT o.device_key, o.ts, rssi_valid(o.rssi) AS rssi,
            rssi_is_floor(o.rssi, o.rssi_floor) AS is_floor,
            (o.ts AT TIME ZONE v_tz)::date AS obs_day
     FROM observations o
@@ -370,7 +403,6 @@ BEGIN
            stddev_pop(rssi)                                      AS sd,
            percentile_cont(0.05) WITHIN GROUP (ORDER BY rssi)    AS p5,
            percentile_cont(0.95) WITHIN GROUP (ORDER BY rssi)    AS p95,
-           mode() WITHIN GROUP (ORDER BY freq_khz) FILTER (WHERE rssi IS NOT NULL) AS main_freq,
            min(ts) FILTER (WHERE rssi IS NOT NULL)               AS w_start,
            max(ts) FILTER (WHERE rssi IS NOT NULL)               AS w_end
     FROM obs
@@ -388,11 +420,11 @@ BEGIN
   INSERT INTO ap_baselines (
       sensor_id, device_key, bssid, ssid, crypt,
       rssi_median, rssi_mean, rssi_sd, rssi_robust_sd, rssi_p5, rssi_p95,
-      main_freq_khz, n_obs, n_floor, n_days, window_start, window_end, computed_at)
+      band, n_obs, n_floor, n_days, window_start, window_end, computed_at)
   SELECT p_sensor_id, s.device_key, d.mac, d.ssid, d.crypt,
          s.med, s.mean, s.sd, 1.4826 * m.mad,
          round(s.p5)::smallint, round(s.p95)::smallint,
-         s.main_freq, s.n_obs, s.n_floor, s.n_days, s.w_start, s.w_end, now()
+         ap_band(p_sensor_id, s.device_key), s.n_obs, s.n_floor, s.n_days, s.w_start, s.w_end, now()
   FROM stats s
   JOIN mad m ON m.device_key = s.device_key
   JOIN devices d ON d.sensor_id = p_sensor_id AND d.device_key = s.device_key
@@ -406,7 +438,7 @@ BEGIN
       rssi_robust_sd = EXCLUDED.rssi_robust_sd,
       rssi_p5        = EXCLUDED.rssi_p5,
       rssi_p95       = EXCLUDED.rssi_p95,
-      main_freq_khz  = EXCLUDED.main_freq_khz,
+      band           = EXCLUDED.band,
       n_obs          = EXCLUDED.n_obs,
       n_floor        = EXCLUDED.n_floor,
       n_days         = EXCLUDED.n_days,
@@ -421,7 +453,7 @@ BEGIN
   -- with trusted/note, stays.
   UPDATE ap_baselines SET
       rssi_median = NULL, rssi_mean = NULL, rssi_sd = NULL, rssi_robust_sd = NULL,
-      rssi_p5 = NULL, rssi_p95 = NULL, main_freq_khz = NULL,
+      rssi_p5 = NULL, rssi_p95 = NULL, band = NULL,
       n_obs = NULL, n_floor = NULL, n_days = NULL, window_start = NULL, window_end = NULL,
       computed_at = now()
   WHERE sensor_id = p_sensor_id AND computed_at < now();
@@ -482,17 +514,10 @@ WHERE d.type = 'ap';
 -- Values are text (booleans 'true'/'false', crypt_bits decimal). Fixture test:
 -- tests/sql/ap_config_changes_test.sql.
 --
--- Schema 6: MATERIALIZED (the view read every history row of an AP on each
--- AP page: 85 ms warm for the busiest AP, 4.7 s for all APs). The definition
--- is unchanged; refresh_rollups() refreshes it after every import - history
--- only changes there. A schema-5 view of the same name is dropped first
--- (ap_channel_changes goes with it and is recreated below).
-DO $$
-BEGIN
-  IF (SELECT relkind FROM pg_class WHERE oid = to_regclass('ap_config_changes')) = 'v' THEN
-    DROP VIEW ap_config_changes CASCADE;
-  END IF;
-END $$;
+-- MATERIALIZED since schema 6 (as a plain view it read every history row of
+-- an AP on each AP page: 85 ms warm for the busiest AP, 4.7 s for all APs);
+-- refresh_rollups() refreshes it after every import - history only changes
+-- there.
 CREATE MATERIALIZED VIEW IF NOT EXISTS ap_config_changes AS
 WITH st AS (
   SELECT sensor_id, device_key, ts, ssid, cloaked, crypt, crypt_bits, mfp_sup, mfp_req,
@@ -625,7 +650,7 @@ CREATE TABLE IF NOT EXISTS ap_summary (
   rssi_robust_sd real,
   rssi_p5        smallint,
   rssi_p95       smallint,
-  main_freq_khz  integer,
+  band           text,                       -- ap_baselines.band
   baseline_n_obs   integer,
   baseline_n_floor integer,
   baseline_n_days  integer,
@@ -638,6 +663,11 @@ CREATE TABLE IF NOT EXISTS ap_summary (
   n_floor      bigint NOT NULL,
   first_obs    timestamptz,
   last_obs     timestamptz,
+  -- AP load, latest value (devices.cur_*)
+  cur_n_clients     integer,
+  cur_qbss_stations integer,
+  cur_util_pct      real,
+  cur_at            timestamptz,
   -- configuration history
   history_rows   integer NOT NULL,           -- raw device_config_history rows (incl. the pre-v5 churn)
   n_changes      integer NOT NULL,           -- change events in ap_config_changes (distinct ts)
@@ -660,7 +690,7 @@ CREATE TABLE IF NOT EXISTS sensor_summary (
   gaps             jsonb NOT NULL,           -- the 10 longest: [{gap_start, gap_end, gap_s}]
   devices_by_type  jsonb NOT NULL,           -- {"ap": n, "client": n, ...}
   obs_total        bigint NOT NULL,          -- sum(polls.new_obs): rows the collector wrote, all device types
-  obs_ap           bigint NOT NULL,          -- AP observation rows on the server
+  obs_ap           bigint NOT NULL,          -- AP observation rows on the server (sum of sensor_hourly.ap_obs)
   country_expected text,                     -- the country most of the sensor's APs advertise
   alerts           integer NOT NULL,
   alerts_last_ts   timestamptz,
@@ -827,9 +857,10 @@ BEGIN
       mfp_sup, mfp_req, adv_channel, ht_mode, beacon_rate, country, first_seen, last_seen,
       config_changed_at, hidden_beacon, name_seen,
       has_baseline, trusted, trusted_at, note, rssi_median, rssi_mean, rssi_sd, rssi_robust_sd,
-      rssi_p5, rssi_p95, main_freq_khz, baseline_n_obs, baseline_n_floor, baseline_n_days,
+      rssi_p5, rssi_p95, band, baseline_n_obs, baseline_n_floor, baseline_n_days,
       baseline_window_start, baseline_window_end, baseline_at,
       n_obs, n_valid, n_floor, first_obs, last_obs,
+      cur_n_clients, cur_qbss_stations, cur_util_pct, cur_at,
       history_rows, n_changes, last_change_at, last_change)
   SELECT d.sensor_id, d.device_key, d.mac,
          (d.mac & macaddr '02:00:00:00:00:00') <> macaddr '00:00:00:00:00:00',
@@ -840,12 +871,13 @@ BEGIN
          coalesce(nullif(d.ssid, ''), hi.name_seen),
          b.device_key IS NOT NULL, coalesce(b.trusted, false), b.trusted_at, b.note,
          b.rssi_median, b.rssi_mean, b.rssi_sd, b.rssi_robust_sd, b.rssi_p5, b.rssi_p95,
-         b.main_freq_khz, b.n_obs, b.n_floor, b.n_days, b.window_start, b.window_end, b.computed_at,
+         b.band, b.n_obs, b.n_floor, b.n_days, b.window_start, b.window_end, b.computed_at,
          coalesce(r.n_obs, 0), coalesce(r.n_valid, 0), coalesce(r.n_floor, 0),
          (SELECT min(o.ts) FROM observations o
           WHERE o.sensor_id = d.sensor_id AND o.device_key = d.device_key),
          (SELECT max(o.ts) FROM observations o
           WHERE o.sensor_id = d.sensor_id AND o.device_key = d.device_key),
+         d.cur_n_clients, d.cur_qbss_stations, d.cur_util_pct, d.cur_at,
          coalesce(hi.n_rows, 0), coalesce(c.n_changes, 0), c.last_change_at, c.last_change
   FROM devices d
   LEFT JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.device_key
@@ -891,7 +923,7 @@ BEGIN
           FROM (SELECT type, count(*) AS n FROM devices WHERE sensor_id = p_sensor_id
                 GROUP BY type) t),
          pl.obs_total,
-         (SELECT coalesce(sum(n_obs), 0) FROM ap_rssi_hourly WHERE sensor_id = p_sensor_id),
+         (SELECT coalesce(sum(ap_obs), 0) FROM sensor_hourly WHERE sensor_id = p_sensor_id),
          (SELECT mode() WITHIN GROUP (ORDER BY country) FROM devices
           WHERE sensor_id = p_sensor_id AND type = 'ap' AND country IS NOT NULL),
          (SELECT count(*) FROM alerts WHERE sensor_id = p_sensor_id),

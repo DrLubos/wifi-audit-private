@@ -140,7 +140,7 @@ WHERE a.sensor_id = %(sid)s AND a.header = ANY(%(headers)s)
 ORDER BY a.transmitter_mac, a.ts"""
 
 # Per-AP baseline over a range, for the APs that have an episode only (indexed
-# by observations_device_ts_rssi on (sensor_id, device_key, ts)).
+# by the primary key observations_pkey on (sensor_id, device_key, ts)).
 BASELINE_SQL = _EVENTS_CTE.format(key_filter=_KEY_FILTER) + """, stats AS (
   SELECT device_key,
          count(*)                                       AS polls,

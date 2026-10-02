@@ -79,7 +79,8 @@ Conventions for the stack:
 - **PostgreSQL**, schema in `server/schema.sql` (already written and committed):
   mirrors the collector's tables with a `sensor_id` on every row, plus `sensors`,
   `ap_baselines` and `detections`. It is **TimescaleDB-ready** (observations keyed
-  `(ts, sensor_id, device_key)`) but Timescale is NOT enabled — plain Postgres has
+  `(sensor_id, device_key, ts)` since schema 7 - ts is in the key, which is all a
+  hypertable needs) but Timescale is NOT enabled — plain Postgres has
   zero overhead for the seeded demo. The commented `create_hypertable` block at the
   end is turned on only when live ingest and volume arrive.
 - **Multi-sensor from the start:** every time-series/device row carries `sensor_id`,
@@ -118,14 +119,27 @@ Conventions for the stack:
     api's ETag. `/api/overview`, `/api/aps`, `/api/aps/{key}` never read raw
     observations; raw 15-min RSSI buckets only for a window of at most 48 h.
     Measurements before/after: `docs/performance.md`.
-  - **AP queries must stay index-only scans** on
-    `observations_device_ts_rssi_floor` (INCLUDE rssi, rssi_floor): a column
-    outside the index makes every AP page read ~30k heap pages (7-9 s cold,
-    measured 2026-09-28). Add a column to the INCLUDE list rather than read it
-    from the heap; the importer vacuums `observations` after each load.
-  - **`observations.freq_khz` is not the reception channel of `rssi`** (Kismet's
-    device frequency, updated from other frames) and not reliably the AP's
-    channel; use `devices.adv_channel`.
+  - **Slim observations (schema 7 / collector buffer v6, `ops/migrate_schema7.sh`):**
+    the server keeps **AP rows only** (other device types stay on the Pi for its
+    14 days and in the backups) with `ts, sensor_id, device_key, rssi,
+    rssi_floor, pk_total, pk_data, disconnects, disconnects_last,
+    bss_timestamp`. The AP load is the latest value on `devices.cur_*` (never
+    through the configuration history), a client's BSSID is in `client_bssids`
+    (deduplicated like `associations`). Keying rule: **PRIMARY KEY (sensor_id,
+    device_key, ts) INCLUDE (rssi, rssi_floor)** plus a **BRIN on ts** (rows are
+    written in ts order); ts stays in the key, so TimescaleDB stays possible.
+    The pre-migration table is kept as `observations_v5` until the developer
+    drops it. Read-only check of the migration: `tests/sql/check_schema7.sql`.
+  - **AP queries must stay index-only scans** on the primary key
+    `observations_pkey` (INCLUDE rssi, rssi_floor): a column outside the index
+    makes every AP page read ~30k heap pages (7-9 s cold, measured 2026-09-28).
+    Add a column to the INCLUDE list rather than read it from the heap; the
+    importer vacuums `observations` after each load.
+  - **An AP's band comes from its advertised channel** (`ap_band()`:
+    `devices.adv_channel`, else the busiest frequency of `device_freq_hist`),
+    stored as `ap_baselines.band`. `observations.freq_khz` was never the
+    reception channel of `rssi` (Kismet's device frequency, updated from other
+    frames) and is not stored from schema 7.
   - Read-only evil_twin FP audit: `python -m detection fp-audit` (never
     `refresh_ap_baselines()` with a split window for an audit - it rewrites
     `ap_baselines`). Documented sensor gaps for it: `detection/degraded_windows.csv`.

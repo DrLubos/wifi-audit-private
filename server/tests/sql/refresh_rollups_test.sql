@@ -73,11 +73,16 @@ VALUES
    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
   (1, 'B1', '11:00:00:00:00:02', 'bridged', '2026-09-20 12:25+00', '2026-09-20 12:25+00',
    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+-- the latest AP load (schema 7), copied into ap_summary
+UPDATE devices SET cur_n_clients = 3, cur_qbss_stations = 2, cur_util_pct = 12.5,
+                   cur_at = '2026-09-20 12:21+00' WHERE device_key = 'A1';
 
 -- observations: A1 in hour 10 has 5 valid readings, a raw floor (pre-v5), a v5
--- floor flag and a poll without a reading
-INSERT INTO observations (sensor_id, ts, device_key, last_time, rssi, rssi_floor)
-SELECT 1, ts, k, ts, r, f
+-- floor flag and a poll without a reading. The importer keeps AP rows only
+-- (schema 7); the client and bridged rows check that the refresh does not
+-- rely on that (and C1 is re-classified as an AP in case 2).
+INSERT INTO observations (sensor_id, ts, device_key, rssi, rssi_floor)
+SELECT 1, ts, k, r, f
 FROM (VALUES
   ('A1', timestamptz '2026-09-20 10:00:00+00', -50::smallint, NULL::boolean),
   ('A1', '2026-09-20 10:01:00+00', -52, NULL),
@@ -107,8 +112,9 @@ INSERT INTO alerts (id, sensor_id, hash, ts, header, raw) VALUES
   (2, 1, 'h2', '2026-09-20 12:25+00', 'BCASTDISCON', '{}');
 
 INSERT INTO ap_baselines (sensor_id, device_key, bssid, ssid, crypt, trusted, rssi_median,
-                          rssi_robust_sd, n_obs, n_floor, n_days, computed_at)
-VALUES (1, 'A1', 'A8:00:00:00:00:01', 'Net', 'WPA2', true, -55, 1.5, 300, 3, 2, '2026-09-21 00:00+00');
+                          rssi_robust_sd, band, n_obs, n_floor, n_days, computed_at)
+VALUES (1, 'A1', 'A8:00:00:00:00:01', 'Net', 'WPA2', true, -55, 1.5, '2.4', 300, 3, 2,
+        '2026-09-21 00:00+00');
 
 -- --- helpers ------------------------------------------------------------------------------
 CREATE FUNCTION pg_temp.check_rows(label text, got text, want text) RETURNS void
@@ -137,7 +143,8 @@ CREATE VIEW pg_temp.got_sensor_hourly AS
   FROM sensor_hourly;
 CREATE VIEW pg_temp.got_ap_summary AS
   SELECT device_key, bssid, random_bssid, hidden, hidden_beacon, name_seen, country, has_baseline,
-         trusted, rssi_median, n_obs, n_valid, n_floor, first_obs, last_obs, history_rows,
+         trusted, rssi_median, band, cur_n_clients, cur_util_pct, cur_at,
+         n_obs, n_valid, n_floor, first_obs, last_obs, history_rows,
          n_changes, last_change_at, last_change
   FROM ap_summary;
 CREATE VIEW pg_temp.got_sensor_summary AS
@@ -170,11 +177,14 @@ SELECT pg_temp.check_rows('sensor_hourly, full', 'SELECT * FROM pg_temp.got_sens
 
 SELECT pg_temp.check_rows('ap_summary, full', 'SELECT * FROM pg_temp.got_ap_summary', $$
   VALUES ('A1', macaddr 'A8:00:00:00:00:01', false, false, false, 'Net', 'SK', true, true, -55::real,
+          '2.4', 3, 12.5::real, timestamptz '2026-09-20 12:21+00',
           10::bigint, 7::bigint, 2::bigint, timestamptz '2026-09-20 10:00+00', timestamptz '2026-09-20 12:21+00',
           1, 1, timestamptz '2026-09-20 10:30+00', '[{"field": "adv_channel", "old": "1", "new": "6"}]'::jsonb),
          ('A2', 'A8:00:00:00:00:02', false, true, true, 'HiddenName', 'SK', false, false, NULL,
+          NULL, NULL, NULL, NULL,
           1, 1, 0, '2026-09-20 12:22+00', '2026-09-20 12:22+00', 1, 0, NULL, NULL),
          ('A3', '02:00:00:00:00:03', true, false, false, 'Phone', 'US', false, false, NULL,
+          NULL, NULL, NULL, NULL,
           1, 1, 0, '2026-09-20 10:10+00', '2026-09-20 10:10+00', 0, 0, NULL, NULL) $$);
 
 SELECT pg_temp.check_rows('sensor_summary, full', 'SELECT * FROM pg_temp.got_sensor_summary', $$
@@ -195,9 +205,9 @@ VALUES (1, 'A4', 'A8:00:00:00:00:04', 'ap', '2026-09-20 13:02+00', '2026-09-20 1
         false, 'WPA2', 1, false, false, '36', 'SK');
 UPDATE devices SET type = 'ap' WHERE device_key = 'C1';        -- re-classified, history from 10:00
 UPDATE devices SET type = 'bridged' WHERE device_key = 'A3';   -- no longer an AP
-INSERT INTO observations (sensor_id, ts, device_key, last_time, rssi) VALUES
-  (1, '2026-09-20 13:00+00', 'A1', '2026-09-20 13:00+00', -65),
-  (1, '2026-09-20 13:02+00', 'A4', '2026-09-20 13:02+00', -75);
+INSERT INTO observations (sensor_id, ts, device_key, rssi) VALUES
+  (1, '2026-09-20 13:00+00', 'A1', -65),
+  (1, '2026-09-20 13:02+00', 'A4', -75);
 INSERT INTO alerts (id, sensor_id, hash, ts, header, raw) VALUES
   (3, 1, 'h3', '2026-09-20 13:03+00', 'DEAUTHFLOOD', '{}');
 
