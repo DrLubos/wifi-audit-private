@@ -55,7 +55,7 @@ export default function Overview() {
               <StatTile label="Coverage" value={fmtPct(o.polls.coverage_pct)} hint="successful polls" />
               <StatTile label="Gaps > 90 s" value={fmtInt(o.polls.gaps.count)}
                         hint={o.polls.gaps.count ? `${fmtDuration(o.polls.gaps.total_s)} total, largest ${fmtDuration(o.polls.gaps.max_s)}` : "none"} />
-              <StatTile label="Observations" value={fmtInt(o.observations)} hint="device × poll rows" />
+              <StatTile label="Observations" value={fmtInt(o.observations)} hint="AP × poll rows" />
               <StatTile label="Access points" value={fmtInt(o.devices.ap)} hint={<Link to="/aps">inventory</Link>} />
               <StatTile label="Clients" value={fmtInt(o.devices.client)} />
               <StatTile label="Bridged" value={fmtInt(o.devices.bridged)} hint={`${fmtInt(o.devices.other)} other, ${fmtInt(o.devices.total)} devices`} />

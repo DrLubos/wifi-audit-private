@@ -50,10 +50,11 @@ def overview(request: Request, response: Response, sensor=Depends(get_sensor)):
                      "max_s": s["gap_max_s"], "list": s["gaps"]},
         },
         "devices": devices,
-        # rows the collector wrote (sum of polls.new_obs, every device type) and
-        # the AP rows the server keeps
-        "observations": s["obs_total"],
-        "ap_observations": s["obs_ap"],
+        # schema 7: the AP observation rows the server keeps (sum of
+        # sensor_hourly.ap_obs); the collector's rows of every device type
+        # (sum of polls.new_obs) stay on the Pi
+        "observations": s["obs_ap"],
+        "collector_rows": s["obs_total"],
         "alerts": {"total": s["alerts"], "last_ts": s["alerts_last_ts"]},
         "baselines": s["baselines"],
         "detections": {"total": detections["total"], "open": detections["open"],

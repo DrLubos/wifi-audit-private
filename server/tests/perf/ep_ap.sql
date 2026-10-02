@@ -8,7 +8,8 @@ SELECT device_key, upper(bssid::text) AS bssid, upper(left(bssid::text, 8)) AS o
        first_seen, last_seen, extract(epoch FROM last_seen - first_seen)::float8 AS lifetime_s,
        trusted, rssi_median, rssi_robust_sd, rssi_sd, baseline_n_obs, baseline_n_days,
        cloaked, mfp_sup, mfp_req, beacon_rate, country, config_changed_at, hidden_beacon,
-       name_seen, has_baseline, rssi_mean, rssi_p5, rssi_p95, main_freq_khz, baseline_n_floor,
+       name_seen, has_baseline, rssi_mean, rssi_p5, rssi_p95, band, baseline_n_floor,
+       cur_n_clients, cur_qbss_stations, cur_util_pct, cur_at,
        baseline_window_start, baseline_window_end, baseline_at, trusted_at, note,
        n_obs, n_valid, n_floor, first_obs, last_obs, history_rows, n_changes,
        (SELECT country_expected FROM sensor_summary ss WHERE ss.sensor_id = a.sensor_id)

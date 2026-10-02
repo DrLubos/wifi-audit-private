@@ -57,11 +57,3 @@ export function fmtDateTimeSec(value) {
 export function fmtDate(value) {
   return fmtDateTime(value).slice(0, 10);
 }
-
-// Kismet frequencies are kHz.
-export function bandOf(freqKhz) {
-  if (!freqKhz) return null;
-  if (freqKhz < 3_000_000) return "2.4 GHz";
-  if (freqKhz < 5_925_000) return "5 GHz";
-  return "6 GHz";
-}

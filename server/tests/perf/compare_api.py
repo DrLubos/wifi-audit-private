@@ -3,6 +3,9 @@
 of schema 5 (raw observations) and schema 6 (read tables) for the same data.
 
   python3 tests/perf/compare_api.py tests/perf/out/schema5 tests/perf/out/schema6
+  python3 tests/perf/compare_api.py OLD NEW --ignore baseline.main_freq_khz,observations
+
+--ignore: checks (by label) whose difference is intended, reported as ignored.
 
 Prints one line per check (before / after / verdict) and exits 1 on any
 difference. Floats compare with a tolerance of 0.01 (real columns are float4:
@@ -48,10 +51,14 @@ def same(a, b):
 
 
 class Report:
-    def __init__(self):
+    def __init__(self, ignore=()):
         self.failed = 0
+        self.ignore = tuple(ignore)
 
     def check(self, label, a, b):
+        if label.split(" ")[0] in self.ignore:
+            print("  %-52s (ignored: an intended change)" % label[:52])
+            return
         ok = same(a, b)
         self.failed += not ok
         show = lambda v: (json.dumps(v, ensure_ascii=False)[:70])
@@ -82,8 +89,11 @@ def series_check(r, label, a, b):
 
 def main(argv):
     before, after = argv[0], argv[1]
+    ignore = []
+    if "--ignore" in argv:
+        ignore = argv[argv.index("--ignore") + 1].split(",")
     keys = sorted(f[3:-5] for f in os.listdir(before) if f.startswith("ap_") and f.endswith(".json"))
-    r = Report()
+    r = Report(ignore)
 
     for k in keys:
         a, b = load(before, "ap_" + k), load(after, "ap_" + k)

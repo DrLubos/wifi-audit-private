@@ -121,6 +121,10 @@ for ep in overview aps ap ap_rssi detections; do
 done
 
 echo
+echo "=================== detectors: deauth_flood / evil_twin time-window scans (EXPLAIN, first + warm run)"
+python3 "$here/ep_detectors.py" | cat "$here/common.sql" - | psql_ro
+
+echo
 echo "=================== AP page, the 15-minute view; Overview page, its other requests (warm)"
 http warm "$N" "/api/aps/$KEY/rssi?$RAWQ" "/api/findings" "/api/alerts?limit=50"
 echo "# done $(date -u +%Y-%m-%dT%H:%M:%SZ)"

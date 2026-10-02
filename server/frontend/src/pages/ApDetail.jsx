@@ -4,7 +4,7 @@ import { useApi } from "../api";
 import RssiChart from "../components/RssiChart";
 import Skeleton from "../components/Skeleton";
 import StatTile from "../components/StatTile";
-import { bandOf, fmtDateTime, fmtDb, fmtDbm, fmtDuration, fmtInt } from "../format";
+import { fmtDateTime, fmtDb, fmtDbm, fmtDuration, fmtInt } from "../format";
 
 // 1 h = the whole history from the hourly table; 15 min = the raw readings of
 // the last 48 h of the AP's data (the api refuses longer raw windows).
@@ -107,7 +107,7 @@ export default function ApDetail() {
         <span>{ap.manuf ?? "unknown manufacturer"} <span className="mono muted">{ap.oui}</span></span>
         <span>{ap.crypt ?? "-"}</span>
         <span>ch {ap.adv_channel ?? "-"}{ap.ht_mode ? ` (${ap.ht_mode})` : ""}
-          {baseline?.main_freq_khz ? ` · ${bandOf(baseline.main_freq_khz)}` : ""}</span>
+          {baseline?.band ? ` · ${baseline.band} GHz` : ""}</span>
         <span>MFP {fmtMfp(ap)}</span>
         <span>beacon rate {ap.beacon_rate ?? "-"}</span>
         <span>country {ap.country ?? "-"}</span>

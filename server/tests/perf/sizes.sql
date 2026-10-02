@@ -1,5 +1,5 @@
--- Storage report: every table and index, observations by device type and the
--- non-NULL share of every observations column. Read-only; the column query is
+-- Storage report: every table and index, observations by device type (AP only
+-- since schema 7) and the non-NULL share of every observations column. Read-only; the column query is
 -- one sequential scan of observations (tens of seconds on the 1 GB box).
 \set ON_ERROR_STOP on
 \pset pager off
@@ -52,27 +52,13 @@ SET statement_timeout = '15min';     -- one full read: 149 s cold on 2026-09-29 
 SELECT d.type, count(*) AS rows,
        round(100.0 * count(*) / sum(count(*)) OVER (), 1) AS pct_of_rows,
        min(o.ts) AS first_ts, max(o.ts) AS last_ts,
-       round(100.0 * count(o.last_time)        / count(*), 1) AS last_time,
-       round(100.0 * count(o.freq_khz)         / count(*), 1) AS freq_khz,
-       round(100.0 * count(o.channel)          / count(*), 1) AS channel,
        round(100.0 * count(o.rssi)             / count(*), 1) AS rssi,
-       round(100.0 * count(o.rssi_min)         / count(*), 1) AS rssi_min,
-       round(100.0 * count(o.rssi_max)         / count(*), 1) AS rssi_max,
        round(100.0 * count(o.rssi_floor)       / count(*), 1) AS rssi_floor,
        round(100.0 * count(o.pk_total)         / count(*), 1) AS pk_total,
-       round(100.0 * count(o.pk_tx)            / count(*), 1) AS pk_tx,
-       round(100.0 * count(o.pk_rx)            / count(*), 1) AS pk_rx,
        round(100.0 * count(o.pk_data)          / count(*), 1) AS pk_data,
-       round(100.0 * count(o.bytes)            / count(*), 1) AS bytes,
-       round(100.0 * count(o.n_clients)        / count(*), 1) AS n_clients,
        round(100.0 * count(o.disconnects)      / count(*), 1) AS disconnects,
        round(100.0 * count(o.disconnects_last) / count(*), 1) AS disconnects_last,
-       round(100.0 * count(o.qbss_stations)    / count(*), 1) AS qbss_stations,
-       round(100.0 * count(o.util_pct)         / count(*), 1) AS util_pct,
-       round(100.0 * count(o.bss_timestamp)    / count(*), 1) AS bss_timestamp,
-       round(100.0 * count(o.ie_checksum)      / count(*), 1) AS ie_checksum,
-       round(100.0 * count(o.beacon_fp)        / count(*), 1) AS beacon_fp,
-       round(100.0 * count(o.bssid)            / count(*), 1) AS bssid
+       round(100.0 * count(o.bss_timestamp)    / count(*), 1) AS bss_timestamp
 FROM observations o
 JOIN devices d ON d.sensor_id = o.sensor_id AND d.device_key = o.device_key
 WHERE o.sensor_id = :sid
@@ -80,4 +66,5 @@ GROUP BY d.type ORDER BY count(*) DESC;
 RESET statement_timeout;
 \timing off
 \x off
-SELECT coalesce(sum(new_obs), 0) AS sum_polls_new_obs FROM polls WHERE sensor_id = :sid;
+SELECT coalesce(sum(new_obs), 0) AS sum_polls_new_obs, (SELECT sum(ap_obs) FROM sensor_hourly
+       WHERE sensor_id = :sid) AS sum_sensor_hourly_ap_obs FROM polls WHERE sensor_id = :sid;

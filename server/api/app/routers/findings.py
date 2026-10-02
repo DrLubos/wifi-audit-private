@@ -35,15 +35,16 @@ _SUMMARY = """
 # (refresh_ap_baselines() clears the statistics of APs that no longer qualify,
 #  schema 4; those rows are not baselines)
 
+# band: ap_band() - the AP's advertised channel, else its busiest frequency
+# (schema 7; observations.freq_khz was never the AP's channel).
 _BY_BAND = """
-    SELECT CASE WHEN main_freq_khz < 3000000 THEN '2.4'
-                WHEN main_freq_khz < 5925000 THEN '5' ELSE '6' END AS band,
+    SELECT band,
            count(*) AS aps,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY rssi_sd) AS sd_median,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY rssi_robust_sd) AS rsd_median,
            count(*) FILTER (WHERE rssi_sd <= 3) AS sd_le_3,
            count(*) FILTER (WHERE rssi_sd <= 5) AS sd_le_5
-    FROM ap_baselines WHERE sensor_id = %s AND main_freq_khz IS NOT NULL
+    FROM ap_baselines WHERE sensor_id = %s AND band IS NOT NULL AND rssi_median IS NOT NULL
     GROUP BY 1 ORDER BY 1"""
 
 

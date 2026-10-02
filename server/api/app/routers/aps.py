@@ -40,7 +40,8 @@ _LIST = """
 _AP = """
     SELECT """ + _LIST_COLS + """, cloaked, mfp_sup, mfp_req, beacon_rate, country,
            config_changed_at, hidden_beacon, name_seen, has_baseline,
-           rssi_mean, rssi_p5, rssi_p95, main_freq_khz, baseline_n_floor,
+           rssi_mean, rssi_p5, rssi_p95, band, baseline_n_floor,
+           cur_n_clients, cur_qbss_stations, cur_util_pct, cur_at,
            baseline_window_start, baseline_window_end, baseline_at, trusted_at, note,
            n_obs, n_valid, n_floor, first_obs, last_obs, history_rows, n_changes,
            (SELECT country_expected FROM sensor_summary ss WHERE ss.sensor_id = a.sensor_id)
@@ -60,7 +61,9 @@ _AP_KEYS = ("device_key", "bssid", "oui", "random_bssid", "hidden", "ssid", "man
             "adv_channel", "ht_mode", "first_seen", "last_seen", "lifetime_s", "trusted",
             "rssi_median", "rssi_robust_sd", "rssi_sd", "baseline_n_obs", "baseline_n_days",
             "cloaked", "mfp_sup", "mfp_req", "beacon_rate", "country", "config_changed_at",
-            "country_expected", "hidden_beacon", "name_seen")
+            "country_expected", "hidden_beacon", "name_seen",
+            # the latest AP load (devices.cur_*, schema 7)
+            "cur_n_clients", "cur_qbss_stations", "cur_util_pct", "cur_at")
 
 # Hours with at least one reading (valid or floor), as the per-poll query had them.
 _HOURLY = """
@@ -71,7 +74,7 @@ _HOURLY = """
 
 # rssi_valid(): the adapter's floor values are censored readings, never a level
 # (schema.sql); counted per bucket as n_floor. Index-only range scan on
-# observations_device_ts_rssi_floor.
+# observations_pkey (sensor_id, device_key, ts) INCLUDE (rssi, rssi_floor).
 _RAW = """
     SELECT date_bin(interval '900 seconds', ts, timestamptz '2000-01-01 00:00:00+00') AS t,
            count(rssi_valid(rssi)) AS n,
@@ -124,7 +127,7 @@ def get_ap(request: Request, response: Response,
         baseline = {
             "rssi_median": s["rssi_median"], "rssi_mean": s["rssi_mean"], "rssi_sd": s["rssi_sd"],
             "rssi_robust_sd": s["rssi_robust_sd"], "rssi_p5": s["rssi_p5"], "rssi_p95": s["rssi_p95"],
-            "main_freq_khz": s["main_freq_khz"], "n_obs": s["baseline_n_obs"],
+            "band": s["band"], "n_obs": s["baseline_n_obs"],
             "n_floor": s["baseline_n_floor"], "n_days": s["baseline_n_days"],
             "window_start": s["baseline_window_start"], "window_end": s["baseline_window_end"],
             "computed_at": s["baseline_at"], "trusted": s["trusted"],
