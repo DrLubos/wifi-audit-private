@@ -84,7 +84,18 @@ python3 seed/import_snapshot.py buffer-snapshot.db --sensor pi-fri \
   `SELECT * FROM refresh_rollups(<sensor_id>)` by hand (idempotent). Skip it
   with `--no-rollups`. Measured cost of a full-history run on the 12-day seed:
   ~16 s for the AP hour aggregate plus ~5 s for the configuration view.
-- Buffer schema v2 to v5 snapshots are accepted. v3 (collector deployed
+- **Server schema 7 / buffer v6:** only AP observation rows are imported
+  (filtered by the snapshot's device type and again by the merged server
+  type), with the columns the server keeps (`ts`, `rssi`, `rssi_floor`,
+  `pk_total`, `pk_data`, `disconnects`, `disconnects_last`, `bss_timestamp`);
+  the buffer's other observation columns are ignored. A client's BSSID goes to
+  `client_bssids` - from a v6 buffer's `client_bssids` table plus the per-poll
+  `observations.bssid` of rows written before v6 (or by a v5 collector),
+  merged by first/last poll. A v6 buffer's AP load (`devices.cur_*`) wins when
+  its `cur_at` is at least as new as the stored one; a v5 snapshot leaves it
+  unchanged. Apply schema 7 (`ops/migrate_schema7.sh`) before importing with
+  this importer.
+- Buffer schema v2 to v6 snapshots are accepted. v3 (collector deployed
   2026-09-22 or later) carries `observations.disconnects_last`, v4 (2026-09-27 or
   later) `polls.ds_hop_n / ds_hop_visited / ds_hop_ok` (hop-list coverage), v5
   `observations.rssi_floor` (the RSSI was an adapter floor value, stored as NULL
@@ -97,7 +108,7 @@ python3 seed/import_snapshot.py buffer-snapshot.db --sensor pi-fri \
 Re-running with the same or a later snapshot is safe and accumulates: time
 series rows are inserted only if new, `devices` keep the earliest `first_seen`
 and latest `last_seen` (configuration from the newer row), `associations` and
-`probes` merge first/last times. That is how the server keeps history beyond the
+`probes` and `client_bssids` merge first/last times. That is how the server keeps history beyond the
 Pi's 14-day retention: snapshot again before the oldest observations are pruned.
 
 ## Checks after a seed
