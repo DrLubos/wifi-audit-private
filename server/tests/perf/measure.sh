@@ -121,10 +121,14 @@ for ep in overview aps ap ap_rssi detections; do
 done
 
 echo
-echo "=================== detectors: deauth_flood / evil_twin time-window scans (EXPLAIN, first + warm run)"
-python3 "$here/ep_detectors.py" | cat "$here/common.sql" - | psql_ro
-
-echo
 echo "=================== AP page, the 15-minute view; Overview page, its other requests (warm)"
 http warm "$N" "/api/aps/$KEY/rssi?$RAWQ" "/api/findings" "/api/alerts?limit=50"
+
+# Last: the detector scans are heavy enough to spend the e2-micro's CPU burst
+# credit, and HTTP timings taken right after them carry ~220 ms throttle
+# slices (measured 2026-10-03: the 15-min view 242 ms p50 after them, 20 ms
+# after 90 s of idle).
+echo
+echo "=================== detectors: deauth_flood / evil_twin time-window scans (EXPLAIN, first + warm run)"
+python3 "$here/ep_detectors.py" | cat "$here/common.sql" - | psql_ro
 echo "# done $(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -213,3 +213,93 @@ What each change did:
 
 Warm pass right after each idle run: every API call 288-350 ms, `/api/aps`
 447-454 ms - the network floor, as in the warm table above.
+
+## 5. Schema 7: slim, AP-only observations (2026-10-03)
+
+What changed (`ops/migrate_schema7.sh`, collector buffer v6): the server keeps
+AP observation rows only, with the ten columns the detectors and the
+dashboard read (8-byte columns first), written in ts order, keyed `PRIMARY KEY
+(sensor_id, device_key, ts) INCLUDE (rssi, rssi_floor)` plus a BRIN on `ts`;
+the AP load moved to `devices.cur_*`, a client's BSSID to `client_bssids`,
+`ap_baselines.band` replaced `main_freq_khz`. Data: the same as the schema-6
+"before" run (seed + the snapshot imported 2026-10-01: 3,411,483 observation
+rows, 2,492,372 of them APs, 703 APs).
+
+**Migration** (2026-10-03 10:46:26-10:52:16 UTC, one transaction, 5 min 50 s;
+`~/migrate7.log` on the box): counts per type 17 s, `client_bssids` 22 s,
+`devices.cur_*` 13 s, the ts-ordered copy of the AP rows 38 s, the primary-key
+build 3 min 24 s, foreign key 12 s, BRIN 7 s; peak need estimated 1.5 GB of
+4.7 GB free. Then `schema.sql`, `VACUUM (ANALYZE)`, `refresh_rollups` (47 s)
+and both SQL fixture tests (PASS).
+
+**Same data, same answers.**
+- `tests/sql/check_schema7.sql` (read-only): all 30,605 stored AP-hours of
+  `ap_rssi_hourly` - computed from the old table - are identical when
+  recomputed from the new one (0 only-stored, 0 only-recomputed); 2,492,372
+  rows, all APs, equal to `sensor_hourly` and `ap_summary` and per AP; all
+  93,286 client -> BSSID pairs of the old table are in `client_bssids`; all 703
+  APs have their latest load.
+- `compare_api.py` against the schema-6 snapshot of the same data: 235 checks
+  equal for the overview, all 703 AP-list rows, the detections and the three
+  APs (counts, floors, every hourly and 15-minute bucket, config changes).
+  Intended differences only: `baseline.main_freq_khz` -> `baseline.band`
+  (2.4 for all three, as their 2,412,000 kHz), the overview's
+  `observations` now counts AP rows (2,492,372, the former `ap_observations`;
+  `collector_rows` = 3,411,483), the AP page gains `cur_*`. On the Pi, the
+  3,532 rows written in the first 25 min of buffer v6 have every dropped
+  column NULL (findings section 7).
+
+**Storage:**
+
+| | before (schema 6) | after (schema 7) |
+|---|---|---|
+| `observations` rows | 3,411,483 (all device types) | 2,492,372 (APs) |
+| heap | 588 MB (180.5 B/row) | 263 MB (110.4 B/row) |
+| indexes | 564 MB (PK 222 MB + covering 342 MB) | 205 MB (PK incl. rssi/rssi_floor) + 24 kB BRIN |
+| total | 1,152 MB | 467 MB |
+| `client_bssids` | - (`observations.bssid`, per poll) | 17 MB, 93,286 pairs |
+| database | 1,803 MB with `observations_v5` kept | 651 MB once it is dropped |
+
+**Dashboard** (`measure.sh`, api container direct; the dashboard endpoints
+read the schema-6 read tables, so only the raw 15-minute view touches
+`observations`):
+
+SQL = planning + execution of the endpoint's statements:
+
+| | SQL cold, before | after | SQL warm, before | after | HTTP warm p50, before | after |
+|---|---|---|---|---|---|---|
+| 15-min RSSI view, last 48 h (raw observations, index-only) | 1,184 ms (129 pages read) | 183 ms (76) | 7.1 ms | 8.0 ms | 22 ms | 20 ms (after 90 s idle) |
+| hourly RSSI chart (`ap_rssi_hourly` + `ap_summary`) | 89 ms | 78 ms | 1.2 ms | 1.6 ms | 14 ms | 14 ms |
+| `/api/overview` | 257 ms | 26 ms | 1 ms | 1 ms | 7 ms | 10 ms |
+| `/api/aps` | 112 ms | 44 ms | 12 ms | 22 ms | 20 ms | 22 ms |
+| `/api/aps/{key}` | 164 ms | 235 ms | 3 ms | 2 ms | 18 ms | 19 ms |
+| `/api/detections` | 193 ms | 168 ms | 4 ms | 3 ms | 21 ms | 10 ms |
+
+The read-table endpoints do not touch `observations` and did not change;
+their cold figures move with the catalog and planning of the restarted
+database, the warm ones by a few ms between runs.
+
+**Detectors** - a 24 h window (2026-09-25), both tables measured in the same
+session against the same data (`observations_v5` vs `observations`), 60 s of
+idle before each pair, no VM stall during the run (stall meter):
+
+| | before: first / warm | after: first / warm | buffers before -> after |
+|---|---|---|---|
+| deauth_flood `EVENTS_SQL` (every AP's polls in the window, window functions) | 9,399 / 2,616 ms | 2,740 / 1,423 ms | 189,204 -> 2,865 |
+| evil_twin `READINGS_SQL` (baselined APs' valid readings, ordered) | 924 / 523 ms | 2,593 / 400 ms | 2,775 -> 2,773 |
+
+deauth_flood needs heap columns (counters, `disconnects*`): before, an index
+scan per AP fetched every row's heap page (189k buffer accesses for 181k
+rows); now the BRIN finds the window's heap pages, which hold one day of
+all APs contiguously, and a bitmap heap scan reads ~1,000 of them (lossy
+blocks, rechecked). evil_twin is an index-only scan on both and does the same
+work; its "first" run after the migration read 2,053 index pages because the
+new key had not been cached yet, while the old index had just been walked by
+the deauth run before it.
+
+Measurement note: in the full `measure.sh` run the detector EXPLAINs came
+right after the cold restarts and before the last HTTP block; the burst
+credit was spent and they took 12.0 s / 3.5 s warm with the same buffer
+counts, and the 15-min view's HTTP p50 read 242 ms (= 20 ms + one ~220 ms
+throttle slice). `measure.sh` now runs the detector EXPLAINs last; the table
+above is the separate A/B (`~/perf-detectors-ab.txt`).

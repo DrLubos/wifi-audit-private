@@ -74,7 +74,7 @@ WHERE bssid IS NOT NULL
 GROUP BY 1, 2, 3;
 CREATE INDEX client_bssids_bssid ON client_bssids (sensor_id, bssid);
 
-\echo [4/9] devices.cur_* from each AP's latest observation
+\echo [4/9] devices.cur_* from the latest observation of each AP
 ALTER TABLE devices
   ADD COLUMN cur_n_clients integer,
   ADD COLUMN cur_qbss_stations integer,
