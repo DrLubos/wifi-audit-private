@@ -13,7 +13,9 @@
 #                        stale monitor VIF, disables power saving.
 #   capture-watchdog.sh  systemd timer: checks Kismet's packet counter every
 #                        2 min; restarts Kismet, reloads the driver, re-plugs
-#                        the USB device when no frames arrive.
+#                        the USB device, power-cycles the adapter's hub port
+#                        (learned while visible, never the uplink's) when no
+#                        frames arrive.
 #   kismet-log-retention.sh
 #                        hourly systemd timer and every Kismet start: deletes
 #                        old / empty / over-cap kismetdb logs (never the open one).

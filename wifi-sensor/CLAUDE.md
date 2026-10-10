@@ -113,8 +113,8 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   `sensor/capture-watchdog.sh` runs from `wifi-sensor-capture-watchdog.timer`
   (templates in `systemd/`) every 2 min, checking Kismet's datasource
   `num_packets` via REST and escalating
-  restart Kismet -> reload driver -> USB re-plug. Both touch only the capture
-  adapter. Root cause of the original failure: the RTL8821CU enumerates as USB
+  restart Kismet -> reload driver -> USB re-plug -> hub-port power-cycle (see
+  "Adapter loss" below). Both touch only the capture adapter. Root cause of the original failure: the RTL8821CU enumerates as USB
   storage first and mode-switches ~15 s later, the clock steps by days at boot
   (no RTC), the first capture helper crashed and the re-open adopted a
   half-configured monitor VIF. Kismet reports such a source as running/no error.
@@ -248,6 +248,44 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   kismet | grep "IPC connection closed"`, delta of `retry_attempts`) and look at
   the kernel log around each crash. Each crash still triggers the channel-1
   collapse; since the hop guard it lasts ~10 s.
+- **Adapter loss 2026-10-06 19:32:53 - 2026-10-10 21:53 UTC (4 days, no
+  capture):** after rising spontaneous USB disconnects (2/2/8 per day) the
+  adapter stopped enumerating at all (hub port `1-1.1-port2` `state=not
+  attached`, error -71). The watchdog of the time could not recover a device
+  that is not on the bus. **Remote fix that worked:** power-cycle the hub port as root -
+  `echo 1 > /sys/bus/usb/devices/1-1.1:1.0/1-1.1-port2/disable; sleep 5; echo 0
+  > .../disable` (port 1 is the `lan78xx` Ethernet uplink - never touch port 1
+  or the whole hub `1-1.1`). The developer needs `ssh -t pi` for the sudo
+  prompt (no passwordless sudo). Suspect the hardware (cable, connector,
+  adapter); details in `docs/findings.md` section 6.
+  **The watchdog now does this itself** (`sensor/capture-watchdog.sh`):
+  - The port is **learned, not configured**: on every run while `wlan1` exists,
+    `wlan1 -> USB device -> its 'port' link` (resolved sysfs path), saved in
+    `/var/lib/wifi-sensor-watchdog/` (systemd `StateDirectory`, survives reboots;
+    a dead adapter after a reboot cannot be looked up). Moving the adapter to
+    another port while running is followed within one timer period: on unplug
+    `wlan1` and `wlan1mon` vanish, the replugged adapter gets the lowest free
+    name (`wlan1` again, `wlan0` is the built-in radio - unless another Wi-Fi
+    USB device took it), Kismet re-opens its `wlan1` source by itself.
+  - **When:** never on the first failure. Strike 2 (~4 min) restarts Kismet;
+    strike 4 (~8 min) reloads the driver if the adapter is on the bus, else
+    power-cycles the port (a reload cannot help a device that is not
+    enumerated); strike 6 (~12 min) re-plugs (`authorized` 0/1) the first time,
+    power-cycles if the adapter is gone or a re-plug already failed in this
+    outage; then the round starts over. At most one power-cycle per
+    `PORT_CYCLE_MIN_INTERVAL` (600 s; inside it the step restarts Kismet only),
+    so a dead adapter means one power-cycle about every 12 min, each logged.
+    Spontaneous disconnects that re-enumerate within seconds never get there.
+  - **Safety (`port_safe`, tests in `sensor/tests/test_capture_watchdog.py`):**
+    refuses a root-hub port, any port behind which another network interface
+    lives (eth0 - compared on resolved device paths, so a NIC behind an extra
+    hub is caught too), a port holding a USB hub, and a port now holding a
+    device other than the remembered adapter. Kismet is stopped around the
+    power-cycle; the script waits up to 45 s for `wlan1` (the RTL8821CU
+    mode-switches from USB storage ~15 s after enumeration).
+  - Whether `disable` really cuts VBUS depends on the hub; on this Pi 3B+ it
+    brought the adapter back once (2026-10-10). A dead adapter stays dead -
+    replace it.
 
 ## Data to read from Kismet (targets for the collector, Milestone 2)
 

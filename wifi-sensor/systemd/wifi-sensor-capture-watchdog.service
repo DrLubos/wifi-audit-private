@@ -3,7 +3,8 @@
 #
 # One check of "is Kismet actually receiving frames?", started by the matching
 # .timer. Restarts Kismet / reloads the adapter driver / re-plugs the USB
-# device when the datasource packet counter stops moving (see the script).
+# device / power-cycles its hub port when the datasource packet counter stops
+# moving (see the script).
 [Unit]
 Description=Wi-Fi sensor capture watchdog (Kismet must receive frames)
 After=kismet.service
@@ -16,4 +17,8 @@ Environment=KISMET_AUTH_FILE=__AUTH_FILE__
 Environment=WATCHDOG_STATE_DIR=/run/wifi-sensor
 RuntimeDirectory=wifi-sensor
 RuntimeDirectoryPreserve=yes
+# The adapter's hub port and the time of the last port power-cycle survive
+# reboots (a dead adapter after a reboot is no longer visible to learn from).
+Environment=WATCHDOG_PERSIST_DIR=/var/lib/wifi-sensor-watchdog
+StateDirectory=wifi-sensor-watchdog
 ExecStart=__INSTALL_DIR__/sensor/capture-watchdog.sh
