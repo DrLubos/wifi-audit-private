@@ -241,6 +241,7 @@ in section 7.
 | 2026-09-26 22:46:43 (last ok poll) | 2026-09-26 22:48:23 (first ok poll) | 1 m 40 s | Controlled reboot after the hop-list/journal install (`sudo reboot` 22:46:55, Kismet up 22:47:52; one failed poll at 22:47:53) |
 | 2026-09-27 11:30:14 (source "re-opened" after a capture-helper crash; counter frozen from the 11:29:54 poll) | 2026-09-27 11:34:25 (watchdog restarted Kismet; frames again at the 11:34:54 poll) | ~4 m | Polls ok, no frames: helper crashes at 11:29:37 and 11:30:07, Kismet's re-open with the broken definition (section 7) captured nothing until the watchdog's second strike |
 | 2026-09-27 12:17:20 (helper crash; counter frozen from the 12:17:24 poll) | 2026-09-27 12:22:55 (watchdog restarted Kismet; frames again at the 12:23:24 poll) | ~5.5 m | Same: helper crashes at 12:17:20/39/47, re-open captured nothing |
+| 2026-10-06 19:33:15 (last poll with devices; adapter lost at 19:32:53) | 2026-10-10 21:53:47 (first poll with devices) | 4 d 2 h 21 m | Capture adapter gone from the USB bus (below) |
 
 **2026-09-22 disk-full gap** (boundaries read from `polls` in the live buffer):
 
@@ -261,6 +262,32 @@ in section 7.
 - Fixes (`install_sensor.sh`): no frame logging in kismetdb, idle-device expiry in
   Kismet's tracker, the kismetdb log retention timer, a journald size cap - see
   `CLAUDE.md`, "Disk-full incident".
+
+**2026-10-06 capture-adapter loss** (boundaries read from `polls` on the Pi,
+kernel and watchdog journal):
+
+- The RTL8821CU dropped off the USB bus by itself 2x on 10-04, 2x on 10-05 and
+  8x on 10-06 (none of them a watchdog re-plug). At 19:32:53 it failed for good:
+  `rtw_usb_reg_sec ... status: -71`, then hub port `1-1.1-port2` "Cannot enable.
+  Maybe the USB cable is bad?" / "unable to enumerate USB device" and from then
+  on `state=not attached` - the adapter no longer signalled a connection.
+  Not power: `get_throttled=0x0`, `over_current_count=0`.
+- 11,803 polls in the window, 7,014 ok but with 0 devices (Kismet up, source
+  down: "Could not fetch interface address from 'wlan1'"), the rest failed
+  while the watchdog restarted Kismet. The watchdog cycled restart / driver
+  reload / "USB device of wlan1 unknown - restarting kismet only" for four days:
+  a device that is not enumerated cannot be re-plugged through `authorized`.
+- Recovered remotely on 2026-10-10 21:52 by power-cycling the hub port
+  (`echo 1`, then `0`, to `/sys/bus/usb/devices/1-1.1:1.0/1-1.1-port2/disable`,
+  as root; the Ethernet uplink on port 1 is unaffected). The adapter
+  re-enumerated at 21:52:25, the watchdog restarted Kismet at 21:53:05, first
+  poll with devices 21:53:47 (70 devices, hop list 89/89 ok).
+- The rising rate of spontaneous disconnects before the failure points at the
+  hardware (connector, cable or the adapter itself), so a recurrence is likely
+  until it is changed.
+- The data from 2026-10-01 07:38 to the loss was imported to the server on
+  2026-10-10 (snapshot 21:03); nothing in the window was lost besides the
+  capture itself.
 
 ## 7. Sensor configuration changes (dataset boundaries)
 
