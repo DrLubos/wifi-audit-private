@@ -93,7 +93,7 @@ def list_aps(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
         raise HTTPException(status_code=422, detail="sort: one of %s (- for descending)" % ", ".join(SORTS))
     sel = deps.select_sensors(acc, sensor)
     p = deps.period_of(acc, range_)
-    tag, cached = deps.etag(request, acc, p.epoch)
+    tag, cached = deps.etag(request, acc, p.epoch, envelope=p.envelope(sel["filter"]))
     if cached:
         return cached
     with deps.connection() as conn:
@@ -264,7 +264,7 @@ def ap_load(request: Request, bssid: str = Path(pattern=BSSID_RE),
     per local weekday and hour, the mean over the last `weeks` weeks."""
     now = shape.utc_now()
     p = (deps.period_of(acc, range_) if view == "util" else periods.days_window(acc["tz"], now, 7 * weeks))
-    tag, cached = deps.etag(request, acc, p.epoch)
+    tag, cached = deps.etag(request, acc, p.epoch, envelope=p.envelope("all"))
     if cached:
         return cached
     with deps.connection() as conn:

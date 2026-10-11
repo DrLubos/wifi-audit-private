@@ -5,19 +5,17 @@ PLAN.md 11.4). Filters: sensor=all|<name> (default all), range=24h|7d|30d
 (default 7d); an unknown value is a 422. Every response is built in Python
 from rows and serialized with json.dumps (timestamps as UTC ISO 8601 with a
 Z), guarded by the weak v2 ETag (cache.v2_etag): a matching If-None-Match is
-answered with 304 before the endpoint's queries run.
+answered with 304, a body this URL got under the same tag is served from
+memory (respcache), both before the endpoint's queries run.
 """
 
-import json
 from contextlib import contextmanager
-from datetime import date, datetime
-from decimal import Decimal
 from typing import Literal
 
 from fastapi import HTTPException, Query, Request, Response
 
 from .. import cache, db
-from . import periods, privacy, queries, shape
+from . import periods, privacy, queries, respcache, shape
 
 ACCOUNT_ID = 1
 
@@ -97,11 +95,21 @@ def period_of(acc, range_):
     return periods.period(range_, acc["tz"], shape.utc_now())
 
 
-def etag(request: Request, acc, epoch, *extra):
-    """(tag, a 304 response or None)."""
-    tag = cache.v2_etag(acc["id"], acc["refreshed_at"], acc["write_version"], acc["events_at"], epoch, *extra)
+def etag(request: Request, acc, epoch, *extra, envelope=None):
+    """(tag, a response or None): 304 when the client's copy is current, the
+    cached body when this URL was answered under the same tag before
+    (respcache), else None - the endpoint runs its queries and respond()s.
+    envelope: the period envelope of this request (a period endpoint), so a
+    cached body never carries an old request time."""
+    value = cache.v2_etag(acc["id"], acc["refreshed_at"], acc["write_version"], acc["events_at"], epoch, *extra)
+    tag = respcache.make_tag(value, respcache.request_key(request.url.path, request.query_params.multi_items()),
+                             envelope)
     if cache.matches(request.headers.get("if-none-match"), tag):
         return tag, Response(status_code=304, headers=cache.headers(tag))
+    body = respcache.lookup(tag)
+    if body is not None:
+        return tag, Response(content=body, media_type="application/json",
+                             headers=dict(cache.headers(tag), **{"X-Cache": "hit"}))
     return tag, None
 
 
@@ -110,19 +118,11 @@ def minute_epoch():
     return int(shape.utc_now().timestamp()) // 60
 
 
-def _default(v):
-    if isinstance(v, datetime):
-        return periods.iso(v)
-    if isinstance(v, date):
-        return v.isoformat()
-    if isinstance(v, Decimal):
-        return float(v)
-    raise TypeError("not JSON serializable: %r" % type(v))
-
-
 def respond(body, tag):
-    return Response(content=json.dumps(body, separators=(",", ":"), ensure_ascii=False, default=_default),
-                    media_type="application/json", headers=cache.headers(tag))
+    """The JSON response (UTC timestamps with a Z), kept in respcache for the next
+    request of the same URL under the same tag."""
+    return Response(content=respcache.render(body, tag), media_type="application/json",
+                    headers=dict(cache.headers(tag), **{"X-Cache": "miss"}))
 
 
 def allowed_bssids(conn, acc, values):

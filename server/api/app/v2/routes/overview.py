@@ -52,7 +52,7 @@ def period(request: Request, acc=Depends(deps.get_account), sensor: str = Depend
            range_: str = Depends(deps.range_query)):
     sel = deps.select_sensors(acc, sensor)
     p = deps.period_of(acc, range_)
-    tag, cached = deps.etag(request, acc, p.epoch)
+    tag, cached = deps.etag(request, acc, p.epoch, envelope=p.envelope(sel["filter"]))
     if cached:
         return cached
     args = {"account_id": acc["id"], "sensor_ids": sel["ids"], "account_latest": sel["account_latest"],

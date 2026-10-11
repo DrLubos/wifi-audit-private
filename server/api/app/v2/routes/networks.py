@@ -65,7 +65,7 @@ def networks(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
              range_: str = Depends(deps.range_query), other_page: int = Query(1, ge=1, le=1000)):
     sel = deps.select_sensors(acc, sensor)
     p = deps.period_of(acc, range_)
-    tag, cached = deps.etag(request, acc, p.epoch)
+    tag, cached = deps.etag(request, acc, p.epoch, envelope=p.envelope(sel["filter"]))
     if cached:
         return cached
     a = _period_args(acc, sel, p)
@@ -159,7 +159,7 @@ def networks_timeseries(request: Request, acc=Depends(deps.get_account), sensor:
                         range_: str = Depends(deps.range_query)):
     sel = deps.select_sensors(acc, sensor)
     p = deps.period_of(acc, range_)
-    tag, cached = deps.etag(request, acc, p.epoch)
+    tag, cached = deps.etag(request, acc, p.epoch, envelope=p.envelope(sel["filter"]))
     if cached:
         return cached
     a = _period_args(acc, sel, p)
@@ -186,7 +186,7 @@ def clients_heatmap(request: Request, acc=Depends(deps.get_account), sensor: str
         raise HTTPException(status_code=422, detail="the average week needs a period of at least 7 days")
     sel = deps.select_sensors(acc, sensor)
     p = deps.period_of(acc, range_)
-    tag, cached = deps.etag(request, acc, p.epoch)
+    tag, cached = deps.etag(request, acc, p.epoch, envelope=p.envelope(sel["filter"]))
     if cached:
         return cached
     with deps.connection() as conn:
