@@ -355,3 +355,11 @@ instead of joining an hour map, statements never prepared, and time
 queries after idle - back-to-back runs spend the CPU burst credit and
 read 3-8x slower.
 
+After the deploy of 10b0509 + 26bbef5 (measured 2026-10-11 21:36 UTC, after
+the 2026-10-12 snapshot import): warm HTTP p50 8-17 ms and p95 13-28 ms on
+every v2 endpoint at 30 days (cache hits, e.g. overview/period 17 / 24 ms,
+networks 11 / 15 ms, the utilization timeline 17 / 19 ms); a request that
+misses the cache (the first one after an import, a write or a new bucket,
+through Caddy) 0.2-0.4 s for the period endpoints and 0.3-0.7 s for the
+utilization timeline. Smoke test: 80 / 80.
+
