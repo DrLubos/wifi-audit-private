@@ -235,12 +235,15 @@ in section 7.
 |---|---|---|---|
 | 2026-09-17 19:36:17 (last ok poll) | 2026-09-17 19:38:27 (next ok poll) | 2 m 10 s | Not investigated (found in the server's `polls` on 2026-09-27) |
 | 2026-09-17 21:37:57 (last ok poll) | 2026-09-17 21:49:50 (next ok poll) | 11 m 53 s | Not investigated (server `polls`) |
+| 2026-09-17 19:38:27 (first ok poll without devices) | 2026-09-17 21:53:20 (first poll with devices again) | 2 h 15 m | Polls ok, datasource running, but 0 devices: the capture delivered nothing (encloses the two short gaps above). Not investigated - found on 2026-10-11 by the server's outage derivation (`sensor_periods`, schema 9) |
 | 2026-09-19 12:18:01 (last ok poll) | 2026-09-19 12:25:01 (next ok poll) | 7 m | Not investigated (server `polls`) |
 | 2026-09-21 16:26:28 (last ok poll) | 2026-09-21 21:47:58 (next ok poll) | 5 h 21 m | Hung Kismet after a glibc heap abort (`CLAUDE.md`, "Hung-server incident"); stop blocked by `TimeoutStopSec=infinity` |
+| 2026-09-21 22:08:19 (first ok poll without devices) | 2026-09-21 22:13:49 (first poll with devices again) | 5.5 m | Polls ok, 0 devices, 20 min after the hung-Kismet recovery. Not investigated (found 2026-10-11, as above) |
 | 2026-09-22 13:43:21 (last ok poll) | 2026-09-23 09:26:58 (first ok poll) | 19 h 44 m | Root filesystem full (Kismet logs) |
 | 2026-09-26 22:46:43 (last ok poll) | 2026-09-26 22:48:23 (first ok poll) | 1 m 40 s | Controlled reboot after the hop-list/journal install (`sudo reboot` 22:46:55, Kismet up 22:47:52; one failed poll at 22:47:53) |
 | 2026-09-27 11:30:14 (source "re-opened" after a capture-helper crash; counter frozen from the 11:29:54 poll) | 2026-09-27 11:34:25 (watchdog restarted Kismet; frames again at the 11:34:54 poll) | ~4 m | Polls ok, no frames: helper crashes at 11:29:37 and 11:30:07, Kismet's re-open with the broken definition (section 7) captured nothing until the watchdog's second strike |
 | 2026-09-27 12:17:20 (helper crash; counter frozen from the 12:17:24 poll) | 2026-09-27 12:22:55 (watchdog restarted Kismet; frames again at the 12:23:24 poll) | ~5.5 m | Same: helper crashes at 12:17:20/39/47, re-open captured nothing |
+| 2026-10-06 12:23:51 (last ok poll) | 2026-10-06 13:24:45 (next poll) | 1 h 1 m | No polls; the collector service started again at 13:24:44 (systemd). Not investigated (found 2026-10-11, as above) |
 | 2026-10-06 19:33:15 (last poll with devices; adapter lost at 19:32:53) | 2026-10-10 21:53:47 (first poll with devices) | 4 d 2 h 21 m | Capture adapter gone from the USB bus (below) |
 
 **2026-09-22 disk-full gap** (boundaries read from `polls` in the live buffer):
