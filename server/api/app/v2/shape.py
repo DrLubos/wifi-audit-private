@@ -11,6 +11,7 @@ Standard library only (tests/test_shape.py).
 """
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from .periods import iso
 
@@ -202,6 +203,116 @@ def attention(events, findings, limit=10):
                     key=lambda t: (severity_rank(t[1]["severity"]), t[1].get("event_id") is None, t[0]))
     out = [x for _, x in ranked]
     return out[:limit], events_total + len(findings)
+
+
+def presence(net, collecting_hours):
+    """Presence of a network in the period (SPEC section 4, Q9): permanent =
+    seen in >= 90 % of the collecting hours; daytime only = >= 80 % of its
+    hours between 07:00 and 20:00 local, on >= 2 days; transient = mobile
+    (with the mean lifetime); otherwise intermittent."""
+    hours = net["hours"] or 0
+    if collecting_hours and hours >= 0.9 * collecting_hours:
+        return "permanent"
+    if hours and net["day_hours"] >= 0.8 * hours and net["days"] >= 2:
+        return "daytime"
+    if net["mobile"]:
+        return "transient"
+    return "intermittent"
+
+
+LEVEL_KIND = {"high": "downgrade", "medium": "downgrade", "info": "upgrade", "low": "change"}
+
+
+def group_changes(rows):
+    """Security change events -> one item per network, minute and change
+    (from -> to), newest first: [{ts, kind, network, bssids, from, to, event_ids}]."""
+    out, index = [], {}
+    for r in rows:
+        minute = r["ts"].replace(second=0, microsecond=0)
+        frm = r["from_label"] if r["from_label"] != r["to_label"] else "MFP %s" % (r["from_mfp"] or "unknown")
+        to = r["to_label"] if r["from_label"] != r["to_label"] else "MFP %s" % (r["to_mfp"] or "unknown")
+        key = (r["network"], minute, frm, to)
+        if key not in index:
+            index[key] = {"ts": r["ts"], "kind": LEVEL_KIND.get(r["severity"], "change"), "network": r["network"],
+                          "bssids": [], "from": frm, "to": to, "event_ids": []}
+            out.append(index[key])
+        item = index[key]
+        item["bssids"].append(r["bssid"])
+        item["event_ids"].append(r["id"])
+    return out
+
+
+RAMP = (25, 75, 150, 250, 350, 450)     # bins of the clients heatmap (Networks board)
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def heatmap(period, tz, clients, load_hours, captured, view):
+    """The clients heatmap: rows of 24 local hours.
+
+    clients: {UTC hour: {"total": n, "by_network": {ssid: n}}} of the hours
+    with a managed AP's load; load_hours: hours with any load row; captured:
+    hours with a collecting poll. view 'days': one row per local calendar day
+    of the period, a cell per local hour (state ok | no_data | outside |
+    load_missing; the doubled hour of a DST end keeps the larger value);
+    'week': Mon-Sun, each cell the mean over the period's matching
+    weekday-hours with data. -> (rows, peak {value, at, label})
+    """
+    local = ZoneInfo(tz)
+    start, now = period.start, period.now
+    hours = []
+    t = start.replace(minute=0, second=0, microsecond=0)
+    while t < now:
+        hours.append(t)
+        t += HOUR
+
+    def cell_of(h):
+        if h not in captured:
+            return "no_data", None, None
+        if h not in load_hours:
+            return "load_missing", None, None
+        c = clients.get(h)
+        return "ok", (c["total"] if c else 0), (c["by_network"] if c else {})
+
+    peak = {"value": None, "at": None, "label": None}
+    if view == "days":
+        first = start.astimezone(local).date()
+        last = now.astimezone(local).date()
+        days = [first + timedelta(days=i) for i in range((last - first).days + 1)]
+        grid = {d: [{"start": None, "value": None, "state": "outside", "by_network": None} for _ in range(24)]
+                for d in days}
+        for h in hours:
+            lt = h.astimezone(local)
+            state, value, split = cell_of(h)
+            cell = grid[lt.date()][lt.hour]
+            if cell["state"] == "ok" and (value is None or value <= cell["value"]):
+                continue                      # DST end: the doubled hour keeps the larger value
+            grid[lt.date()][lt.hour] = {"start": iso(h), "value": value, "state": state, "by_network": split}
+            if value is not None and (peak["value"] is None or value > peak["value"]):
+                peak = {"value": value, "at": iso(h),
+                        "label": "%s %02d:00" % (lt.strftime("%a %d %b").replace(" 0", " "), lt.hour)}
+        rows = [{"date": d.isoformat(), "label": d.strftime("%a %d %b").replace(" 0", " "), "cells": grid[d]}
+                for d in days]
+        return rows, peak
+    sums = [[0] * 24 for _ in range(7)]
+    counts = [[0] * 24 for _ in range(7)]
+    for h in hours:
+        state, value, _ = cell_of(h)
+        if state != "ok":
+            continue
+        lt = h.astimezone(local)
+        sums[lt.weekday()][lt.hour] += value
+        counts[lt.weekday()][lt.hour] += 1
+    rows = []
+    for wd in range(7):
+        cells = []
+        for hr in range(24):
+            n = counts[wd][hr]
+            v = round(sums[wd][hr] / n) if n else None
+            cells.append({"value": v, "days": n, "state": "ok" if n else "no_data"})
+            if v is not None and (peak["value"] is None or v > peak["value"]):
+                peak = {"value": v, "at": None, "label": "%s %02d:00" % (WEEKDAYS[wd], hr)}
+        rows.append({"label": WEEKDAYS[wd], "cells": cells})
+    return rows, peak
 
 
 def sensor_status(last_capture_at, last_poll, now, offline_min):

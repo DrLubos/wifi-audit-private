@@ -6,7 +6,7 @@
 -- refreshed_at: the newest refresh_rollups() of its sensors; events_at: the
 -- newest change of an event row (detectors, refresh_events(), status writes).
 SELECT a.id, a.name, a.tz, a.write_version,
-       (SELECT st.sensor_offline_min FROM account_settings st WHERE st.account_id = a.id) AS offline_min,
+       st.sensor_offline_min AS offline_min, st.ignore_random_bssid,
        (SELECT max(ss.refreshed_at) FROM sensor_summary ss JOIN sensors s ON s.id = ss.sensor_id
         WHERE s.account_id = a.id) AS refreshed_at,
        (SELECT max(d.updated_at) FROM detections d JOIN sensors s ON s.id = d.sensor_id
@@ -17,6 +17,7 @@ SELECT a.id, a.name, a.tz, a.write_version,
         FROM sensors s LEFT JOIN sensor_summary ss ON ss.sensor_id = s.id
         WHERE s.account_id = a.id) AS sensors
 FROM accounts a
+LEFT JOIN account_settings st ON st.account_id = a.id
 WHERE a.id = %(account_id)s
 
 -- name: sensor_hours

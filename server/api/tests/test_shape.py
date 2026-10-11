@@ -129,5 +129,59 @@ class StatusAndLists(unittest.TestCase):
         self.assertIsNone(shape.parse_ts(None))
 
 
+class Networks(unittest.TestCase):
+    def test_presence_classes(self):
+        net = lambda h, dh, d, mobile=False: {"hours": h, "day_hours": dh, "days": d, "mobile": mobile}  # noqa: E731
+        self.assertEqual(shape.presence(net(150, 70, 7), 166), "permanent")          # 150 >= 0.9 x 166
+        self.assertEqual(shape.presence(net(40, 36, 3), 166), "daytime")
+        self.assertEqual(shape.presence(net(40, 36, 1), 166), "intermittent")        # one day only
+        self.assertEqual(shape.presence(net(5, 5, 1, mobile=True), 166), "transient")
+        self.assertEqual(shape.presence(net(160, 100, 7, mobile=True), 166), "permanent")
+        self.assertEqual(shape.presence(net(0, 0, 0), 0), "intermittent")
+
+    def test_group_changes(self):
+        t = utc(2026, 10, 6, 9, 5, 10)
+        row = lambda i, bssid, ts, sev="info", f="WPA2-PSK", to="WPA3-SAE", net="A": {  # noqa: E731
+            "id": i, "ts": ts, "severity": sev, "bssid": bssid, "network": net, "from_label": f, "to_label": to,
+            "from_mfp": "no", "to_mfp": "capable"}
+        out = shape.group_changes([row(1, "B1", t), row(2, "B2", t.replace(second=40)),
+                                   row(3, "B3", t.replace(minute=6)), row(4, "B4", t, "low", "WPA2-PSK", "WPA2-PSK"),
+                                   row(5, "B5", t, "high", "WPA2-PSK", "Open", "C")])
+        self.assertEqual([(c["network"], c["kind"], c["bssids"], c["from"], c["to"]) for c in out], [
+            ("A", "upgrade", ["B1", "B2"], "WPA2-PSK", "WPA3-SAE"),
+            ("A", "upgrade", ["B3"], "WPA2-PSK", "WPA3-SAE"),
+            ("A", "change", ["B4"], "MFP no", "MFP capable"),
+            ("C", "downgrade", ["B5"], "WPA2-PSK", "Open")])
+
+    def test_heatmap_days_and_dst_end(self):
+        # 30d ending 26 Oct 01:30 local: the local day 25 Oct has 25 hours (02:00 twice)
+        p = periods.period("30d", TZ, utc(2026, 10, 26, 0, 30))
+        h1, h2 = utc(2026, 10, 25, 0), utc(2026, 10, 25, 1)        # 02:00 CEST and 02:00 CET
+        captured = {h1, h2, utc(2026, 10, 25, 5), utc(2026, 10, 25, 6)}
+        clients = {h1: {"total": 10, "by_network": {"A": 10}}, h2: {"total": 30, "by_network": {"A": 30}}}
+        load = {h1, h2, utc(2026, 10, 25, 5)}
+        rows, peak = shape.heatmap(p, TZ, clients, load, captured, "days")
+        self.assertEqual(len(rows), 30)                      # 27 Sep .. 26 Oct (today, partial)
+        day = {r["date"]: r for r in rows}["2026-10-25"]
+        self.assertEqual(day["label"], "Sun 25 Oct")
+        self.assertEqual((day["cells"][2]["value"], day["cells"][2]["start"]), (30, "2026-10-25T01:00:00Z"))
+        self.assertEqual(day["cells"][6]["state"], "ok")      # 05:00 UTC = 06:00 CET: load, no managed AP
+        self.assertEqual(day["cells"][6]["value"], 0)
+        self.assertEqual(day["cells"][7]["state"], "load_missing")
+        self.assertEqual(day["cells"][8]["state"], "no_data")
+        self.assertEqual(rows[-1]["cells"][2]["state"], "outside")   # after now
+        self.assertEqual(peak["value"], 30)
+
+    def test_heatmap_week(self):
+        p = periods.period("7d", TZ, utc(2026, 10, 10, 15, 52))
+        hs = [utc(2026, 10, 5, 8), utc(2026, 10, 5, 9)]      # Mon 10:00 and 11:00 local
+        clients = {hs[0]: {"total": 40, "by_network": {}}, hs[1]: {"total": 20, "by_network": {}}}
+        rows, peak = shape.heatmap(p, TZ, clients, set(hs), set(hs), "week")
+        self.assertEqual([r["label"] for r in rows], list(shape.WEEKDAYS))
+        self.assertEqual(rows[0]["cells"][10], {"value": 40, "days": 1, "state": "ok"})
+        self.assertEqual(rows[1]["cells"][10]["state"], "no_data")
+        self.assertEqual(peak["label"], "Mon 10:00")
+
+
 if __name__ == "__main__":
     unittest.main()
