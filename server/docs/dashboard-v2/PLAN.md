@@ -1197,6 +1197,17 @@ session instead of returning account 1; the write token is retired.
 
 ## 13. Open questions
 
+**Answered 2026-10-11** (D1–D10 approved; decisions recorded in `SPEC.md`):
+all as recommended below, with these additions – Q1: `security_label()` shows
+"WPA2/WPA3 transition", distinct from plain WPA2-PSK; Q4: BEACONRATE **and
+DISCONCODEINVALID** → low; all historical events start `open` and the
+developer labels them (input for RQ2), so status changes stay auditable and a
+bulk Confirm / False-positive action with one note is part of phase 5;
+Q11: account time zone Europe/Bratislava, `pi-fri` hardware "Raspberry Pi
+3B+ · RTL8821CU (USB)", account name and location are filled in by the
+developer in `seed_account.sql` (placeholders in the example), mobile vendors
+Apple, Samsung, Google, OnePlus, Motorola (no Xiaomi/Huawei).
+
 | # | Question | Recommendation |
 |---|---|---|
 | Q1 | WPA2/WPA3 transition mode (PSK + SAE, MFP optional; 122 APs): `psk_no_mfp` or `strong` (as the boards show)? | `psk_no_mfp` – a WPA2-only client connects with PSK and without MFP |

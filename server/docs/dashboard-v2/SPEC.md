@@ -1,9 +1,12 @@
 # Dashboard v2 – specification
 
-Status: approved design, 2026-10-10. Source of truth for the new frontend and
-the schema/API work behind it. The boards in `boards/` show every page; this
-file states what the boards cannot: definitions, data sources, behaviour and
-the order of work.
+Status: approved design, 2026-10-10; amended 2026-10-11 with the changes
+D1–D10 of `PLAN.md` section 2 and the developer's answers to its open
+questions (marked "(D*n*)" / "(Q*n*)" below). Source of truth for the new
+frontend and the schema/API work behind it. The boards in `boards/` show every
+page; this file states what the boards cannot: definitions, data sources,
+behaviour and the order of work. Where a board and this file disagree, this
+file wins (e.g. the security level of WPA2/WPA3 transition mode, D5).
 
 ## 1. How to read the boards
 
@@ -33,8 +36,8 @@ the order of work.
 
 - **UI language English.** Dates `10 Oct 17:52`, 24-hour clock, weekday
   `Sat 10 Oct`, decimal point, minus sign `−` for dBm. Times and day
-  boundaries in Europe/Bratislava (`sensors.tz` defaults to UTC – check the
-  rows and set it, or add an account time zone).
+  boundaries in the account's time zone `accounts.tz` = Europe/Bratislava
+  (Q11; whole-hour offsets only, so bucket edges fall on UTC hours).
 - **Terms** (use exactly these): Managed network (operator's own), Friendly
   network (someone else's, known and legitimate), Unknown, Suspicious, Ignored;
   Fixed AP, Mobile AP (hotspot); Clients; Event; Write locked.
@@ -58,6 +61,9 @@ the order of work.
 - **Performance.** A page never reads raw observations for a range > 48 h
   (existing rule). Cards load in parallel with skeletons; slow cards do not
   block fast ones.
+- **Medians over a period** (per-sensor RSSI chips, friendly-network RSSI)
+  are the median of the hourly medians in the period (Q6); the AP detail RSSI
+  chart draws hourly medians (D8, Q5).
 
 ## 3. Shell
 
@@ -89,18 +95,21 @@ strength always belongs to the pair AP + sensor.
 
 | Term | Definition |
 |---|---|
-| Mobile AP | `random_bssid` (locally administered bit) **or** vendor in the account's mobile-vendor list **or** lifetime `last_seen − first_seen` < 2 h (once it has ended). Fixed AP = not mobile. |
+| Mobile AP | `random_bssid` (locally administered bit) **or** vendor (`devices.manuf`) in the account's mobile-vendor list (default Apple, Samsung, Google, OnePlus, Motorola – editable; Xiaomi and Huawei left out as common home/LTE router vendors, Q11) **or** lifetime `last_seen − first_seen` < 2 h once it has ended (not seen for 1 h). Fixed AP = not mobile. |
 | New AP | account-level `first_seen` falls inside the bucket/period. |
-| Active AP in a bucket | at least one observation from any selected sensor in the bucket. |
-| Security level | SQL function `security_level(crypt, crypt_bits, mfp_sup, mfp_req)` → `open` (no encryption, same rule as `ap_config_changes` uses for Open) · `legacy` (WEP, WPA1, TKIP-only) · `psk_no_mfp` (WPA2-PSK where MFP is not required) · `strong` (any Enterprise/802.1X, SAE/WPA3, or PSK with MFP required) · `unknown`. Derive from Kismet's `crypt_bits` definitions – verify them in Kismet's source, do not guess – with a fixture test like `ap_config_changes_test.sql`. |
+| Active AP in a bucket | at least one observation from any selected sensor in the bucket. Distinct APs are counted per bucket at read time from the AP-hour rows; per-hour counts are not stored, because they cannot be combined into 6-hour or daily buckets (D2). |
+| Active AP now | seen within 5 min of its sensor's last collecting poll (Q8). |
+| Collecting poll | `ok AND ds_running AND devices_active > 0` – a successful poll whose capture delivered devices; `ok` alone counted the 4-day adapter loss as successful (D9). Limited = collecting with `ds_hop_ok = false`. |
+| Security level | SQL function `security_level(crypt, crypt_bits, mfp_sup, mfp_req)`, "weakest offered" (D5): `open` (no encryption, same rule as `ap_config_changes` uses for Open) · `legacy` (WEP, WPA1, or TKIP offered – also next to CCMP, Q2) · `psk_no_mfp` (any PSK AKM where MFP is not required, **including WPA2/WPA3 transition mode**, Q1) · `strong` (any Enterprise/802.1X, SAE or OWE without a PSK AKM, or PSK with MFP required) · `unknown`. `crypt_bits` is Kismet's 64-bit `dot11_crypt_*` set (verified in Kismet 2025-09-R1, `packet_ieee80211.h`; mapping and sources in `PLAN.md` section 5); fixture test like `ap_config_changes_test.sql`. `security_label()` names the configuration for tables and must keep **"WPA2/WPA3 transition"** apart from plain "WPA2-PSK" (Q1). |
 | Network | an SSID within the account. A hidden AP whose real name is known (`name_seen`) belongs to that SSID; otherwise each hidden BSSID counts as its own network. |
 | Network security | the weakest level among its BSSIDs active in the bucket. |
 | Configured network | its SSID is in `networks` (managed or friendly). Mobile network = all its BSSIDs are mobile. Other = the rest. |
 | Compliance (managed network) | every BSSID's actual security meets the network policy (`expected_security`, `require_mfp`); shown as `Compliant` or `Not met n/m`. |
-| Clients of an AP in an hour | AP-reported station count from the BSS Load element (`qbss_stations`) when the AP sends it, otherwise Kismet `num_associated_clients`. Hourly value = max over the hour's polls. When several sensors see the AP, take the max across sensors. |
+| Clients of an AP in an hour | AP-reported station count from the BSS Load element (`qbss_stations`) when the AP sends it (Kismet's `dot11e_qbss` flag from buffer v7; before v7 inferred from a value > 0), otherwise Kismet `num_associated_clients`. Hourly value = max over the hour's polls. When several sensors see the AP, take the max across sensors. |
 | Clients on managed APs | sum over managed APs per hour. Tile: peak hourly sum in the period, plus `hourly average` (24h) / `average 6-hour peak` (7d) / `average daily peak` (30d). Not unique people – the UI says so. |
 | Channel utilization | AP-reported BSS Load channel utilization; per channel and hour = average over the APs on that channel that report it. |
 | Open events | events with status `open`. |
+| Presence (other networks) | permanent = seen in ≥ 90 % of the collecting hours of the period; daytime only = ≥ 80 % of its active hours between 07:00 and 20:00 local, on ≥ 2 days; transient = mobile, shown with the mean lifetime; otherwise intermittent (Q9). |
 
 ## 5. Pages
 
@@ -122,12 +131,32 @@ Each card states whether it follows the period. "Now" cards ignore it.
 - Unified, newest-first feed: detector results, Kismet alerts, security-
   relevant configuration changes, sensor offline/online. Columns: time,
   severity, type, event, AP/network, BSSID (full), sensors, status, actions.
+  - Kismet alerts are **episodes**: alerts of one header on one AP with gaps
+    ≤ 1 h form one event (Q4). SOURCEERROR/SOURCEOPEN are sensor health, not
+    events (they feed the capture-crash count and the outage periods).
+    Severity is Kismet's own (`info 0, low 5, medium 10, high 15, critical
+    20`, `alertracker.h`) with overrides: BEACONRATE and DISCONCODEINVALID →
+    low (D10, Q4).
+  - **Channel changes are not events** (dynamic channel selection: 21,544 in
+    25 days); they stay in the AP's configuration history and in Spectrum
+    (Q3). Configuration events are security changes (crypt, crypt bits, MFP)
+    graded by the level before and after.
+  - The rule event "unknown BSSID broadcasting a managed SSID" comes from the
+    classification (Settings → Classification), independent of the batch
+    evil_twin detector (Q14).
+  - All events, historical ones included, start `open`. Status changes are
+    the operator's labels (input for the false-positive analysis, RQ2): they
+    keep `status_at` and `status_note` and are never overwritten by a refresh
+    or a detector re-run.
 - Filters: status (open / confirmed / false positive), type, managed networks
   only, BSSID/SSID search. Keyset pagination on `(ts, id)`, 50 per page,
   "Newer"/"Older"; never OFFSET.
 - Expanded row: "Why it fired" (evidence) and "Who saw it" (per-sensor RSSI,
   first/last seen, client count). Actions Confirm / False positive need the
   write token.
+- Bulk action (phase 5): select several rows → Confirm / False positive with
+  one note for all of them; each row gets its own status change in the audit
+  log.
 
 **Networks `/networks`** (sensor + period)
 - Rogue banner when an unknown BSSID broadcasts a managed SSID.
@@ -153,15 +182,20 @@ robust σ, floor share, observations), clients heatmap (average week),
 utilization of its channel per 6-hour window with tooltip (average, hourly
 peak), configuration history, events of this AP, note (write token).
 
-**Spectrum `/spectrum`** (sensor + period): band toggle; APs per channel with
-tooltip (count, average utilization, overlap/DFS note); channel plan issues
+**Spectrum `/spectrum`** (sensor + period): band toggle (it also selects the
+heatmap rows: channels of that band with at least one reporting AP, Q13);
+APs per channel – each AP once, on its primary channel (most polls in the
+period) – with tooltip (count, average utilization, overlap/DFS note); channel
+plan issues
 (overlapping 2.4 GHz channels, 40 MHz in 2.4 GHz, busiest channel, channel-
 change frequency, 1/5/9/13 vs 1/6/11 counts); utilization heatmap with views
 *Average day* (24 cells) and *Timeline* (24h: 24 × 1 h, 7d: 168 × 1 h, 30d:
 180 × 4-hour blocks whose tooltip gives average and peak).
 
-**Sensors `/sensors`**: one card per sensor (status, hardware, last poll, last
-upload, coverage, capture crashes, buffer, APs seen and seen only by this
+**Sensors `/sensors`**: until ingest exists the status reads `data until
+<time of the last imported poll>` instead of online/offline, which would show
+every sensor offline between imports (Q7). One card per sensor (status,
+hardware, last poll, last upload, coverage, capture crashes, buffer, APs seen and seen only by this
 sensor, current capture configuration, pending change) with a "Sensor
 settings" link to `/settings/sensors?sensor=<name>`. Coverage per day for 14
 days (sensor toggle; successful / limited channels / outage / not installed)
@@ -181,29 +215,48 @@ with tooltip. Outages and limited periods table.
   interval). Mixed current plans → warning. Upload is **not** a setting
   (always after every poll, section 10). Configuration history with "data
   boundary" marking – a channel-plan change splits measurements for analysis.
+  Until configuration delivery exists (section 10) "Send" stores the desired
+  configuration and the page says plainly that it is not delivered yet (Q10).
 
-## 6. Data model (schema 8, recommended – propose changes in the plan)
+## 6. Data model (schemas 8 and 9 – details in `PLAN.md` section 4)
+
+Two schema versions (D1): **8** = the AP load history only (`ap_load_hourly`,
+phase 1, additive), **9** = everything else below (phase 2).
+
 
 - `accounts(id, name)`; `sensors.account_id`.
-- `aps(id, account_id, bssid UNIQUE per account, classification, classified_by
-  manual|rule, network_id NULL, note, first_seen, last_seen)` and
-  `ap_sensors(ap_id, sensor_id, device_key)`; keep per-sensor `devices`,
-  observations and rollups as they are.
+- `aps(id, account_id, bssid UNIQUE per account, classification, note,
+  first_seen, last_seen)` and `ap_sensors(ap_id, sensor_id, device_key)`;
+  keep per-sensor `devices`, observations and rollups as they are.
+  `aps.classification` holds only the **manual** classification (NULL = the
+  rules decide); the effective classification and `classified_by
+  manual|rule` are computed at read time from the current settings. No
+  `network_id`: an AP's network is its SSID, or `name_seen` for a hidden AP
+  (D3).
 - `networks(id, account_id, ssid, kind managed|friendly, expected_security,
-  require_mfp, allowed_bssids macaddr[], allowed_ouis text[])`.
-- `account_settings(account_id, classification rules, detector parameters,
-  mobile_vendors)` as typed columns or one validated jsonb.
-- Events: give `detections` a `status` (`open|confirmed|false_positive`,
-  migrated from `acked`) and decide in the plan whether Kismet alerts,
-  configuration changes and sensor outages become rows there or a UNION view.
-- **AP load history (new, needed by every clients/utilization chart):**
-  `ap_load_hourly(sensor_id, device_key, hour, polls, clients_max,
-  clients_avg, qbss_max, util_avg, util_max)`. See section 9 for where the
-  data comes from.
-- Rollups for the period cards (bucketable from hourly rows):
-  per account/sensor and hour – active fixed/mobile APs, new APs, open APs,
-  networks by category and by security level, clients on managed APs. Plus a
-  daily level so ranges beyond 30 days stay cheap (section 10).
+  require_mfp, allowed_bssids macaddr[], allowed_ouis macaddr[] (truncated
+  MACs), note)` (D3).
+- `account_settings(account_id, …)` as typed columns: classification rules,
+  detector parameters, `mobile_vendors text[]`.
+- Events are **rows in `detections`** (D6), with `kind`
+  (`detection|kismet|config|sensor`), `status`
+  (`open|confirmed|false_positive`, migrated from `acked`), `status_at`,
+  `status_note`, `ts_end`, `updated_at`. Detector rows are written by the
+  detectors as today; Kismet episodes, security configuration changes and
+  sensor outages are derived by `refresh_events()` inside the refresh, which
+  never touches `status`, `status_at` or `status_note`.
+- **AP load history (schema 8, needed by every clients/utilization chart):**
+  `ap_load_hourly(sensor_id, device_key, hour, channel, polls, clients_polls,
+  clients_max, clients_sum, qbss_polls, qbss_max, qbss_sum, util_max,
+  util_sum, source buffer|v5_obs)` – sums and counts instead of means so
+  partial hours merge exactly ("the row with more polls wins"), the AP's
+  advertised channel in the key because campus APs change channel many times
+  a day (D4). Source data like `observations`, not written by the refresh.
+  See section 9 for where the data comes from.
+- Period cards count distinct APs / networks per bucket from the AP-hour
+  rows (`ap_rssi_hourly`, `ap_load_hourly`) at read time (D2); a daily
+  presence level for ranges beyond 30 days is designed (section 10,
+  `PLAN.md` 11.2), not built.
 - Sensor configuration: `sensor_config(sensor_id, version, channel_plan,
   channels, dwell_s, poll_s, created_at, confirmed_at NULL)`; newest row =
   desired, `confirmed_at` set when the sensor reports it applied it.
@@ -215,6 +268,10 @@ with tooltip. Outages and limited periods table.
 Read endpoints are public until login; every write needs the write token
 (section 8). All period endpoints take `sensor` and `range` and return buckets
 with explicit `start`, `end`, coverage per sensor and `null` for no data.
+The new endpoints live under **`/api/v2/`** while the current ones stay for
+the old pages; the old ones are removed after the frontend switch (D7). The
+paths below are relative to that prefix; full list with parameters and
+response shapes in `PLAN.md` section 7.
 
 - `GET /api/health` (exists) · `GET /api/sensors` (status for sidebar/cards)
 - `GET /api/overview?sensor&range` (current-status block + period tiles + AP
@@ -232,7 +289,9 @@ with explicit `start`, `end`, coverage per sensor and `null` for no data.
   `GET /api/settings/sensors` · `POST /api/settings/sensors` (body: sensor
   names + config)
 - Keep ETag/304 on everything derived from rollups (today's
-  `sensor_summary.refreshed_at` pattern).
+  `sensor_summary.refreshed_at` pattern). The tag of a period endpoint also
+  carries the current bucket (hour / 6-hour window / day), the account's
+  write version and the newest event change.
 
 ## 8. Write token (until login)
 
@@ -245,10 +304,11 @@ account) and login can replace it.
 
 ## 9. Known data gap: client and utilization history
 
-Since collector buffer v6 (2026-10-03 11:00:20 UTC) neither the Pi nor the
-server keeps per-poll client counts or utilization – only the latest value
-(`devices.cur_*`). Until that changes, the clients heatmap, the clients tile,
-the Spectrum utilization heatmap and the AP utilization chart have no data.
+From collector buffer v6 (2026-10-03 11:00:20 UTC) to buffer v7 neither the
+Pi nor the server keeps per-poll client counts or utilization – only the
+latest value (`devices.cur_*`). That window has no load history and the
+charts mark it "client counts were not recorded"; buffer v7 records
+`ap_load_hourly` again (phase 1).
 
 - The collector needs to record AP load again, compactly: e.g. an hourly
   aggregate per AP in the buffer (`ap_load_hourly`, a few thousand rows a day)
@@ -257,14 +317,15 @@ the Spectrum utilization heatmap and the AP utilization chart have no data.
   version, and the developer deploys it on the Pi. Do it early so history
   accumulates while the frontend is built.
 - History before 2026-10-03 11:00 UTC still exists in the old per-poll columns
-  (`n_clients`, `qbss_stations`, `util_pct`):
-  - on the server in `observations_v5` (data up to the last import,
-    2026-10-01 07:37 UTC) and in the pre-migration dump – backfill
-    `ap_load_hourly` from it before `observations_v5` is dropped;
-  - for 2026-10-01 07:37 → 2026-10-03 11:00 only in the Pi buffer, which keeps
-    14 days. The next snapshot export carries those rows; keep that snapshot
-    file and let the backfill read it (the current importer ignores these
-    columns).
+  (`n_clients`, `qbss_stations`, `util_pct`). `observations_v5` has been
+  dropped (checked 2026-10-11); the data is in files on the server box, which
+  must be kept until the backfill is verified:
+  - `backups/wifi_audit-20261003T103952Z.dump` (pre-migration dump,
+    2026-09-15 13:53 → 2026-10-01 07:37 UTC) – backfilled with
+    `ops/backfill_ap_load_from_dump.sh`;
+  - `buffer-snapshot-20261010.db` (load values up to 2026-10-03 11:00:02)
+    and `buffer-snapshot.db` – re-imported with the v7 importer, which turns
+    the per-poll columns into hourly rows (`source = 'v5_obs'`).
 
 ## 10. Later phases (design for them now, build them later)
 
