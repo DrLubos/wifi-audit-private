@@ -95,7 +95,17 @@ python3 seed/import_snapshot.py buffer-snapshot.db --sensor pi-fri \
   its `cur_at` is at least as new as the stored one; a v5 snapshot leaves it
   unchanged. Apply schema 7 (`ops/migrate_schema7.sh`) before importing with
   this importer.
-- Buffer schema v2 to v6 snapshots are accepted. v3 (collector deployed
+- **Server schema 8 / buffer v7:** a v7 buffer's `ap_load_hourly` (AP load
+  per UTC hour and advertised channel) is merged into the server table of the
+  same name (`source 'buffer'`); the row with more polls wins, so the partial
+  current hour of one snapshot is replaced by the complete hour of the next.
+  Observation rows that still carry the per-poll `n_clients` /
+  `qbss_stations` / `util_pct` (written by buffers <= v5; still in a snapshot
+  until the Pi's retention removes them) are staged as `stage_load_samples`
+  and turned into hourly rows by `load_ap_load_samples()` (`source
+  'v5_obs'`, channel from the configuration history). Apply schema 8
+  (`ops/migrate_schema8.sh`) before importing with this importer.
+- Buffer schema v2 to v7 snapshots are accepted. v3 (collector deployed
   2026-09-22 or later) carries `observations.disconnects_last`, v4 (2026-09-27 or
   later) `polls.ds_hop_n / ds_hop_visited / ds_hop_ok` (hop-list coverage), v5
   `observations.rssi_floor` (the RSSI was an adapter floor value, stored as NULL

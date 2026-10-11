@@ -15,6 +15,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
@@ -28,11 +29,12 @@ CLIENT = "4202770D00000000_112233445566"
 
 
 def make_buffer(path):
-    """A small v6 buffer: 3 polls, an AP and a client with observations, one
-    history row, one alert, the AP's load on devices, client_bssids. The rows
-    are written like a v5 collector did (all columns, the client's BSSID per
-    poll) - a v6 buffer still holds such rows until the retention removes
-    them."""
+    """A small buffer of the collector's current version (v7): 3 polls, an AP
+    and a client with observations, one history row, one alert, the AP's load
+    on devices, client_bssids, ap_load_hourly. The observation rows are
+    written like a v5 collector did (all columns, the client's BSSID and the
+    AP load per poll) - a v6/v7 buffer still holds such rows until the
+    retention removes them."""
     s = store.Store(path)
     db = s.db
     db.execute("BEGIN")
@@ -64,18 +66,25 @@ def make_buffer(path):
     db.execute("INSERT INTO client_bssids (client_key, bssid, first_seen, last_seen) VALUES "
                "(?, 'A1:B2:C3:D4:E5:F6', 1758981000, 1758982000), "
                "(?, 'A1:B2:C3:D4:E5:F7', 1758981800, 1758981800)", (CLIENT, CLIENT))
+    db.execute("INSERT INTO ap_load_hourly (key, hour, channel, polls, clients_polls, clients_max, "
+               "clients_sum, qbss_polls, qbss_max, qbss_sum, util_max, util_sum, first_ts, last_ts) "
+               "VALUES (?, 1758981600, '6', 2, 2, 4, 7, 1, 2, 2, 12.5, 12.5, 1758981630, 1758981900), "
+               "(?, 1758981600, '', 1, 0, NULL, NULL, 0, NULL, NULL, NULL, NULL, 1758981600, 1758981600)",
+               (AP, CLIENT))
     db.execute("COMMIT")
     s.close()
 
 
 def make_v5(path):
-    """The same buffer as a v5 collector left it: no devices.cur_*, no client_bssids."""
+    """The same buffer as a v5 collector left it: no devices.cur_*, no
+    client_bssids, no ap_load_hourly."""
     make_buffer(path)
     db = sqlite3.connect(path)
     cols = [r[1] for r in db.execute("PRAGMA table_info(devices)") if not r[1].startswith("cur_")]
     db.executescript("""
         UPDATE meta SET value = '5' WHERE key = 'schema_version';
         DROP TABLE client_bssids;
+        DROP TABLE ap_load_hourly;
         CREATE TABLE d5 AS SELECT %s FROM devices;
         DROP TABLE devices;
         ALTER TABLE d5 RENAME TO devices;
@@ -177,6 +186,32 @@ class Stream(unittest.TestCase):
         self.assertEqual(dev[AP][-4:], ["3", "2", "12.5", "1758981900"])
         self.assertEqual(dev[CLIENT][-4:], ["\\N"] * 4)
 
+    def test_ap_load_hourly_rows_merge_fuller_wins(self):
+        sql = self.stream()
+        rows = staged(sql)["ap_load_hourly"]
+        self.assertEqual([r for r in rows if r[0] == AP],
+                         [[AP, "1758981600", "6", "2", "2", "4", "7", "1", "2", "2", "12.5", "12.5"]])
+        self.assertEqual(len(rows), 2)        # the client's row is staged, the merge drops it
+        merge = sql.split("INSERT INTO ap_load_hourly AS t")[1].split(";")[0]
+        self.assertIn("JOIN devices d ON d.sensor_id = :sid AND d.device_key = s.device_key "
+                      "AND d.type = 'ap'", merge)
+        self.assertIn("'buffer'", merge)
+        self.assertIn("WHERE EXCLUDED.polls > t.polls", merge)
+
+    def test_v5_load_columns_become_load_samples(self):
+        sql = self.stream()
+        def iso(ts):
+            return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S+00")
+        rows = sorted(staged(sql)["load_samples"])
+        # AP rows only (a client never carries the columns), ts as timestamptz text
+        self.assertEqual(rows, [[iso(ts), AP, "3", "2", "12.5"]
+                                for ts in (1758981600, 1758981630, 1758981900)])
+        call = sql.index("SELECT * FROM load_ap_load_samples(:sid);")
+        self.assertLess(sql.index("COPY stage_load_samples FROM STDIN;"), call)
+        # the channel of a sample comes from the history merged before
+        self.assertLess(sql.index("INSERT INTO device_config_history"), call)
+        self.assertLess(call, sql.index("COMMIT;"))
+
     def test_buffer_version_check(self):
         db = sqlite3.connect(self.path)
         v = db.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
@@ -197,6 +232,8 @@ class StreamV5(unittest.TestCase):
             db.close()
         rows = staged(out.getvalue())
         self.assertEqual(len(rows["observations"]), 3)
+        self.assertNotIn("ap_load_hourly", rows)          # no such table before v7
+        self.assertEqual(len(rows["load_samples"]), 3)
         self.assertEqual(rows["client_bssids"], [[CLIENT, "A1:B2:C3:D4:E5:F6", "1758981600", "1758981900"]])
         self.assertEqual({tuple(r[-4:]) for r in rows["devices"]}, {("\\N",) * 4})
 

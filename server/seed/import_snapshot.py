@@ -23,6 +23,11 @@ What the stream does
                  type from whichever row was seen last
        associations, probes: LEAST / GREATEST of first / last
        device_freq_hist: the row with the newer updated_ts wins
+       ap_load_hourly (buffer v7): the row with more polls wins
+     and, for observation rows that still carry the per-poll AP load columns
+     (written by buffers <= v5), stages them as stage_load_samples and calls
+     load_ap_load_samples() (schema 8), which turns them into ap_load_hourly
+     rows of source 'v5_obs' - the same fuller-wins merge,
   3. refreshes ap_baselines for the sensor (unless --no-baselines),
   4. prints per-table row counts for the sensor.
 
@@ -42,9 +47,10 @@ COMMIT the stream
      re-run by hand (idempotent).
 
 Column and semantics reference: wifi-sensor/collector/store.py (buffer schema v2
-to v5; v3 added observations.disconnects_last, v4 polls.ds_hop_*, v5
+to v7; v3 added observations.disconnects_last, v4 polls.ds_hop_*, v5
 observations.rssi_floor; older snapshots import them as NULL - their floor
-readings stay raw in rssi and are read through rssi_valid()) and server/schema.sql.
+readings stay raw in rssi and are read through rssi_valid(); v6 devices.cur_*
+and client_bssids; v7 ap_load_hourly) and server/schema.sql (schema 8).
 """
 
 import argparse
@@ -55,7 +61,7 @@ import sys
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-EXPECTED_SCHEMA_VERSIONS = ("2", "3", "4", "5", "6")
+EXPECTED_SCHEMA_VERSIONS = ("2", "3", "4", "5", "6", "7")
 
 _MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
 # COPY text format: backslash, tab, newline and carriage return are escaped;
@@ -77,6 +83,8 @@ _CONFIG_COLS = ("ssid", "cloaked", "crypt", "crypt_bits", "mfp_sup", "mfp_req",
 # where:  SQLite filter on the snapshot rows.
 # select: function(db) -> the SQLite SELECT, instead of the generated one.
 # macs:   staging columns that must be a MAC address (validated before COPY).
+# optional_table: the buffer table exists only from some version on; a
+#         snapshot without it skips the spec.
 # insert: the merge statement; :sid is the psql variable holding sensors.id.
 # track:  time-series table: the merge records how many rows it inserted and
 #         the earliest ts among them in import_from (refresh_rollups' p_from).
@@ -115,6 +123,17 @@ def _cur_newer_wins(col):
     return ("%s = CASE WHEN EXCLUDED.cur_at IS NOT NULL AND (devices.cur_at IS NULL "
             "OR EXCLUDED.cur_at >= devices.cur_at) THEN EXCLUDED.%s ELSE devices.%s END"
             % (col, col, col))
+
+
+# Per-poll AP load samples of observation rows written by buffers <= v5 (v6
+# and later leave the columns NULL), for load_ap_load_samples(). The ts goes
+# in as timestamptz text, the shape that function reads (shared with the dump
+# backfill, ops/backfill_ap_load_from_dump.sh); non-AP rows never carry the
+# columns, the AP filter is a guard.
+def _load_samples_select(db):
+    return ("SELECT strftime('%Y-%m-%d %H:%M:%S+00', ts, 'unixepoch'), key, n_clients, "
+            "qbss_stations, util_pct FROM observations WHERE n_clients IS NOT NULL "
+            "AND key IN (SELECT key FROM devices WHERE type = 'ap')")
 
 
 def _client_bssids_select(db):
@@ -226,6 +245,42 @@ TABLES = [
             "JOIN devices d ON d.sensor_id = :sid AND d.device_key = s.device_key AND d.type = 'ap'\n"
             "ORDER BY s.ts, s.device_key\n"
             "ON CONFLICT DO NOTHING;"),
+    },
+    {
+        # Buffer v7: the collector's hourly AP load rows; schema 8.
+        "name": "ap_load_hourly",
+        "optional_table": True,
+        "stage": [("device_key", "text", "key"), ("hour", "bigint"), ("channel", "text"),
+                  ("polls", "integer"), ("clients_polls", "integer"), ("clients_max", "integer"),
+                  ("clients_sum", "integer"), ("qbss_polls", "integer"), ("qbss_max", "integer"),
+                  ("qbss_sum", "integer"), ("util_max", "real"), ("util_sum", "real")],
+        "macs": (),
+        "insert": (
+            "INSERT INTO ap_load_hourly AS t (sensor_id, device_key, hour, channel, polls, "
+            "clients_polls, clients_max, clients_sum, qbss_polls, qbss_max, qbss_sum, util_max, "
+            "util_sum, source)\n"
+            "SELECT :sid, s.device_key, to_timestamp(s.hour), s.channel, s.polls, s.clients_polls, "
+            "s.clients_max, s.clients_sum, s.qbss_polls, s.qbss_max, s.qbss_sum, s.util_max, "
+            "s.util_sum, 'buffer'\n"
+            "FROM stage_ap_load_hourly s\n"
+            "JOIN devices d ON d.sensor_id = :sid AND d.device_key = s.device_key AND d.type = 'ap'\n"
+            "ON CONFLICT (sensor_id, device_key, hour, channel) DO UPDATE SET\n"
+            "  polls = EXCLUDED.polls, clients_polls = EXCLUDED.clients_polls,\n"
+            "  clients_max = EXCLUDED.clients_max, clients_sum = EXCLUDED.clients_sum,\n"
+            "  qbss_polls = EXCLUDED.qbss_polls, qbss_max = EXCLUDED.qbss_max,\n"
+            "  qbss_sum = EXCLUDED.qbss_sum, util_max = EXCLUDED.util_max,\n"
+            "  util_sum = EXCLUDED.util_sum, source = EXCLUDED.source\n"
+            "  WHERE EXCLUDED.polls > t.polls;"),
+    },
+    {
+        # The per-poll AP load of rows from buffers <= v5 -> ap_load_hourly
+        # (schema 8, load_ap_load_samples(), source 'v5_obs').
+        "name": "load_samples",
+        "select": _load_samples_select,
+        "stage": [("ts", "timestamptz"), ("device_key", "text"), ("n_clients", "integer"),
+                  ("qbss_stations", "integer"), ("util_pct", "real")],
+        "macs": (),
+        "insert": "SELECT * FROM load_ap_load_samples(:sid);",
     },
     {
         "name": "device_freq_hist",
@@ -353,8 +408,9 @@ def snapshot_summary(db):
     out = {}
     tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     for t in ("polls", "devices", "device_config_history", "observations",
-              "device_freq_hist", "associations", "client_bssids", "probes", "alerts"):
-        if t in tables:                              # client_bssids: buffer v6
+              "device_freq_hist", "associations", "client_bssids", "probes", "alerts",
+              "ap_load_hourly"):
+        if t in tables:                              # client_bssids: v6, ap_load_hourly: v7
             out[t] = db.execute("SELECT COUNT(*) FROM %s" % t).fetchone()[0]
     lo, hi = db.execute("SELECT MIN(ts), MAX(ts) FROM polls").fetchone()
     return out, lo, hi
@@ -431,7 +487,11 @@ def emit_stream(out, db, args, log):
     out.write("SELECT now() AT TIME ZONE (SELECT tz FROM sensors WHERE id = :sid) AS tz_check;\n")
 
     # 2. staged copy + merge, devices first (foreign keys).
+    tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     for spec in TABLES:
+        if spec.get("optional_table") and spec["name"] not in tables:
+            log("  %-22s   (not in this buffer version)" % spec["name"])
+            continue
         emit_copy(out, db, spec, log)
         out.write(merge_sql(spec))
         out.write("\n")
@@ -446,8 +506,8 @@ def emit_stream(out, db, args, log):
     out.write("\\echo -- row counts for sensor %s\n" % args.sensor)
     parts = ["('%s', (SELECT count(*) FROM %s WHERE sensor_id = :sid))" % (t, t)
              for t in ("polls", "devices", "device_config_history", "observations",
-                       "device_freq_hist", "associations", "client_bssids", "probes", "alerts",
-                       "ap_baselines", "detections")]
+                       "ap_load_hourly", "device_freq_hist", "associations", "client_bssids",
+                       "probes", "alerts", "ap_baselines", "detections")]
     out.write("SELECT * FROM (VALUES\n  %s) AS t (table_name, n_rows);\n" % ",\n  ".join(parts))
     out.write("COMMIT;\n")
 
