@@ -1264,7 +1264,8 @@ CREATE TABLE IF NOT EXISTS sensor_summary (
   alerts_last_ts   timestamptz,
   baselines        integer NOT NULL,         -- ap_baselines rows with statistics
   refreshed_at     timestamptz NOT NULL,     -- when refresh_rollups() last ran: the api's ETag
-  -- schema 9: the last collecting poll and the hop list of the last poll
+  -- schema 9: the last collecting poll and the hop list as last measured
+  -- (the newest poll with hop values; a poll of a dead datasource has none)
   last_capture_at  timestamptz,
   last_hop_n       integer,
   last_hop_visited integer,
@@ -1438,8 +1439,9 @@ $$;
 --   config  every change point of ap_security_periods: down to open high,
 --           other downgrades medium, same level low, upgrades info.
 --   sensor  sensor_periods of at least account_settings.sensor_offline_min
---           (outage, medium) or 10 min (limited, low), cause from
---           sensor_annotations.
+--           (outage, medium) or 10 min (limited, low), cause from the
+--           overlapping sensor_annotations (gap/no_frames for an outage,
+--           coverage for a limited period).
 --   rule    detection 'unknown_bssid_managed_ssid' for every AP that the
 --           classification rules (not a manual classification) mark suspicious.
 -- Only ts/ts_end/severity/summary/evidence of a stored row are refreshed, and
@@ -1579,7 +1581,10 @@ BEGIN
            'duration_s', extract(epoch FROM coalesce(sp.ends_at, v_last_poll) - sp.starts_at)::integer,
            'cause', (SELECT string_agg(an.label, '; ' ORDER BY an.starts_at)
                      FROM sensor_annotations an
-                     WHERE an.sensor_id = sp.sensor_id AND an.kind IN ('gap', 'no_frames', 'coverage')
+                     WHERE an.sensor_id = sp.sensor_id
+                       -- an outage's cause is a gap / no-frames note, a limited period's a coverage note
+                       AND CASE sp.kind WHEN 'outage' THEN an.kind IN ('gap', 'no_frames')
+                                        ELSE an.kind = 'coverage' END
                        AND an.starts_at < coalesce(sp.ends_at, 'infinity')
                        AND coalesce(an.ends_at, an.starts_at) > sp.starts_at))
   FROM sensor_periods sp
@@ -1900,7 +1905,8 @@ BEGIN
                count(*) FILTER (WHERE ok) AS polls_ok, coalesce(sum(new_obs), 0) AS obs_total
         FROM polls WHERE sensor_id = p_sensor_id) pl
   LEFT JOIN LATERAL (SELECT ds_hop_n, ds_hop_visited, ds_hop_ok FROM polls
-                     WHERE sensor_id = p_sensor_id ORDER BY ts DESC LIMIT 1) lp ON true
+                     WHERE sensor_id = p_sensor_id AND ds_hop_n IS NOT NULL
+                     ORDER BY ts DESC LIMIT 1) lp ON true
   ON CONFLICT (sensor_id) DO UPDATE SET
       first_poll = EXCLUDED.first_poll, last_poll = EXCLUDED.last_poll,
       polls = EXCLUDED.polls, polls_ok = EXCLUDED.polls_ok,

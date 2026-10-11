@@ -49,7 +49,8 @@ SELECT sensor_id, last_poll, last_capture_at, last_hop_n, last_hop_visited, last
 \echo == sensor periods (findings section 6) and their annotations
 SELECT p.kind, p.starts_at, p.ends_at, coalesce(p.ends_at, s.last_poll) - p.starts_at AS length, p.polls,
        (SELECT string_agg(a.label, '; ') FROM sensor_annotations a
-        WHERE a.sensor_id = p.sensor_id AND a.kind IN ('gap', 'no_frames', 'coverage')
+        WHERE a.sensor_id = p.sensor_id
+          AND CASE p.kind WHEN 'outage' THEN a.kind IN ('gap', 'no_frames') ELSE a.kind = 'coverage' END
           AND a.starts_at < coalesce(p.ends_at, 'infinity') AND coalesce(a.ends_at, a.starts_at) > p.starts_at) AS cause
 FROM sensor_periods p JOIN sensor_summary s USING (sensor_id) ORDER BY p.starts_at;
 SELECT kind, count(*) FROM sensor_annotations GROUP BY 1 ORDER BY 1;
