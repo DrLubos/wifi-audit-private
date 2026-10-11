@@ -13,9 +13,11 @@ from ..deps import epoch, get_sensor, not_modified, require_rollups, rollup_etag
 
 router = APIRouter(prefix="/api", tags=["overview"])
 
+# Detector rows only (schema 9: detections also holds the derived events of
+# dashboard v2, kind <> 'detection'); "open" = status open (was NOT acked).
 _DETECTIONS = """
-    SELECT count(*) AS total, count(*) FILTER (WHERE NOT acked) AS open, max(ts) AS last_ts
-    FROM detections WHERE sensor_id = %s"""
+    SELECT count(*) AS total, count(*) FILTER (WHERE status = 'open') AS open, max(ts) AS last_ts
+    FROM detections WHERE sensor_id = %s AND kind = 'detection'"""
 
 
 @router.get("/overview")

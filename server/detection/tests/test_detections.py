@@ -28,15 +28,17 @@ class RefreshTest(unittest.TestCase):
         self.assertEqual(ev["a"], 2)
         self.assertNotIn("stale", ev)          # latest run wins
 
-    def test_update_never_touches_the_acknowledgement(self):
+    def test_update_never_touches_the_operators_label(self):
         sql = detections._UPDATE_SQL.lower()
-        for col in ("acked", "acked_at", "ack_note", "created_at"):
+        for col in ("status", "status_at", "status_note", "created_at"):
             self.assertNotIn(col, sql)
+        self.assertIn("updated_at = now()", sql)
         self.assertIn("where id = %(id)s", sql)
 
     def test_overlap_lookup_is_scoped_and_locked(self):
         sql = detections._OVERLAP_SQL.lower()
         self.assertIn("type = %(type)s", sql)
+        self.assertIn("kind = 'detection'", sql)           # never a derived event row (schema 9)
         self.assertIn("coalesce(device_key, upper(mac::text)) = %(subject)s", sql)
         self.assertIn("for update", sql)
 

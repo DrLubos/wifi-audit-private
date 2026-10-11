@@ -1,7 +1,10 @@
 """GET /api/detections, /api/detections/{id} - server-side detections (detection/).
 
 Read-only: rows are written by the batch detectors and acknowledged elsewhere
-(no ack endpoint yet). The list carries no evidence (it is most of a row's
+(no ack endpoint yet). Schema 9: detections is also the event table of
+dashboard v2; these (old) endpoints show the detector rows only (kind
+'detection') and keep their response shape - acked = status <> 'open',
+acked_at / ack_note = status_at / status_note. The list carries no evidence (it is most of a row's
 size); GET /api/detections/{id} returns one row with it, loaded when a row is
 expanded. Filters narrow the list; the summary counters are always over the
 whole sensor so the page header does not move with the filters.
@@ -20,7 +23,8 @@ SEVERITIES = ("info", "low", "medium", "high", "critical")
 # device row (an attacker spoofing a BSSID Kismet never classified).
 _SELECT = """
     SELECT d.id, d.ts, d.type, d.severity, d.device_key, upper(d.mac::text) AS mac, d.ssid,
-           d.summary, d.acked, d.acked_at, d.ack_note, d.created_at,
+           d.summary, d.status <> 'open' AS acked, d.status_at AS acked_at,
+           d.status_note AS ack_note, d.created_at,
            ap.device_key AS ap_device_key, ap.ssid AS ap_ssid,
            upper(ap.bssid::text) AS ap_bssid, ap.hidden AS ap_hidden, ap.trusted AS ap_trusted{extra}
     FROM detections d
@@ -32,19 +36,19 @@ _SELECT = """
       ORDER BY last_seen DESC LIMIT 1) ap ON true"""
 
 _LIST = _SELECT.format(extra="") + """
-    WHERE d.sensor_id = %(sid)s
+    WHERE d.sensor_id = %(sid)s AND d.kind = 'detection'
       AND (%(severity)s::text    IS NULL OR d.severity = %(severity)s)
       AND (%(type)s::text        IS NULL OR d.type = %(type)s)
-      AND (%(acked)s::boolean    IS NULL OR d.acked = %(acked)s)
+      AND (%(acked)s::boolean    IS NULL OR (d.status <> 'open') = %(acked)s)
     ORDER BY d.ts DESC, d.id DESC
     LIMIT %(limit)s"""
 
 _ONE = _SELECT.format(extra=", d.evidence") + """
-    WHERE d.sensor_id = %s AND d.id = %s"""
+    WHERE d.sensor_id = %s AND d.id = %s AND d.kind = 'detection'"""
 
 _SUMMARY = """
-    SELECT severity, type, count(*) AS n, count(*) FILTER (WHERE NOT acked) AS open
-    FROM detections WHERE sensor_id = %s GROUP BY severity, type"""
+    SELECT severity, type, count(*) AS n, count(*) FILTER (WHERE status = 'open') AS open
+    FROM detections WHERE sensor_id = %s AND kind = 'detection' GROUP BY severity, type"""
 
 
 @router.get("/detections")

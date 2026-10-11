@@ -7,8 +7,9 @@ detector's episode gap; a match is refreshed in place (ts, severity, summary,
 evidence, identity), otherwise a row is inserted. So a re-run over the same,
 a shifted or an overlapping window never duplicates an episode, and re-running
 with other thresholds re-grades the stored episode (latest run wins). What is
-never touched on a refresh: id, acked, acked_at, ack_note, created_at - the
-operator's acknowledgement survives. The evidence keeps `runs`, `first_run_at`
+never touched on a refresh: id, status, status_at, status_note, created_at -
+the operator's label survives (schema 9; acked / ack_note before). A refresh
+sets updated_at (the dashboard's ETags). The evidence keeps `runs`, `first_run_at`
 and `last_run_at` across refreshes.
 
 The subject is the AP's device_key, or its BSSID (upper-case text) when no
@@ -24,9 +25,9 @@ from datetime import datetime
 from .common import UTC, iso
 
 _OVERLAP_SQL = """
-SELECT id, ts, severity, acked, evidence
+SELECT id, ts, severity, status, evidence
 FROM detections
-WHERE sensor_id = %(sid)s AND type = %(type)s
+WHERE sensor_id = %(sid)s AND kind = 'detection' AND type = %(type)s
   AND coalesce(device_key, upper(mac::text)) = %(subject)s
   AND evidence ? 'window_start' AND evidence ? 'window_end'
   AND (evidence->>'window_end')::timestamptz   >= %(start)s - %(gap_s)s * interval '1 second'
@@ -40,11 +41,11 @@ VALUES (%(sid)s, %(ts)s, %(type)s, %(severity)s, %(device_key)s, %(mac)s::macadd
         %(summary)s, %(evidence)s::jsonb)
 RETURNING id"""
 
-# acked / acked_at / ack_note / created_at are deliberately absent.
+# status / status_at / status_note / created_at are deliberately absent.
 _UPDATE_SQL = """
 UPDATE detections
 SET ts = %(ts)s, severity = %(severity)s, device_key = %(device_key)s, mac = %(mac)s::macaddr,
-    ssid = %(ssid)s, summary = %(summary)s, evidence = %(evidence)s::jsonb
+    ssid = %(ssid)s, summary = %(summary)s, evidence = %(evidence)s::jsonb, updated_at = now()
 WHERE id = %(id)s"""
 
 

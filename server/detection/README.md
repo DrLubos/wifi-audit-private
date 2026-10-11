@@ -50,8 +50,9 @@ new episode widened by the detector's episode gap. A match is refreshed in place
 - `ts`, `severity`, `summary`, `evidence`, identity - otherwise a row is
 inserted. So re-running over the same, a shifted or an overlapping window never
 duplicates an episode, and re-running with other thresholds re-grades the stored
-episode (latest run wins). Never touched on a refresh: `id`, `acked`, `acked_at`,
-`ack_note`, `created_at`. The evidence carries `runs`, `first_run_at` and
+episode (latest run wins). Never touched on a refresh: `id`, `status`,
+`status_at`, `status_note` (schema 9; `acked`/`acked_at`/`ack_note` before),
+`created_at`; a refresh sets `updated_at`. The evidence carries `runs`, `first_run_at` and
 `last_run_at` across refreshes. `schema.sql` adds a unique index on
 `(sensor_id, type, coalesce(device_key, upper(mac::text)), ts)` as the guarantee
 for an exact re-run.

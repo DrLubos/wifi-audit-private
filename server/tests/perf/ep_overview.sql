@@ -7,8 +7,8 @@ SELECT s.id, s.name, s.location, s.tz, ss.refreshed_at
 FROM sensors s LEFT JOIN sensor_summary ss ON ss.sensor_id = s.id ORDER BY s.id LIMIT 1;
 \echo == /api/overview: detections (live)
 EXPLAIN (ANALYZE, BUFFERS)
-SELECT count(*) AS total, count(*) FILTER (WHERE NOT acked) AS open, max(ts) AS last_ts
-FROM detections WHERE sensor_id = :sid;
+SELECT count(*) AS total, count(*) FILTER (WHERE status = 'open') AS open, max(ts) AS last_ts
+FROM detections WHERE sensor_id = :sid AND kind = 'detection';
 \echo == /api/overview: sensor_summary
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT * FROM sensor_summary WHERE sensor_id = :sid;

@@ -122,11 +122,11 @@ class FakeConn:
             hits = [r for r in self.stored if r["type"] == params["type"]
                     and r["subject"] == params["subject"]
                     and r["window_end"] >= params["start"] and r["window_start"] <= params["end"]]
-            return FakeResult([dict(id=r["id"], ts=r["ts"], severity=r["severity"], acked=r["acked"],
+            return FakeResult([dict(id=r["id"], ts=r["ts"], severity=r["severity"], status=r["status"],
                                     evidence=r["evidence"]) for r in hits])
         if sql is detections._INSERT_SQL:
             row = dict(params, id=self.next_id, subject=params["device_key"] or params["mac"].upper(),
-                       acked=False, evidence=json.loads(params["evidence"]))
+                       status="open", evidence=json.loads(params["evidence"]))
             row["window_start"] = ts(row["evidence"]["window_start"])
             row["window_end"] = ts(row["evidence"]["window_end"])
             self.stored.append(row)
