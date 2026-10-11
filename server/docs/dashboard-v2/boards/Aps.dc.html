@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Access points</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F2;color:#1C2024;font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px;line-height:1.45}
+a{color:#0B5C7A}a:hover{color:#07445B}
+h1,h2,h3{margin:0;font-weight:600}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:13px}
+.muted{color:#535B63}
+.b{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E3F1E8;color:#1D6B43}.warn{background:#FCEBD5;color:#8A4B00}.bad{background:#FBE3E1;color:#A61B1B}.info{background:#E2ECF8;color:#1F4E8C}.neu{background:#ECEEEA;color:#3F474E}.mute{background:#F4F5F2;color:#535B63;border:1px solid #DADDD6}
+.card{background:#FFFFFF;border:1px solid #DADDD6;border-radius:10px}
+.t{width:100%;border-collapse:collapse}.t th{text-align:left;font-weight:500;color:#535B63;font-size:12px;padding:10px 12px;border-bottom:1px solid #DADDD6;white-space:nowrap}.t td{padding:10px 12px;border-bottom:1px solid #ECEEEA;vertical-align:middle}
+.nw td{white-space:nowrap}
+.app{display:flex;flex-wrap:wrap;min-height:100vh}
+.side{flex:1 1 220px;background:#1F2A2E;color:#E6EAE8;padding:22px 14px;box-sizing:border-box;display:flex;flex-direction:column;gap:18px}
+@media (min-width:900px){.side{flex:0 0 232px;position:sticky;top:0;height:100vh;align-self:flex-start}}
+.main{flex:999 1 560px;min-width:0;display:flex;flex-direction:column}
+.nav{display:flex;flex-wrap:wrap;gap:2px}
+.nav a{display:flex;align-items:center;padding:10px 12px;border-radius:8px;color:#E6EAE8;text-decoration:none;min-height:24px;flex:1 1 180px}
+.nav a:hover{background:#2A383D;color:#FFFFFF}
+.nav a[aria-current="page"]{background:#33464C;color:#FFFFFF;font-weight:500}
+.sb{padding:12px 8px 0;border-top:1px solid #33464C;display:flex;flex-direction:column;gap:7px;font-size:12px;color:#C3CCCA}
+.sbh{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8E9A98}
+.sbi{display:flex;align-items:center;gap:8px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:0 0 auto}
+.top{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;padding:14px 32px;background:#FFFFFF;border-bottom:1px solid #DADDD6;min-height:44px}
+.fl{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#535B63}
+.sel{height:40px;padding:0 10px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:14px;color:#1C2024}
+.sync{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:13px;color:#535B63}
+.content{padding:28px 32px 40px;display:flex;flex-direction:column;gap:20px;max-width:1280px;box-sizing:border-box;width:100%}
+.sec{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;padding-bottom:6px;border-bottom:1px solid #DADDD6}
+.chip{height:36px;padding:0 12px;border:1px solid #C9CDC5;border-radius:999px;background:#FFFFFF;font:inherit;font-size:13px;color:#1C2024;cursor:pointer}
+.chip[aria-pressed="true"]{background:#E2ECF8;border-color:#9DB6D8;color:#1F4E8C}
+.btn{height:44px;padding:0 18px;border:0;border-radius:8px;background:#0B5C7A;color:#FFFFFF;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.btn2{height:36px;padding:0 12px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:13px;color:#1C2024;cursor:pointer;white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center}
+.sen{display:inline-flex;gap:6px;align-items:center;padding:2px 8px;border-radius:6px;background:#F1F3EF;font-size:12px;white-space:nowrap}
+.kv{display:grid;grid-template-columns:minmax(120px,40%) minmax(0,1fr);gap:8px 12px;font-size:13px}.kv dt{color:#535B63}.kv dd{margin:0}
+.in{height:40px;padding:0 10px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:14px;color:#1C2024;box-sizing:border-box}
+.tag{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:6px;background:#F1F3EF;font-size:12px;margin:2px 4px 2px 0}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between;padding:14px 0;border-bottom:1px solid #ECEEEA}
+.lg{display:flex;gap:6px 16px;font-size:12px;color:#535B63;flex-wrap:wrap}
+.lg>span{display:flex;align-items:center;gap:6px}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block;flex:0 0 auto}
+.seg{display:flex;border:1px solid #C9CDC5;border-radius:8px;overflow:hidden}
+.seg button{border:0;height:40px;padding:0 14px;font:inherit;font-size:13px;cursor:pointer;background:#FFFFFF;color:#1C2024}
+.seg button+button{border-left:1px solid #C9CDC5}
+.seg button[aria-pressed="true"]{background:#1F2A2E;color:#FFFFFF}
+.seg button[aria-disabled="true"]{color:#8C939A;cursor:not-allowed}
+.chart{display:flex;gap:10px}
+.yax{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:#535B63;text-align:right;width:30px;padding-bottom:4px;box-sizing:border-box;flex:0 0 auto}
+.plot{position:relative;flex:1 1 auto;min-width:0;display:flex;align-items:flex-end;gap:3px;border-bottom:1px solid #DADDD6;box-sizing:border-box;padding-bottom:4px}
+.col{flex:1 1 0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;border-radius:4px 4px 0 0;outline:none;cursor:default}
+.col.on{background:#E6E9E3}
+.col:focus-visible{box-shadow:0 0 0 2px #0B5C7A}
+.xax{position:relative;height:18px;font-size:12px;color:#535B63;margin-left:40px}
+.xax span{position:absolute;top:0;white-space:nowrap}
+.tip{position:absolute;top:0;z-index:20;min-width:180px;padding:9px 11px;background:#FFFFFF;border:1px solid #C9CDC5;border-radius:8px;box-shadow:0 6px 18px rgba(28,32,36,.16);font-size:12px;line-height:1.4;pointer-events:none;white-space:nowrap;display:flex;flex-direction:column;gap:3px}
+.th{color:#535B63;font-weight:500;margin-bottom:2px}
+.tr{display:flex;align-items:center;gap:8px}
+.tr i{width:12px;height:3px;border-radius:2px;flex:0 0 auto}
+.tr b{font-weight:600;font-size:13px;color:#1C2024;min-width:30px;text-align:right}
+.tr span{color:#535B63}
+.tn{color:#535B63;border-top:1px solid #ECEEEA;padding-top:4px;margin-top:2px;white-space:normal;max-width:240px}
+.hint{min-height:22px;padding:8px 12px;border-radius:8px;background:#F4F5F2;font-size:13px;color:#1C2024}
+.cell{flex:1 1 0;border-radius:2px}
+.cell.on{outline:2px solid #1C2024;outline-offset:-1px}
+.ramp{display:flex;align-items:center;gap:6px;font-size:11px;color:#535B63}
+.ramp i{width:18px;height:12px;border-radius:2px;display:inline-block}
+</style>
+</helmet>
+<div class="app">
+<nav class="side" aria-label="Main navigation">
+<div style="display: flex; flex-direction: column; gap: 2px; padding: 0 8px;">
+<span style="font-weight: 600; font-size: 16px; color: #FFFFFF;">Wi-Fi Sensor</span>
+<span style="font-size: 12px; color: #A9B4B2;">Account: KIS FRI</span>
+</div>
+<div class="nav">
+<a href="Main.dc.html">Overview</a>
+<a href="Events.dc.html">Events</a>
+<a href="Networks.dc.html">Networks</a>
+<a href="Aps.dc.html" aria-current="page">Access points</a>
+<a href="Spectrum.dc.html">Spectrum</a>
+<a href="Sensors.dc.html">Sensors</a>
+<a href="Settings.dc.html">Settings</a>
+</div>
+<div class="sb" style="margin-top: auto;">
+<span class="sbh">Sensors</span>
+<span class="sbi"><span class="dot" style="background: #0ca30c;"></span>pi-fri · online</span>
+<span class="sbi"><span class="dot" style="background: #d03b3b;"></span>pi-lab · offline 3 h</span>
+</div>
+<div class="sb">
+<span class="sbh">System</span>
+<span class="sbi" title="GET /api/health"><span class="dot" style="background: #0ca30c;"></span>API ok · database ok</span>
+<span class="sbi" style="padding-left: 16px;">schema v8</span>
+</div>
+</nav>
+<main class="main">
+<header class="top">
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;">
+<label class="fl">Sensor
+<select class="sel"><option>All sensors (2)</option><option>pi-fri</option><option>pi-lab</option></select>
+</label>
+<label class="fl">Period
+<select class="sel"><option>Last 7 days</option><option>Last 24 hours</option><option>Last 30 days</option></select>
+</label>
+</div>
+<div class="sync"><span>Latest data: 10 Oct 17:52</span><span class="b neu">Write locked</span></div>
+</header>
+
+<div class="content" style="gap: 18px;">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px;">
+<h1 style="font-size: 26px;">Access points</h1>
+<span class="muted">703 APs in the account · 214 active now · 71 new in the last 24 h</span>
+</div>
+
+<section class="card" aria-label="Filters" style="padding: 16px 18px; display: flex; flex-direction: column; gap: 14px;">
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;">
+<label class="fl" style="flex: 1 1 280px;">Search SSID, BSSID or vendor
+<input type="search" class="in" placeholder="e.g. IK-WIFI, EC:58:EA, Ruckus" style="height: 44px; width: 100%;">
+</label>
+<div role="group" aria-label="Group by" class="fl">
+<span>Group by</span>
+<div class="seg">
+<button type="button" aria-pressed="true" style="height: 44px;">No grouping</button>
+<button type="button" aria-pressed="false" style="height: 44px;">Network (SSID)</button>
+<button type="button" aria-pressed="false" style="height: 44px;">Sensor</button>
+</div>
+</div>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+<span class="muted" style="font-size: 12px; margin-right: 4px;">Classification</span>
+<button type="button" class="chip" aria-pressed="true">All 703</button>
+<button type="button" class="chip" aria-pressed="false">Managed 64</button>
+<button type="button" class="chip" aria-pressed="false">Friendly 12</button>
+<button type="button" class="chip" aria-pressed="false">Unknown 526</button>
+<button type="button" class="chip" aria-pressed="false">Suspicious 1</button>
+<button type="button" class="chip" aria-pressed="false">Ignored 100</button>
+<span style="width: 1px; height: 24px; background: #DADDD6; margin: 0 6px;"></span>
+<button type="button" class="chip" aria-pressed="false">2.4 GHz</button>
+<button type="button" class="chip" aria-pressed="false">5 GHz</button>
+<button type="button" class="chip" aria-pressed="false">Open</button>
+<button type="button" class="chip" aria-pressed="false">New only</button>
+<button type="button" class="chip" aria-pressed="true">Hide hotspots</button>
+</div>
+</section>
+
+<section class="card" aria-label="Access point list" style="padding: 4px 0 0;">
+<div style="overflow-x: auto;">
+<table class="t nw">
+<thead><tr><th>Status</th><th>SSID</th><th>BSSID</th><th>Vendor</th><th>Classification</th><th>Security</th><th>Channel</th><th>Clients</th><th>Utilization</th><th>Seen by sensors (RSSI)</th><th>Last seen</th></tr></thead>
+<tbody>
+<tr><td><span class="b ok">Active</span></td><td><a href="ApDetail.dc.html" style="font-weight: 500;">IK-WIFI-DOT1X</a></td><td class="mono">EC:58:EA:12:9F:3C</td><td>Ruckus</td><td><span class="b info">Managed</span></td><td><span class="b ok">Enterprise</span></td><td>48 · 5 GHz</td><td>12</td><td>34 %</td><td><span class="sen">pi-fri −63</span> <span class="sen">pi-lab −79</span></td><td>now</td></tr>
+<tr><td><span class="b ok">Active</span></td><td><a href="ApDetail.dc.html" style="font-weight: 500;">IK-WIFI-DOT1X</a></td><td class="mono">EC:58:EA:12:A0:7C</td><td>Ruckus</td><td><span class="b info">Managed</span></td><td><span class="b ok">Enterprise</span></td><td>44 · 5 GHz</td><td>21</td><td>58 %</td><td><span class="sen">pi-lab −66</span> <span class="sen">pi-fri −71</span></td><td>now</td></tr>
+<tr><td><span class="b ok">Active</span></td><td><a href="ApDetail.dc.html" style="font-weight: 500;">IK-WIFI</a></td><td class="mono">EC:58:EA:12:9F:38</td><td>Ruckus</td><td><span class="b info">Managed</span></td><td><span class="b bad">Open</span> <span class="muted" style="font-size: 12px;">allowed</span></td><td>1 · 2.4 GHz</td><td>7</td><td>41 %</td><td><span class="sen">pi-fri −58</span></td><td>now</td></tr>
+<tr style="background: #FFF7F6;"><td><span class="b ok">Active</span></td><td><a href="ApDetail.dc.html" style="font-weight: 500;">IK-WIFI-DOT1X</a></td><td class="mono">9A:1F:3C:52:E0:07</td><td>– (randomized)</td><td><span class="b bad">Suspicious</span></td><td><span class="b bad">Open</span></td><td>6 · 2.4 GHz</td><td>0</td><td>–</td><td><span class="sen">pi-lab −52</span></td><td>6 min ago</td></tr>
+<tr><td><span class="b ok">Active</span></td><td><a href="ApDetail.dc.html" style="font-weight: 500;">FRI_wifi</a></td><td class="mono">E4:8D:8C:41:7B:A1</td><td>MikroTik</td><td><span class="b info">Managed</span></td><td><span class="b warn">WPA2-PSK without MFP</span></td><td>5 · 2.4 GHz</td><td>3</td><td>–</td><td><span class="sen">pi-fri −80</span></td><td>1 min ago</td></tr>
+<tr><td><span class="b ok">Active</span></td><td><a href="ApDetail.dc.html" style="font-weight: 500;">[Friendly network 1]</a></td><td class="mono">50:C7:BF:6A:01:2E</td><td>TP-Link</td><td><span class="b ok">Friendly</span></td><td><span class="b warn">WPA2-PSK without MFP</span></td><td>11 · 2.4 GHz</td><td>2</td><td>–</td><td><span class="sen">pi-lab −71</span> <span class="sen">pi-fri −77</span></td><td>now</td></tr>
+<tr><td><span class="b neu">Inactive</span></td><td><a href="ApDetail.dc.html" style="font-weight: 500; font-style: italic;">hidden network</a></td><td class="mono">3C:46:A1:08:5D:10</td><td>Ruckus</td><td><span class="b neu">Unknown</span></td><td><span class="b ok">WPA2/3 with MFP</span></td><td>112 · 5 GHz</td><td>–</td><td>12 %</td><td><span class="sen">pi-fri −84</span></td><td>3 min ago</td></tr>
+<tr><td><span class="b ok">Active</span></td><td><a href="ApDetail.dc.html" style="font-weight: 500;">[Unknown network A]</a></td><td class="mono">A0:AB:1B:30:7C:E2</td><td>D-Link</td><td><span class="b neu">Unknown</span></td><td><span class="b ok">WPA2/3 with MFP</span></td><td>6 · 2.4 GHz</td><td>4</td><td>–</td><td><span class="sen">pi-fri −81</span></td><td>12 min ago</td></tr>
+<tr><td><span class="b neu">Inactive</span></td><td><a href="ApDetail.dc.html" style="font-weight: 500;">[Unknown network B]</a></td><td class="mono">00:1E:58:A4:12:4B</td><td>D-Link</td><td><span class="b neu">Unknown</span></td><td><span class="b bad">WEP (legacy)</span></td><td>13 · 2.4 GHz</td><td>0</td><td>–</td><td><span class="sen">pi-fri −92</span></td><td>yesterday</td></tr>
+<tr><td><span class="b neu">Inactive</span></td><td><a href="ApDetail.dc.html" style="font-weight: 500;">Phone hotspot</a></td><td class="mono">6E:2B:91:C4:0A:91</td><td>– (randomized)</td><td><span class="b mute">Ignored</span></td><td><span class="b ok">WPA3-SAE</span></td><td>6 · 2.4 GHz</td><td>1</td><td>–</td><td><span class="sen">pi-fri −88</span></td><td>2 h ago</td></tr>
+</tbody>
+</table>
+</div>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 18px; font-size: 13px;" class="muted">
+<span>1–50 of 603 (100 hotspots hidden)</span>
+<div style="display: flex; gap: 8px;">
+<button type="button" class="btn2" disabled style="color: #8C939A;">← Previous</button>
+<button type="button" class="btn2">Next →</button>
+</div>
+</div>
+</section>
+
+<span class="muted" style="font-size: 13px;"><b style="color: #1C2024; font-weight: 500;">Seen by sensors</b>: every sensor that hears the AP, with its median RSSI in the period; the first one is the strongest, so the AP is closest to it.</span>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview": {"width": 1440, "height": 1180}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

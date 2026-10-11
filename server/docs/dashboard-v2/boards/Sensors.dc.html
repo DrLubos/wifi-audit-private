@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sensors</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F2;color:#1C2024;font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px;line-height:1.45}
+a{color:#0B5C7A}a:hover{color:#07445B}
+h1,h2,h3{margin:0;font-weight:600}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:13px}
+.muted{color:#535B63}
+.b{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E3F1E8;color:#1D6B43}.warn{background:#FCEBD5;color:#8A4B00}.bad{background:#FBE3E1;color:#A61B1B}.info{background:#E2ECF8;color:#1F4E8C}.neu{background:#ECEEEA;color:#3F474E}.mute{background:#F4F5F2;color:#535B63;border:1px solid #DADDD6}
+.card{background:#FFFFFF;border:1px solid #DADDD6;border-radius:10px}
+.t{width:100%;border-collapse:collapse}.t th{text-align:left;font-weight:500;color:#535B63;font-size:12px;padding:10px 12px;border-bottom:1px solid #DADDD6;white-space:nowrap}.t td{padding:10px 12px;border-bottom:1px solid #ECEEEA;vertical-align:middle}
+.nw td{white-space:nowrap}
+.app{display:flex;flex-wrap:wrap;min-height:100vh}
+.side{flex:1 1 220px;background:#1F2A2E;color:#E6EAE8;padding:22px 14px;box-sizing:border-box;display:flex;flex-direction:column;gap:18px}
+@media (min-width:900px){.side{flex:0 0 232px;position:sticky;top:0;height:100vh;align-self:flex-start}}
+.main{flex:999 1 560px;min-width:0;display:flex;flex-direction:column}
+.nav{display:flex;flex-wrap:wrap;gap:2px}
+.nav a{display:flex;align-items:center;padding:10px 12px;border-radius:8px;color:#E6EAE8;text-decoration:none;min-height:24px;flex:1 1 180px}
+.nav a:hover{background:#2A383D;color:#FFFFFF}
+.nav a[aria-current="page"]{background:#33464C;color:#FFFFFF;font-weight:500}
+.sb{padding:12px 8px 0;border-top:1px solid #33464C;display:flex;flex-direction:column;gap:7px;font-size:12px;color:#C3CCCA}
+.sbh{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8E9A98}
+.sbi{display:flex;align-items:center;gap:8px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:0 0 auto}
+.top{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;padding:14px 32px;background:#FFFFFF;border-bottom:1px solid #DADDD6;min-height:44px}
+.fl{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#535B63}
+.sel{height:40px;padding:0 10px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:14px;color:#1C2024}
+.sync{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:13px;color:#535B63}
+.content{padding:28px 32px 40px;display:flex;flex-direction:column;gap:20px;max-width:1280px;box-sizing:border-box;width:100%}
+.sec{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;padding-bottom:6px;border-bottom:1px solid #DADDD6}
+.chip{height:36px;padding:0 12px;border:1px solid #C9CDC5;border-radius:999px;background:#FFFFFF;font:inherit;font-size:13px;color:#1C2024;cursor:pointer}
+.chip[aria-pressed="true"]{background:#E2ECF8;border-color:#9DB6D8;color:#1F4E8C}
+.btn{height:44px;padding:0 18px;border:0;border-radius:8px;background:#0B5C7A;color:#FFFFFF;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.btn2{height:36px;padding:0 12px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:13px;color:#1C2024;cursor:pointer;white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center}
+.sen{display:inline-flex;gap:6px;align-items:center;padding:2px 8px;border-radius:6px;background:#F1F3EF;font-size:12px;white-space:nowrap}
+.kv{display:grid;grid-template-columns:minmax(120px,40%) minmax(0,1fr);gap:8px 12px;font-size:13px}.kv dt{color:#535B63}.kv dd{margin:0}
+.in{height:40px;padding:0 10px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:14px;color:#1C2024;box-sizing:border-box}
+.tag{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:6px;background:#F1F3EF;font-size:12px;margin:2px 4px 2px 0}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between;padding:14px 0;border-bottom:1px solid #ECEEEA}
+.lg{display:flex;gap:6px 16px;font-size:12px;color:#535B63;flex-wrap:wrap}
+.lg>span{display:flex;align-items:center;gap:6px}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block;flex:0 0 auto}
+.seg{display:flex;border:1px solid #C9CDC5;border-radius:8px;overflow:hidden}
+.seg button{border:0;height:40px;padding:0 14px;font:inherit;font-size:13px;cursor:pointer;background:#FFFFFF;color:#1C2024}
+.seg button+button{border-left:1px solid #C9CDC5}
+.seg button[aria-pressed="true"]{background:#1F2A2E;color:#FFFFFF}
+.seg button[aria-disabled="true"]{color:#8C939A;cursor:not-allowed}
+.chart{display:flex;gap:10px}
+.yax{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:#535B63;text-align:right;width:30px;padding-bottom:4px;box-sizing:border-box;flex:0 0 auto}
+.plot{position:relative;flex:1 1 auto;min-width:0;display:flex;align-items:flex-end;gap:3px;border-bottom:1px solid #DADDD6;box-sizing:border-box;padding-bottom:4px}
+.col{flex:1 1 0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;border-radius:4px 4px 0 0;outline:none;cursor:default}
+.col.on{background:#E6E9E3}
+.col:focus-visible{box-shadow:0 0 0 2px #0B5C7A}
+.xax{position:relative;height:18px;font-size:12px;color:#535B63;margin-left:40px}
+.xax span{position:absolute;top:0;white-space:nowrap}
+.tip{position:absolute;top:0;z-index:20;min-width:180px;padding:9px 11px;background:#FFFFFF;border:1px solid #C9CDC5;border-radius:8px;box-shadow:0 6px 18px rgba(28,32,36,.16);font-size:12px;line-height:1.4;pointer-events:none;white-space:nowrap;display:flex;flex-direction:column;gap:3px}
+.th{color:#535B63;font-weight:500;margin-bottom:2px}
+.tr{display:flex;align-items:center;gap:8px}
+.tr i{width:12px;height:3px;border-radius:2px;flex:0 0 auto}
+.tr b{font-weight:600;font-size:13px;color:#1C2024;min-width:30px;text-align:right}
+.tr span{color:#535B63}
+.tn{color:#535B63;border-top:1px solid #ECEEEA;padding-top:4px;margin-top:2px;white-space:normal;max-width:240px}
+.hint{min-height:22px;padding:8px 12px;border-radius:8px;background:#F4F5F2;font-size:13px;color:#1C2024}
+.cell{flex:1 1 0;border-radius:2px}
+.cell.on{outline:2px solid #1C2024;outline-offset:-1px}
+.ramp{display:flex;align-items:center;gap:6px;font-size:11px;color:#535B63}
+.ramp i{width:18px;height:12px;border-radius:2px;display:inline-block}
+</style>
+</helmet>
+<div class="app">
+<nav class="side" aria-label="Main navigation">
+<div style="display: flex; flex-direction: column; gap: 2px; padding: 0 8px;">
+<span style="font-weight: 600; font-size: 16px; color: #FFFFFF;">Wi-Fi Sensor</span>
+<span style="font-size: 12px; color: #A9B4B2;">Account: KIS FRI</span>
+</div>
+<div class="nav">
+<a href="Main.dc.html">Overview</a>
+<a href="Events.dc.html">Events</a>
+<a href="Networks.dc.html">Networks</a>
+<a href="Aps.dc.html">Access points</a>
+<a href="Spectrum.dc.html">Spectrum</a>
+<a href="Sensors.dc.html" aria-current="page">Sensors</a>
+<a href="Settings.dc.html">Settings</a>
+</div>
+<div class="sb" style="margin-top: auto;">
+<span class="sbh">Sensors</span>
+<span class="sbi"><span class="dot" style="background: #0ca30c;"></span>pi-fri · online</span>
+<span class="sbi"><span class="dot" style="background: #d03b3b;"></span>pi-lab · offline 3 h</span>
+</div>
+<div class="sb">
+<span class="sbh">System</span>
+<span class="sbi" title="GET /api/health"><span class="dot" style="background: #0ca30c;"></span>API ok · database ok</span>
+<span class="sbi" style="padding-left: 16px;">schema v8</span>
+</div>
+</nav>
+<main class="main">
+<header class="top" style="align-items: center; justify-content: flex-end;">
+<div class="sync"><span>Latest data: 10 Oct 17:52</span><span class="b neu">Write locked</span></div>
+</header>
+
+<div class="content">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px;">
+<h1 style="font-size: 26px;">Sensors</h1>
+<span class="muted">2 sensors in the account · 1 online</span>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 16px;">
+<section class="card" aria-labelledby="s1-h" style="flex: 1 1 420px; padding: 20px 22px; display: flex; flex-direction: column; gap: 14px;">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: flex-start;">
+<div style="display: flex; flex-direction: column; gap: 2px;">
+<h2 id="s1-h" style="font-size: 18px;">pi-fri</h2>
+<span class="muted" style="font-size: 13px;">FRI, 3rd floor · since 15 Sep 2026</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px;"><span class="b ok">Online</span><span class="b ok">Channels 89/89</span></div>
+</div>
+<dl class="kv" style="margin: 0;">
+<dt>Hardware</dt><dd>Raspberry Pi 3B+ · RTL8821CU (USB)</dd>
+<dt>Last poll</dt><dd>12 s ago (every 30 s)</dd>
+<dt>Last upload</dt><dd>12 s ago · after every poll</dd>
+<dt>Coverage, last 7 days</dt><dd>98.6 % of polls successful</dd>
+<dt>Capture crashes, last 24 h</dt><dd>3 (each recovered within 10 s)</dd>
+<dt>Buffer on the sensor</dt><dd>574 MB · 14 days</dd>
+<dt>APs seen, last 7 days</dt><dd>648 · 241 of them only by this sensor</dd>
+<dt>Capture configuration</dt><dd>89 channels · 0.2 s dwell · poll 30 s</dd>
+</dl>
+<div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; padding-top: 12px; border-top: 1px solid #ECEEEA; margin-top: auto;">
+<span class="muted" style="font-size: 12px;">Configuration confirmed by the sensor 27 Sep 14:15</span>
+<a href="SettingsSensors.dc.html" class="btn2" style="height: 40px; padding: 0 16px; font-size: 14px; font-weight: 500;">Sensor settings</a>
+</div>
+</section>
+
+<section class="card" aria-labelledby="s2-h" style="flex: 1 1 420px; padding: 20px 22px; display: flex; flex-direction: column; gap: 14px;">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: flex-start;">
+<div style="display: flex; flex-direction: column; gap: 2px;">
+<h2 id="s2-h" style="font-size: 18px;">pi-lab</h2>
+<span class="muted" style="font-size: 13px;">Lab · since 27 Sep 2026</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px;"><span class="b bad">Offline 3 h</span></div>
+</div>
+<dl class="kv" style="margin: 0;">
+<dt>Hardware</dt><dd>Raspberry Pi 3B+ · RTL8821CU (USB)</dd>
+<dt>Last poll</dt><dd>10 Oct 14:41</dd>
+<dt>Last upload</dt><dd>10 Oct 14:41</dd>
+<dt>Coverage, last 7 days</dt><dd>97.0 % of polls successful</dd>
+<dt>Capture crashes, last 24 h</dt><dd>–</dd>
+<dt>Buffer on the sensor</dt><dd>unknown (sensor not responding)</dd>
+<dt>APs seen, last 7 days</dt><dd>462 · 55 of them only by this sensor</dd>
+<dt>Capture configuration</dt><dd>37 channels (20 MHz only) · 0.2 s · poll 30 s</dd>
+</dl>
+<div style="padding: 10px 12px; border-radius: 8px; background: #FBF7F6; font-size: 13px; color: #5C1F1F;">No contact for 3 hours. Check power and network; buffered data will be uploaded once it is back.</div>
+<div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; padding-top: 12px; border-top: 1px solid #ECEEEA; margin-top: auto;">
+<span style="font-size: 12px; color: #8A4B00;">Pending change: poll 60 s (applied when the sensor reconnects)</span>
+<a href="SettingsSensors.dc.html" class="btn2" style="height: 40px; padding: 0 16px; font-size: 14px; font-weight: 500;">Sensor settings</a>
+</div>
+</section>
+</div>
+
+<section class="card" aria-labelledby="cov-h" style="padding: 20px 22px; display: flex; flex-direction: column; gap: 12px;">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: flex-end;">
+<div style="display: flex; flex-direction: column; gap: 6px;">
+<h2 id="cov-h" style="font-size: 17px;">Coverage per day – last 14 days</h2>
+<div class="lg">
+<span><span class="sw" style="background: #0ca30c;"></span>successful polls, full channel list</span>
+<span><span class="sw" style="background: #fab219;"></span>limited channels</span>
+<span><span class="sw" style="background: #d03b3b;"></span>outage</span>
+<span><span class="sw" style="background: repeating-linear-gradient(45deg,#C9CDC5 0 3px,#FFFFFF 3px 6px); border: 1px solid #C9CDC5;"></span>not installed yet</span>
+</div>
+</div>
+<div role="group" aria-label="Sensor" class="seg">
+<sc-for list="{{sensors}}" as="s" hint-placeholder-count="2"><button type="button" aria-pressed="{{s.pressed}}" onClick="{{s.pick}}">{{s.label}}</button></sc-for>
+</div>
+</div>
+<div class="plot" role="group" aria-label="Stacked columns of daily coverage; hover or focus a day for the shares" onMouseLeave="{{leave}}" style="height: 160px; gap: 6px;">
+<sc-for list="{{days}}" as="d" hint-placeholder-count="14">
+<div class="col {{d.cls}}" tabindex="0" aria-label="{{d.aria}}" onMouseEnter="{{d.enter}}" onFocus="{{d.enter}}" style="gap: {{d.gap}};">
+<div style="height: {{d.down}}; background: #d03b3b; border-radius: 3px 3px 0 0;"></div>
+<div style="height: {{d.degr}}; background: #fab219;"></div>
+<div style="height: {{d.ok}}; background: #0ca30c;"></div>
+<div style="height: {{d.none}}; background: repeating-linear-gradient(45deg,#C9CDC5 0 3px,#FFFFFF 3px 6px);"></div>
+</div>
+</sc-for>
+<sc-if value="{{covTip.show}}" hint-placeholder-val="{{false}}"><div class="tip" role="tooltip" style="{{covTip.pos}}"><div class="th">{{covTip.head}}</div><sc-for list="{{covTip.rows}}" as="tr" hint-placeholder-count="2"><div class="tr"><i style="background: {{tr.c}};"></i><b>{{tr.v}}</b><span>{{tr.l}}</span></div></sc-for><sc-for list="{{covTip.notes}}" as="tn" hint-placeholder-count="1"><div class="tn">{{tn}}</div></sc-for></div></sc-if>
+</div>
+<div style="display: flex; gap: 6px;">
+<sc-for list="{{days}}" as="d" hint-placeholder-count="14"><span style="flex: 1 1 0; text-align: center; font-size: 11px; color: #535B63;">{{d.label}}</span></sc-for>
+</div>
+</section>
+
+<section class="card" aria-labelledby="gap-h" style="padding: 20px 0 6px;">
+<div style="padding: 0 22px 10px;"><h2 id="gap-h" style="font-size: 17px;">Outages and limited periods – {{sensorName}}</h2></div>
+<div style="overflow-x: auto;">
+<sc-if value="{{isFri}}" hint-placeholder-val="{{true}}">
+<table class="t">
+<thead><tr><th>From</th><th>Duration</th><th>Type</th><th>Cause</th></tr></thead>
+<tbody>
+<tr><td>21 Sep 18:26</td><td>5 h 21 min</td><td><span class="b bad">Outage</span></td><td>Kismet froze after a memory error; since then restarted within 60 s</td></tr>
+<tr><td>22 Sep 15:43</td><td>19 h 44 min</td><td><span class="b bad">Outage</span></td><td>Disk full (Kismet logs); old logs are now rotated</td></tr>
+<tr><td>27 Sep 00:45</td><td>14 h 19 min</td><td><span class="b warn">Half of the channels</span></td><td>90-entry list with hop stride 4 → only 45 visited; fixed with the prime-length list of 89</td></tr>
+<tr><td>27 Sep 01:09</td><td>12 h 25 min</td><td><span class="b warn">Channel 1 only</span></td><td>After a capture crash Kismet restored only channel 1; fixed by the hop guard</td></tr>
+<tr><td>3 Oct 13:00</td><td>4 s</td><td><span class="b neu">Restart</span></td><td>Collector v6 installed, no data lost</td></tr>
+</tbody>
+</table>
+</sc-if>
+<sc-if value="{{isLab}}" hint-placeholder-val="{{false}}">
+<table class="t">
+<thead><tr><th>From</th><th>Duration</th><th>Type</th><th>Cause</th></tr></thead>
+<tbody>
+<tr><td>10 Oct 14:41</td><td>3 h 11 min (ongoing)</td><td><span class="b bad">Outage</span></td><td>No contact; data stays in the sensor buffer until it reconnects</td></tr>
+<tr><td>2 Oct 09:12</td><td>38 min</td><td><span class="b bad">Outage</span></td><td>Network outage in the lab; data uploaded afterwards from the buffer</td></tr>
+</tbody>
+</table>
+</sc-if>
+</div>
+</section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview": {"width": 1440, "height": 1300}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { sensor: 'pi-fri', h: null };
+  }
+  renderVals() {
+    var self = this, st = this.state;
+    // ---- shared mock-data helpers (identical in every board) ----
+    // All times are wall-clock Bratislava time stored in UTC fields, so the
+    // viewer's own time zone never shifts the mock data.
+    var DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    var HOUR = 3600e3;
+    function T(m, d, h, min) { return Date.UTC(2026, m - 1, d, h || 0, min || 0); }
+    function two(n) { return (n < 10 ? '0' : '') + n; }
+    function dt(t) { return new Date(t); }
+    function dayLabel(t) { var x = dt(t); return DAY[x.getUTCDay()] + ' ' + x.getUTCDate() + ' ' + MON[x.getUTCMonth()]; }
+    function hhmm(t) { var x = dt(t); return two(x.getUTCHours()) + ':' + two(x.getUTCMinutes()); }
+    var NOW = T(10, 10, 17, 52);
+    var FRI_START = T(9, 15, 14, 55);
+    var FRI_OUT = [[T(9, 21, 18, 26), T(9, 21, 23, 47)], [T(9, 22, 15, 43), T(9, 23, 11, 27)]];
+    var LAB_START = T(9, 27, 11, 30);
+    var LAB_DOWN = T(10, 10, 14, 41);
+    function overlap(a, b, c, d) { return Math.max(0, Math.min(b, d) - Math.max(a, c)); }
+    // fraction of [a, b) during which a sensor was collecting
+    function coverage(sensor, a, b) {
+      b = Math.min(b, NOW);
+      if (b <= a) return 0;
+      if (sensor === 'pi-lab') return overlap(a, b, LAB_START, LAB_DOWN) / (b - a);
+      var up = overlap(a, b, FRI_START, NOW);
+      FRI_OUT.forEach(function (o) { up -= overlap(a, b, o[0], o[1]); });
+      return Math.max(0, up) / (b - a);
+    }
+    // buckets of the selected period: 24 x 1 h, 28 x 6 h, or 30 x 1 day
+    function bucketsFor(r) {
+      var sp = r === '24h' ? { start: T(10, 9, 18), step: 1, n: 24 }
+        : (r === '7d' ? { start: T(10, 3, 18), step: 6, n: 28 } : { start: T(9, 11, 0), step: 24, n: 30 });
+      var out = [];
+      for (var i = 0; i < sp.n; i++) {
+        var a = sp.start + i * sp.step * HOUR, b = a + sp.step * HOUR;
+        var x = dt(a);
+        var label = sp.step === 24 ? dayLabel(a)
+          : dayLabel(a) + ', ' + hhmm(a) + '–' + (b > NOW ? hhmm(NOW) : (sp.step === 1 ? hhmm(b) : (hhmm(b) === '00:00' ? '24:00' : hhmm(b))));
+        out.push({ i: i, a: a, b: b, step: sp.step, wd: x.getUTCDay(), h0: x.getUTCHours(), label: label });
+      }
+      return out;
+    }
+    function rangeText(r) {
+      return r === '24h' ? 'last 24 h: 9 Oct 18:00 – 10 Oct 17:52'
+        : (r === '7d' ? 'last 7 days: 3 Oct 18:00 – 10 Oct 17:52' : 'last 30 days: 11 Sep – 10 Oct 17:52');
+    }
+    // x-axis labels placed at the bucket where a day (or 6-hour mark) starts
+    function xLabels(bs) {
+      var out = [];
+      bs.forEach(function (b, i) {
+        var x = dt(b.a), left = (i / bs.length * 100).toFixed(2) + '%';
+        if (b.step === 1) {
+          if (i === 0) out.push({ t: DAY[b.wd] + ' ' + hhmm(b.a), left: left });
+          else if (x.getUTCHours() % 6 === 0) out.push({ t: x.getUTCHours() === 0 ? DAY[b.wd] + ' 00:00' : hhmm(b.a), left: left });
+        } else if (b.step === 6) {
+          if (x.getUTCHours() === 0) out.push({ t: dayLabel(b.a), left: left });
+        } else if (i === 0 || b.wd === 1) {
+          out.push({ t: dayLabel(b.a), left: left });
+        }
+      });
+      return out;
+    }
+    // diurnal and weekly shape of activity on campus
+    function hourF(h) { return (h >= 8 && h <= 18) ? Math.sin((h - 7) / 12 * Math.PI) : 0; }
+    function dayF(wd) { return (wd === 0 || wd === 6) ? 0.16 : (wd === 5 ? 0.78 : (wd === 2 ? 1.02 : 0.95)); }
+    function termF(t) { return t < T(9, 21, 0) ? 0.35 : 1; }
+    // clients on managed networks in one hour (sum of BSS Load station counts)
+    function clientsAt(t) {
+      var x = dt(t), wd = x.getUTCDay(), h = x.getUTCHours();
+      var evening = (h >= 19 && h <= 21 && wd !== 0 && wd !== 6) ? 25 : 0;
+      return Math.round(12 + (510 * hourF(h) * dayF(wd) + evening) * termF(t));
+    }
+    function hoursOf(b) { var hs = []; for (var t = b.a; t < Math.min(b.b, NOW); t += HOUR) hs.push(t); return hs; }
+    // tooltip placed beside column i of n so it never covers the hovered column
+    function tipPos(i, n) {
+      return i < n / 2 ? 'left: calc(' + ((i + 1) / n * 100).toFixed(2) + '% + 6px);'
+        : 'right: calc(' + ((n - i) / n * 100).toFixed(2) + '% + 6px);';
+    }
+    function noTip() { return { show: false, pos: '', head: '', rows: [], notes: [] }; }
+    function fmt(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+    var RAMP = ['#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#256abf', '#184f95', '#0d366b'];
+    var HATCH = 'repeating-linear-gradient(45deg,#C9CDC5 0 3px,#FFFFFF 3px 6px)';
+    // ---- end of shared helpers ----
+    // [label, ok, limited, down, not installed] in % of the day
+    var DATA = {
+      'pi-fri': [['27 Sep', 41, 58, 1, 0], ['28 Sep', 99, 0, 1, 0], ['29 Sep', 99, 0, 1, 0], ['30 Sep', 100, 0, 0, 0], ['1 Oct', 99, 0, 1, 0],
+        ['2 Oct', 100, 0, 0, 0], ['3 Oct', 99, 0, 1, 0], ['4 Oct', 100, 0, 0, 0], ['5 Oct', 99, 0, 1, 0], ['6 Oct', 98, 1, 1, 0],
+        ['7 Oct', 100, 0, 0, 0], ['8 Oct', 99, 0, 1, 0], ['9 Oct', 99, 0, 1, 0], ['10 Oct', 100, 0, 0, 0]],
+      'pi-lab': [['27 Sep', 52, 0, 0, 48], ['28 Sep', 99, 0, 1, 0], ['29 Sep', 100, 0, 0, 0], ['30 Sep', 99, 0, 1, 0], ['1 Oct', 100, 0, 0, 0],
+        ['2 Oct', 97, 0, 3, 0], ['3 Oct', 99, 0, 1, 0], ['4 Oct', 100, 0, 0, 0], ['5 Oct', 99, 0, 1, 0], ['6 Oct', 100, 0, 0, 0],
+        ['7 Oct', 99, 0, 1, 0], ['8 Oct', 100, 0, 0, 0], ['9 Oct', 99, 0, 1, 0], ['10 Oct', 82, 0, 18, 0]]
+    };
+    var raw = DATA[st.sensor];
+    var days = raw.map(function (r, i) {
+      var parts = (r[2] ? 1 : 0) + (r[3] ? 1 : 0) + (r[4] ? 1 : 0);
+      return {
+        label: r[0], cls: st.h === i ? 'on' : '',
+        ok: r[1] + '%', degr: r[2] + '%', down: r[3] + '%', none: r[4] + '%',
+        gap: parts ? '2px' : '0',
+        aria: r[0] + ': ' + r[1] + ' % successful' + (r[2] ? ', ' + r[2] + ' % limited' : '') + (r[3] ? ', ' + r[3] + ' % outage' : '') + (r[4] ? ', ' + r[4] + ' % not installed' : ''),
+        enter: function () { self.setState({ h: i }); }
+      };
+    });
+    var covTip = noTip();
+    if (st.h !== null) {
+      var r = raw[st.h], rows = [];
+      if (r[3]) rows.push({ c: '#d03b3b', v: r[3] + ' %', l: 'outage' });
+      if (r[2]) rows.push({ c: '#fab219', v: r[2] + ' %', l: 'limited channels' });
+      rows.push({ c: '#0ca30c', v: r[1] + ' %', l: 'successful, full channel list' });
+      if (r[4]) rows.push({ c: '#C9CDC5', v: r[4] + ' %', l: 'not installed yet' });
+      covTip = { show: true, pos: tipPos(st.h, raw.length), head: st.sensor + ' · ' + r[0] + (st.h === raw.length - 1 ? ' (today until 17:52)' : ''), rows: rows, notes: [] };
+    }
+    var sensors = ['pi-fri', 'pi-lab'].map(function (s) {
+      return { label: s, pressed: st.sensor === s ? 'true' : 'false', pick: function () { self.setState({ sensor: s, h: null }); } };
+    });
+    return {
+      sensors: sensors, days: days, covTip: covTip,
+      leave: function () { self.setState({ h: null }); },
+      sensorName: st.sensor, isFri: st.sensor === 'pi-fri', isLab: st.sensor === 'pi-lab',
+      false: false, true: true
+    };
+  }
+}
+</script>
+</body>
+</html>

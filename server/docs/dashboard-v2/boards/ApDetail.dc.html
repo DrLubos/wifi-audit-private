@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Access point detail</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F2;color:#1C2024;font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px;line-height:1.45}
+a{color:#0B5C7A}a:hover{color:#07445B}
+h1,h2,h3{margin:0;font-weight:600}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:13px}
+.muted{color:#535B63}
+.b{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E3F1E8;color:#1D6B43}.warn{background:#FCEBD5;color:#8A4B00}.bad{background:#FBE3E1;color:#A61B1B}.info{background:#E2ECF8;color:#1F4E8C}.neu{background:#ECEEEA;color:#3F474E}.mute{background:#F4F5F2;color:#535B63;border:1px solid #DADDD6}
+.card{background:#FFFFFF;border:1px solid #DADDD6;border-radius:10px}
+.t{width:100%;border-collapse:collapse}.t th{text-align:left;font-weight:500;color:#535B63;font-size:12px;padding:10px 12px;border-bottom:1px solid #DADDD6;white-space:nowrap}.t td{padding:10px 12px;border-bottom:1px solid #ECEEEA;vertical-align:middle}
+.nw td{white-space:nowrap}
+.app{display:flex;flex-wrap:wrap;min-height:100vh}
+.side{flex:1 1 220px;background:#1F2A2E;color:#E6EAE8;padding:22px 14px;box-sizing:border-box;display:flex;flex-direction:column;gap:18px}
+@media (min-width:900px){.side{flex:0 0 232px;position:sticky;top:0;height:100vh;align-self:flex-start}}
+.main{flex:999 1 560px;min-width:0;display:flex;flex-direction:column}
+.nav{display:flex;flex-wrap:wrap;gap:2px}
+.nav a{display:flex;align-items:center;padding:10px 12px;border-radius:8px;color:#E6EAE8;text-decoration:none;min-height:24px;flex:1 1 180px}
+.nav a:hover{background:#2A383D;color:#FFFFFF}
+.nav a[aria-current="page"]{background:#33464C;color:#FFFFFF;font-weight:500}
+.sb{padding:12px 8px 0;border-top:1px solid #33464C;display:flex;flex-direction:column;gap:7px;font-size:12px;color:#C3CCCA}
+.sbh{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8E9A98}
+.sbi{display:flex;align-items:center;gap:8px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:0 0 auto}
+.top{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;padding:14px 32px;background:#FFFFFF;border-bottom:1px solid #DADDD6;min-height:44px}
+.fl{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#535B63}
+.sel{height:40px;padding:0 10px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:14px;color:#1C2024}
+.sync{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:13px;color:#535B63}
+.content{padding:28px 32px 40px;display:flex;flex-direction:column;gap:20px;max-width:1280px;box-sizing:border-box;width:100%}
+.sec{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;padding-bottom:6px;border-bottom:1px solid #DADDD6}
+.chip{height:36px;padding:0 12px;border:1px solid #C9CDC5;border-radius:999px;background:#FFFFFF;font:inherit;font-size:13px;color:#1C2024;cursor:pointer}
+.chip[aria-pressed="true"]{background:#E2ECF8;border-color:#9DB6D8;color:#1F4E8C}
+.btn{height:44px;padding:0 18px;border:0;border-radius:8px;background:#0B5C7A;color:#FFFFFF;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.btn2{height:36px;padding:0 12px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:13px;color:#1C2024;cursor:pointer;white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center}
+.sen{display:inline-flex;gap:6px;align-items:center;padding:2px 8px;border-radius:6px;background:#F1F3EF;font-size:12px;white-space:nowrap}
+.kv{display:grid;grid-template-columns:minmax(120px,40%) minmax(0,1fr);gap:8px 12px;font-size:13px}.kv dt{color:#535B63}.kv dd{margin:0}
+.in{height:40px;padding:0 10px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:14px;color:#1C2024;box-sizing:border-box}
+.tag{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:6px;background:#F1F3EF;font-size:12px;margin:2px 4px 2px 0}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between;padding:14px 0;border-bottom:1px solid #ECEEEA}
+.lg{display:flex;gap:6px 16px;font-size:12px;color:#535B63;flex-wrap:wrap}
+.lg>span{display:flex;align-items:center;gap:6px}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block;flex:0 0 auto}
+.seg{display:flex;border:1px solid #C9CDC5;border-radius:8px;overflow:hidden}
+.seg button{border:0;height:40px;padding:0 14px;font:inherit;font-size:13px;cursor:pointer;background:#FFFFFF;color:#1C2024}
+.seg button+button{border-left:1px solid #C9CDC5}
+.seg button[aria-pressed="true"]{background:#1F2A2E;color:#FFFFFF}
+.seg button[aria-disabled="true"]{color:#8C939A;cursor:not-allowed}
+.chart{display:flex;gap:10px}
+.yax{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:#535B63;text-align:right;width:30px;padding-bottom:4px;box-sizing:border-box;flex:0 0 auto}
+.plot{position:relative;flex:1 1 auto;min-width:0;display:flex;align-items:flex-end;gap:3px;border-bottom:1px solid #DADDD6;box-sizing:border-box;padding-bottom:4px}
+.col{flex:1 1 0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;border-radius:4px 4px 0 0;outline:none;cursor:default}
+.col.on{background:#E6E9E3}
+.col:focus-visible{box-shadow:0 0 0 2px #0B5C7A}
+.xax{position:relative;height:18px;font-size:12px;color:#535B63;margin-left:40px}
+.xax span{position:absolute;top:0;white-space:nowrap}
+.tip{position:absolute;top:0;z-index:20;min-width:180px;padding:9px 11px;background:#FFFFFF;border:1px solid #C9CDC5;border-radius:8px;box-shadow:0 6px 18px rgba(28,32,36,.16);font-size:12px;line-height:1.4;pointer-events:none;white-space:nowrap;display:flex;flex-direction:column;gap:3px}
+.th{color:#535B63;font-weight:500;margin-bottom:2px}
+.tr{display:flex;align-items:center;gap:8px}
+.tr i{width:12px;height:3px;border-radius:2px;flex:0 0 auto}
+.tr b{font-weight:600;font-size:13px;color:#1C2024;min-width:30px;text-align:right}
+.tr span{color:#535B63}
+.tn{color:#535B63;border-top:1px solid #ECEEEA;padding-top:4px;margin-top:2px;white-space:normal;max-width:240px}
+.hint{min-height:22px;padding:8px 12px;border-radius:8px;background:#F4F5F2;font-size:13px;color:#1C2024}
+.cell{flex:1 1 0;border-radius:2px}
+.cell.on{outline:2px solid #1C2024;outline-offset:-1px}
+.ramp{display:flex;align-items:center;gap:6px;font-size:11px;color:#535B63}
+.ramp i{width:18px;height:12px;border-radius:2px;display:inline-block}
+</style>
+</helmet>
+<div class="app">
+<nav class="side" aria-label="Main navigation">
+<div style="display: flex; flex-direction: column; gap: 2px; padding: 0 8px;">
+<span style="font-weight: 600; font-size: 16px; color: #FFFFFF;">Wi-Fi Sensor</span>
+<span style="font-size: 12px; color: #A9B4B2;">Account: KIS FRI</span>
+</div>
+<div class="nav">
+<a href="Main.dc.html">Overview</a>
+<a href="Events.dc.html">Events</a>
+<a href="Networks.dc.html">Networks</a>
+<a href="Aps.dc.html" aria-current="page">Access points</a>
+<a href="Spectrum.dc.html">Spectrum</a>
+<a href="Sensors.dc.html">Sensors</a>
+<a href="Settings.dc.html">Settings</a>
+</div>
+<div class="sb" style="margin-top: auto;">
+<span class="sbh">Sensors</span>
+<span class="sbi"><span class="dot" style="background: #0ca30c;"></span>pi-fri · online</span>
+<span class="sbi"><span class="dot" style="background: #d03b3b;"></span>pi-lab · offline 3 h</span>
+</div>
+<div class="sb">
+<span class="sbh">System</span>
+<span class="sbi" title="GET /api/health"><span class="dot" style="background: #0ca30c;"></span>API ok · database ok</span>
+<span class="sbi" style="padding-left: 16px;">schema v8</span>
+</div>
+</nav>
+<main class="main">
+<header class="top" style="align-items: center;">
+<a href="Aps.dc.html" style="font-size: 13px;">← Access points</a>
+<div class="sync"><span>Latest data: 10 Oct 17:52</span><span class="b neu">Write locked</span></div>
+</header>
+
+<div class="content" style="padding-top: 24px; gap: 18px;">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 16px;">
+<div style="display: flex; flex-direction: column; gap: 6px;">
+<div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center;">
+<h1 style="font-size: 26px;">IK-WIFI-DOT1X</h1>
+<span class="b ok">Active</span>
+<span class="b ok">Enterprise</span>
+</div>
+<span class="muted"><span class="mono">EC:58:EA:12:9F:3C</span> · Ruckus Wireless · channel 48 (5 GHz, 80 MHz) · seen by 2 sensors</span>
+</div>
+<div role="group" aria-label="AP classification" class="fl">
+<span>Classification in this account</span>
+<div class="seg">
+<sc-for list="{{classes}}" as="c" hint-placeholder-count="5"><button type="button" aria-pressed="{{c.pressed}}" onClick="{{c.pick}}" style="height: 44px; {{c.extra}}">{{c.label}}</button></sc-for>
+</div>
+</div>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 16px;">
+<section class="card" aria-labelledby="id-h" style="flex: 1 1 340px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px;">
+<h2 id="id-h" style="font-size: 16px;">Identity</h2>
+<dl class="kv" style="margin: 0;">
+<dt>SSID</dt><dd>IK-WIFI-DOT1X</dd>
+<dt>Network</dt><dd><a href="Networks.dc.html">IK-WIFI-DOT1X</a> · managed · 31 BSSIDs</dd>
+<dt>BSSID</dt><dd class="mono">EC:58:EA:12:9F:3C</dd>
+<dt>Vendor (OUI)</dt><dd>Ruckus Wireless · EC:58:EA</dd>
+<dt>Channel</dt><dd>48 · 5 GHz · 80 MHz (VHT80)</dd>
+<dt>Country</dt><dd>SK</dd>
+<dt>First seen</dt><dd>15 Sep 2026 14:55</dd>
+<dt>Last seen</dt><dd>now</dd>
+</dl>
+</section>
+
+<section class="card" aria-labelledby="sec-h" style="flex: 1 1 340px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px;">
+<h2 id="sec-h" style="font-size: 16px;">Security</h2>
+<dl class="kv" style="margin: 0;">
+<dt>Encryption</dt><dd>WPA2-Enterprise (802.1X) · CCMP</dd>
+<dt>MFP (802.11w)</dt><dd>capable, not required</dd>
+<dt>Rating</dt><dd><span class="b ok">Strong</span></dd>
+<dt>Network policy</dt><dd><span class="b warn">Not met</span> requires MFP</dd>
+</dl>
+<div style="padding: 10px 12px; border-radius: 8px; background: #FDF8F1; font-size: 13px; color: #5E3A08;">Recommendation: require MFP, otherwise clients stay exposed to forged deauthentication. <a href="Settings.dc.html">Edit policy</a></div>
+</section>
+
+<section class="card" aria-labelledby="load-h" style="flex: 1 1 260px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px;">
+<h2 id="load-h" style="font-size: 16px;">Current load</h2>
+<div style="display: flex; flex-wrap: wrap; gap: 20px;">
+<div style="display: flex; flex-direction: column; gap: 2px;"><span class="muted" style="font-size: 12px;">Clients seen</span><span style="font-size: 28px; font-weight: 600;">12</span></div>
+<div style="display: flex; flex-direction: column; gap: 2px;"><span class="muted" style="font-size: 12px;">Channel utilization</span><span style="font-size: 28px; font-weight: 600;">34 %</span></div>
+<div style="display: flex; flex-direction: column; gap: 2px;"><span class="muted" style="font-size: 12px;">Stations reported by AP</span><span style="font-size: 28px; font-weight: 600;">14</span></div>
+</div>
+<span class="muted" style="font-size: 12px;">Utilization and station count come from the AP's own BSS Load element, measured by pi-fri 30 s ago.</span>
+</section>
+</div>
+
+<section class="card" aria-labelledby="rssi-h" style="padding: 18px 20px; display: flex; flex-direction: column; gap: 12px;">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: baseline;">
+<h2 id="rssi-h" style="font-size: 16px;">Signal strength by sensor – last 7 days (2-hour medians)</h2>
+<div class="lg">
+<span><span style="width: 18px; height: 3px; background: #2a78d6; display: inline-block;"></span>pi-fri</span>
+<span><span style="width: 18px; height: 3px; background: #eb6834; display: inline-block;"></span>pi-lab</span>
+<span><span class="sw" style="background: #cde2fb;"></span>pi-fri baseline (median ± robust σ)</span>
+</div>
+</div>
+<div class="chart">
+<div class="yax" aria-hidden="true" style="height: 220px; width: 54px; padding-bottom: 0;"><span>−50 dBm</span><span>−65</span><span>−80</span><span>−95</span></div>
+<div style="position: relative; flex: 1 1 auto; min-width: 0; height: 220px;">
+<svg aria-hidden="true" viewBox="0 0 1000 220" preserveAspectRatio="none" style="position: absolute; inset: 0; width: 100%; height: 220px; background: #FBFBFA; border-radius: 6px;">
+<rect x="0" y="49" width="1000" height="29" fill="#cde2fb"></rect>
+<line x1="0" y1="73" x2="1000" y2="73" stroke="#ECEEEA" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+<line x1="0" y1="147" x2="1000" y2="147" stroke="#ECEEEA" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+<polyline points="{{fri}}" fill="none" stroke="#2a78d6" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+<polyline points="{{lab}}" fill="none" stroke="#eb6834" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+</svg>
+<div role="group" aria-label="RSSI of this AP at each sensor over 7 days; hover or focus to read the values at a point in time" onMouseLeave="{{leaveRssi}}" style="position: absolute; inset: 0; display: flex;">
+<sc-for list="{{hits}}" as="h" hint-placeholder-count="84"><div tabindex="0" aria-label="{{h.aria}}" onMouseEnter="{{h.enter}}" onFocus="{{h.enter}}" style="flex: 1 1 0; height: 100%; display: flex; justify-content: center; outline: none;"><span style="width: 1px; height: 100%; background: {{h.line}};"></span></div></sc-for>
+<sc-if value="{{rssiTip.show}}" hint-placeholder-val="{{false}}"><div class="tip" role="tooltip" style="{{rssiTip.pos}}"><div class="th">{{rssiTip.head}}</div><sc-for list="{{rssiTip.rows}}" as="tr" hint-placeholder-count="2"><div class="tr"><i style="background: {{tr.c}};"></i><b>{{tr.v}}</b><span>{{tr.l}}</span></div></sc-for><sc-for list="{{rssiTip.notes}}" as="tn" hint-placeholder-count="1"><div class="tn">{{tn}}</div></sc-for></div></sc-if>
+</div>
+</div>
+</div>
+<div class="xax" style="margin-left: 64px;"><sc-for list="{{xlabels}}" as="x" hint-placeholder-count="7"><span style="left: {{x.left}};">{{x.t}}</span></sc-for></div>
+<div style="overflow-x: auto;">
+<table class="t nw">
+<thead><tr><th>Sensor</th><th>Median RSSI</th><th>Spread (robust σ)</th><th>Floor share (−106/−120)</th><th>Observations (7 days)</th><th>First seen</th><th>Last seen</th></tr></thead>
+<tbody>
+<tr><td><span style="display: inline-flex; align-items: center; gap: 8px;"><span style="width: 14px; height: 3px; background: #2a78d6;"></span>pi-fri</span></td><td>−63 dBm</td><td>1.5 dB</td><td>0 %</td><td>19,870</td><td>15 Sep</td><td>now</td></tr>
+<tr><td><span style="display: inline-flex; align-items: center; gap: 8px;"><span style="width: 14px; height: 3px; background: #eb6834;"></span>pi-lab</span></td><td>−79 dBm</td><td>3.0 dB</td><td>4 %</td><td>6,120</td><td>27 Sep</td><td>10 Oct 14:41</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<div style="display: flex; flex-wrap: wrap; gap: 16px;">
+<section class="card" aria-labelledby="hm-h" style="flex: 1 1 520px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;">
+<h2 id="hm-h" style="font-size: 16px;">Clients by day and hour (average, 4 weeks)</h2>
+<div class="hint" aria-live="polite">{{hint}}</div>
+<div role="group" aria-label="Heatmap of the average number of clients by weekday and hour; hover a cell for the value" onMouseLeave="{{leaveCell}}" style="display: flex; flex-direction: column; gap: 3px;">
+<sc-for list="{{heat}}" as="row" hint-placeholder-count="7">
+<div style="display: flex; gap: 2px; align-items: center;">
+<span style="width: 32px; font-size: 11px; color: #535B63;">{{row.day}}</span>
+<sc-for list="{{row.cells}}" as="cell" hint-placeholder-count="24"><span class="cell {{cell.cls}}" onMouseEnter="{{cell.enter}}" style="height: 18px; background: {{cell.bg}};"></span></sc-for>
+</div>
+</sc-for>
+<div style="display: flex; padding-left: 34px; font-size: 11px; color: #535B63; justify-content: space-between;"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:00</span></div>
+</div>
+<span class="ramp" aria-hidden="true"><span>0</span><i style="background: #cde2fb;"></i><i style="background: #9ec5f4;"></i><i style="background: #6da7ec;"></i><i style="background: #3987e5;"></i><i style="background: #256abf;"></i><i style="background: #184f95;"></i><i style="background: #0d366b;"></i><span>20+ clients</span></span>
+</section>
+
+<section class="card" aria-labelledby="util-h" style="flex: 1 1 360px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;">
+<h2 id="util-h" style="font-size: 16px;">Utilization of channel 48 – last 7 days</h2>
+<div class="plot" role="group" aria-label="Columns of channel utilization per 6-hour window; hover or focus for the average and the peak" onMouseLeave="{{leaveUtil}}" style="height: 160px;">
+<sc-for list="{{util}}" as="u" hint-placeholder-count="28"><div class="col {{u.cls}}" tabindex="0" aria-label="{{u.aria}}" onMouseEnter="{{u.enter}}" onFocus="{{u.enter}}"><div style="height: {{u.h}}; background: #2a78d6; border-radius: 3px 3px 0 0;"></div></div></sc-for>
+<sc-if value="{{utilTip.show}}" hint-placeholder-val="{{false}}"><div class="tip" role="tooltip" style="{{utilTip.pos}}"><div class="th">{{utilTip.head}}</div><sc-for list="{{utilTip.rows}}" as="tr" hint-placeholder-count="2"><div class="tr"><i style="background: {{tr.c}};"></i><b>{{tr.v}}</b><span>{{tr.l}}</span></div></sc-for><sc-for list="{{utilTip.notes}}" as="tn" hint-placeholder-count="1"><div class="tn">{{tn}}</div></sc-for></div></sc-if>
+</div>
+<div class="xax" style="margin-left: 0;"><sc-for list="{{uLabels}}" as="x" hint-placeholder-count="3"><span style="left: {{x.left}};">{{x.t}}</span></sc-for></div>
+<span class="muted" style="font-size: 12px;">{{utilSub}}</span>
+</section>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 16px;">
+<section class="card" aria-labelledby="cfg-h" style="flex: 1 1 460px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: baseline;">
+<h2 id="cfg-h" style="font-size: 16px;">Configuration history</h2>
+<span class="muted" style="font-size: 12px;">changes channel ~17× per day (dynamic channel selection)</span>
+</div>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column;">
+<li style="display: flex; gap: 14px; padding: 10px 0; border-bottom: 1px solid #ECEEEA;"><span class="muted" style="width: 110px; flex: 0 0 auto; font-size: 13px;">8 Oct 08:03</span><span>Channel <b style="font-weight: 500;">64 → 48</b></span></li>
+<li style="display: flex; gap: 14px; padding: 10px 0; border-bottom: 1px solid #ECEEEA;"><span class="muted" style="width: 110px; flex: 0 0 auto; font-size: 13px;">7 Oct 17:41</span><span>Channel <b style="font-weight: 500;">48 → 64</b></span></li>
+<li style="display: flex; gap: 14px; padding: 10px 0; border-bottom: 1px solid #ECEEEA;"><span class="muted" style="width: 110px; flex: 0 0 auto; font-size: 13px;">2 Oct 07:15</span><span>MFP capable <b style="font-weight: 500;">no → yes</b> <span class="b ok">upgrade</span></span></li>
+<li style="display: flex; gap: 14px; padding: 10px 0;"><span class="muted" style="width: 110px; flex: 0 0 auto; font-size: 13px;">27 Sep 11:42</span><span>First captured by pi-lab</span></li>
+</ol>
+</section>
+
+<section class="card" aria-labelledby="det-h" style="flex: 1 1 360px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;">
+<h2 id="det-h" style="font-size: 16px;">Events of this AP</h2>
+<div style="display: flex; flex-direction: column; gap: 10px;">
+<div style="display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 8px; background: #F7F8F6;">
+<div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;"><span class="b neu">Low</span><span class="b info">False positive</span><span class="muted" style="font-size: 12px;">9 Oct 19:30 · pi-fri</span></div>
+<span>RSSI deviation of +12 dB from baseline for 25 min</span>
+<span class="muted" style="font-size: 12px;">Marked: pi-lab saw no change at the same time, signal returned to baseline</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 8px; background: #F7F8F6;">
+<div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;"><span class="b neu">Info</span><span class="muted" style="font-size: 12px;">8 Oct 08:03 · pi-fri, pi-lab</span></div>
+<span>Channel change 64 → 48 (both sensors agree)</span>
+</div>
+</div>
+<a href="Events.dc.html" style="font-size: 13px;">All events</a>
+</section>
+</div>
+
+<section class="card" aria-labelledby="note-h" style="padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;">
+<h2 id="note-h" style="font-size: 16px;">Note</h2>
+<label for="ap-note" class="muted" style="font-size: 12px;">Internal note about this AP (visible in the account)</label>
+<textarea id="ap-note" rows="2" style="font: inherit; font-size: 14px; padding: 10px 12px; border: 1px solid #C9CDC5; border-radius: 8px; resize: vertical;">Campus infrastructure, managed by CIT. AP in room RA321.</textarea>
+<div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center;">
+<button type="button" class="btn">Save</button>
+<span class="muted" style="font-size: 12px;">Saving requires the write token until login exists.</span>
+</div>
+</section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview": {"width": 1440, "height": 1700}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { cls: 'managed', hR: null, hU: null, cell: null };
+  }
+  renderVals() {
+    var self = this, st = this.state;
+    // ---- shared mock-data helpers (identical in every board) ----
+    // All times are wall-clock Bratislava time stored in UTC fields, so the
+    // viewer's own time zone never shifts the mock data.
+    var DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    var HOUR = 3600e3;
+    function T(m, d, h, min) { return Date.UTC(2026, m - 1, d, h || 0, min || 0); }
+    function two(n) { return (n < 10 ? '0' : '') + n; }
+    function dt(t) { return new Date(t); }
+    function dayLabel(t) { var x = dt(t); return DAY[x.getUTCDay()] + ' ' + x.getUTCDate() + ' ' + MON[x.getUTCMonth()]; }
+    function hhmm(t) { var x = dt(t); return two(x.getUTCHours()) + ':' + two(x.getUTCMinutes()); }
+    var NOW = T(10, 10, 17, 52);
+    var FRI_START = T(9, 15, 14, 55);
+    var FRI_OUT = [[T(9, 21, 18, 26), T(9, 21, 23, 47)], [T(9, 22, 15, 43), T(9, 23, 11, 27)]];
+    var LAB_START = T(9, 27, 11, 30);
+    var LAB_DOWN = T(10, 10, 14, 41);
+    function overlap(a, b, c, d) { return Math.max(0, Math.min(b, d) - Math.max(a, c)); }
+    // fraction of [a, b) during which a sensor was collecting
+    function coverage(sensor, a, b) {
+      b = Math.min(b, NOW);
+      if (b <= a) return 0;
+      if (sensor === 'pi-lab') return overlap(a, b, LAB_START, LAB_DOWN) / (b - a);
+      var up = overlap(a, b, FRI_START, NOW);
+      FRI_OUT.forEach(function (o) { up -= overlap(a, b, o[0], o[1]); });
+      return Math.max(0, up) / (b - a);
+    }
+    // buckets of the selected period: 24 x 1 h, 28 x 6 h, or 30 x 1 day
+    function bucketsFor(r) {
+      var sp = r === '24h' ? { start: T(10, 9, 18), step: 1, n: 24 }
+        : (r === '7d' ? { start: T(10, 3, 18), step: 6, n: 28 } : { start: T(9, 11, 0), step: 24, n: 30 });
+      var out = [];
+      for (var i = 0; i < sp.n; i++) {
+        var a = sp.start + i * sp.step * HOUR, b = a + sp.step * HOUR;
+        var x = dt(a);
+        var label = sp.step === 24 ? dayLabel(a)
+          : dayLabel(a) + ', ' + hhmm(a) + '–' + (b > NOW ? hhmm(NOW) : (sp.step === 1 ? hhmm(b) : (hhmm(b) === '00:00' ? '24:00' : hhmm(b))));
+        out.push({ i: i, a: a, b: b, step: sp.step, wd: x.getUTCDay(), h0: x.getUTCHours(), label: label });
+      }
+      return out;
+    }
+    function rangeText(r) {
+      return r === '24h' ? 'last 24 h: 9 Oct 18:00 – 10 Oct 17:52'
+        : (r === '7d' ? 'last 7 days: 3 Oct 18:00 – 10 Oct 17:52' : 'last 30 days: 11 Sep – 10 Oct 17:52');
+    }
+    // x-axis labels placed at the bucket where a day (or 6-hour mark) starts
+    function xLabels(bs) {
+      var out = [];
+      bs.forEach(function (b, i) {
+        var x = dt(b.a), left = (i / bs.length * 100).toFixed(2) + '%';
+        if (b.step === 1) {
+          if (i === 0) out.push({ t: DAY[b.wd] + ' ' + hhmm(b.a), left: left });
+          else if (x.getUTCHours() % 6 === 0) out.push({ t: x.getUTCHours() === 0 ? DAY[b.wd] + ' 00:00' : hhmm(b.a), left: left });
+        } else if (b.step === 6) {
+          if (x.getUTCHours() === 0) out.push({ t: dayLabel(b.a), left: left });
+        } else if (i === 0 || b.wd === 1) {
+          out.push({ t: dayLabel(b.a), left: left });
+        }
+      });
+      return out;
+    }
+    // diurnal and weekly shape of activity on campus
+    function hourF(h) { return (h >= 8 && h <= 18) ? Math.sin((h - 7) / 12 * Math.PI) : 0; }
+    function dayF(wd) { return (wd === 0 || wd === 6) ? 0.16 : (wd === 5 ? 0.78 : (wd === 2 ? 1.02 : 0.95)); }
+    function termF(t) { return t < T(9, 21, 0) ? 0.35 : 1; }
+    // clients on managed networks in one hour (sum of BSS Load station counts)
+    function clientsAt(t) {
+      var x = dt(t), wd = x.getUTCDay(), h = x.getUTCHours();
+      var evening = (h >= 19 && h <= 21 && wd !== 0 && wd !== 6) ? 25 : 0;
+      return Math.round(12 + (510 * hourF(h) * dayF(wd) + evening) * termF(t));
+    }
+    function hoursOf(b) { var hs = []; for (var t = b.a; t < Math.min(b.b, NOW); t += HOUR) hs.push(t); return hs; }
+    // tooltip placed beside column i of n so it never covers the hovered column
+    function tipPos(i, n) {
+      return i < n / 2 ? 'left: calc(' + ((i + 1) / n * 100).toFixed(2) + '% + 6px);'
+        : 'right: calc(' + ((n - i) / n * 100).toFixed(2) + '% + 6px);';
+    }
+    function noTip() { return { show: false, pos: '', head: '', rows: [], notes: [] }; }
+    function fmt(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+    var RAMP = ['#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#256abf', '#184f95', '#0d366b'];
+    var HATCH = 'repeating-linear-gradient(45deg,#C9CDC5 0 3px,#FFFFFF 3px 6px)';
+    // ---- end of shared helpers ----
+    var opts = [{ id: 'managed', label: 'Managed' }, { id: 'friendly', label: 'Friendly' }, { id: 'unknown', label: 'Unknown' }, { id: 'suspicious', label: 'Suspicious' }, { id: 'ignored', label: 'Ignored' }];
+    var classes = opts.map(function (o) {
+      var on = st.cls === o.id;
+      return { label: o.label, pressed: on ? 'true' : 'false', extra: on && o.id === 'suspicious' ? 'background: #A61B1B;' : '',
+        pick: function () { self.setState({ cls: o.id }); } };
+    });
+
+    // ---- RSSI per sensor: 84 two-hour medians from 3 Oct 18:00 ----
+    var start = T(10, 3, 18), N = 84;
+    function dbm(v) { return String(v).replace('-', '\u2212') + ' dBm'; }
+    function y(v) { return ((-50 - v) / 45 * 220).toFixed(1); }
+    var friV = [], labV = [];
+    for (var i = 0; i < N; i++) {
+      var wob = Math.sin(i * 0.9) * 1.6 + Math.sin(i * 0.23) * 1.1;
+      friV.push(Math.round(-63 + wob + (i === 72 ? 7 : 0)));
+      var a = start + i * 2 * HOUR;
+      labV.push(a < LAB_DOWN ? Math.round(-79 + Math.sin(i * 0.7 + 1) * 2.6 + Math.cos(i * 0.31) * 1.8) : null);
+    }
+    function xOf(i) { return ((i + 0.5) / N * 1000).toFixed(1); }
+    var fri = friV.map(function (v, i) { return xOf(i) + ',' + y(v); }).join(' ');
+    var lab = labV.filter(function (v) { return v !== null; }).map(function (v, i) { return xOf(i) + ',' + y(v); }).join(' ');
+    var hits = friV.map(function (v, i) {
+      var a = start + i * 2 * HOUR;
+      return { line: st.hR === i ? '#1C2024' : 'transparent',
+        aria: dayLabel(a) + ', ' + hhmm(a) + ': pi-fri ' + dbm(v) + (labV[i] !== null ? ', pi-lab ' + dbm(labV[i]) : ', pi-lab no data'),
+        enter: function () { self.setState({ hR: i }); } };
+    });
+    var rssiTip = noTip();
+    if (st.hR !== null) {
+      var a0 = start + st.hR * 2 * HOUR, lv = labV[st.hR];
+      rssiTip = { show: true, pos: tipPos(st.hR, N), head: dayLabel(a0) + ', ' + hhmm(a0) + '–' + hhmm(Math.min(a0 + 2 * HOUR, NOW)),
+        rows: [{ c: '#2a78d6', v: dbm(friV[st.hR]), l: 'pi-fri' }, { c: '#eb6834', v: lv === null ? '–' : dbm(lv), l: lv === null ? 'pi-lab offline' : 'pi-lab' }],
+        notes: ['pi-fri baseline −62 to −66 dBm'].concat(friV[st.hR] > -59 ? ['Outside the baseline band (see event 9 Oct 19:30)'] : []) };
+    }
+    var xlabels = [];
+    for (var j = 0; j < N; j++) { var aj = start + j * 2 * HOUR; if (dt(aj).getUTCHours() === 0) xlabels.push({ t: dayLabel(aj), left: (j / N * 100).toFixed(2) + '%' }); }
+
+    // ---- clients heatmap (average week of this AP) ----
+    var names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], full = ['Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays', 'Sundays'];
+    function bin(v) { var th = [2, 5, 8, 12, 16, 20]; for (var k = 0; k < th.length; k++) if (v < th[k]) return RAMP[k]; return RAMP[6]; }
+    var heat = names.map(function (d, di) {
+      var cells = [];
+      for (var h = 0; h < 24; h++) {
+        var v;
+        if (di >= 5) v = (h >= 10 && h <= 16) ? 2 : 0;
+        else if (h >= 8 && h <= 18) v = Math.round(9 + 13 * Math.sin((h - 7) / 12 * Math.PI) - (di === 4 && h > 13 ? 8 : 0));
+        else if (h === 7 || h === 19 || h === 20) v = 4;
+        else v = 0;
+        (function (ri, ci, val) {
+          var text = full[ri] + ', ' + two(ci) + ':00–' + two((ci + 1) % 24) + ':00 · average ' + val + (val === 1 ? ' client' : ' clients');
+          cells.push({ bg: bin(val), cls: st.cell && st.cell.r === ri && st.cell.c === ci ? 'on' : '',
+            enter: function () { self.setState({ cell: { r: ri, c: ci, text: text } }); } });
+        })(di, h, v);
+      }
+      return { day: d, cells: cells };
+    });
+
+    // ---- channel utilization per 6-hour window ----
+    var bs = bucketsFor('7d');
+    var uv = bs.map(function (b) {
+      var hs = hoursOf(b).map(function (t) {
+        var x = dt(t), h = x.getUTCHours(), wd = x.getUTCDay();
+        var we = (wd === 0 || wd === 6) ? 0.25 : 1;
+        var dayU = (h >= 8 && h <= 18) ? Math.sin((h - 7) / 12 * Math.PI) : 0;
+        return Math.round(6 + 0.85 * (10 + 62 * dayU * we * (wd === 2 ? 1.08 : 1)));
+      });
+      var avg = Math.round(hs.reduce(function (s2, v) { return s2 + v; }, 0) / hs.length);
+      return { b: b, avg: avg, peak: Math.max.apply(null, hs) };
+    });
+    var uTop = Math.max.apply(null, uv.map(function (u) { return u.peak; }));
+    var util = uv.map(function (u, i) {
+      return { cls: st.hU === i ? 'on' : '', h: Math.round(u.avg / uTop * 100) + '%',
+        aria: u.b.label + ': average ' + u.avg + ' %, peak ' + u.peak + ' %',
+        enter: function () { self.setState({ hU: i }); } };
+    });
+    var utilTip = noTip();
+    if (st.hU !== null) {
+      var hu = uv[st.hU];
+      utilTip = { show: true, pos: tipPos(st.hU, uv.length), head: hu.b.label,
+        rows: [{ c: '#2a78d6', v: hu.avg + ' %', l: 'average' }, { c: 'transparent', v: hu.peak + ' %', l: 'hourly peak' }], notes: [] };
+    }
+    var all = uv.map(function (u) { return u.avg; }).sort(function (p, q) { return p - q; });
+    var best = uv.reduce(function (p, q) { return q.peak > p.peak ? q : p; });
+    var uLabels = xLabels(bs).filter(function (x, k) { return k % 3 === 0; });
+
+    return {
+      classes: classes,
+      fri: fri, lab: lab, hits: hits, rssiTip: rssiTip, xlabels: xlabels,
+      leaveRssi: function () { self.setState({ hR: null }); },
+      heat: heat,
+      hint: st.cell ? st.cell.text : 'Hover a cell for the weekday, hour and average number of clients.',
+      leaveCell: function () { self.setState({ cell: null }); },
+      util: util, utilTip: utilTip, uLabels: uLabels,
+      utilSub: 'Median ' + all[Math.floor(all.length / 2)] + ' %, peak ' + best.peak + ' % (' + best.b.label + ').',
+      leaveUtil: function () { self.setState({ hU: null }); },
+      false: false, true: true
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings – sensors</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F2;color:#1C2024;font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px;line-height:1.45}
+a{color:#0B5C7A}a:hover{color:#07445B}
+h1,h2,h3{margin:0;font-weight:600}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:13px}
+.muted{color:#535B63}
+.b{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E3F1E8;color:#1D6B43}.warn{background:#FCEBD5;color:#8A4B00}.bad{background:#FBE3E1;color:#A61B1B}.info{background:#E2ECF8;color:#1F4E8C}.neu{background:#ECEEEA;color:#3F474E}.mute{background:#F4F5F2;color:#535B63;border:1px solid #DADDD6}
+.card{background:#FFFFFF;border:1px solid #DADDD6;border-radius:10px}
+.t{width:100%;border-collapse:collapse}.t th{text-align:left;font-weight:500;color:#535B63;font-size:12px;padding:10px 12px;border-bottom:1px solid #DADDD6;white-space:nowrap}.t td{padding:10px 12px;border-bottom:1px solid #ECEEEA;vertical-align:middle}
+.nw td{white-space:nowrap}
+.app{display:flex;flex-wrap:wrap;min-height:100vh}
+.side{flex:1 1 220px;background:#1F2A2E;color:#E6EAE8;padding:22px 14px;box-sizing:border-box;display:flex;flex-direction:column;gap:18px}
+@media (min-width:900px){.side{flex:0 0 232px;position:sticky;top:0;height:100vh;align-self:flex-start}}
+.main{flex:999 1 560px;min-width:0;display:flex;flex-direction:column}
+.nav{display:flex;flex-wrap:wrap;gap:2px}
+.nav a{display:flex;align-items:center;padding:10px 12px;border-radius:8px;color:#E6EAE8;text-decoration:none;min-height:24px;flex:1 1 180px}
+.nav a:hover{background:#2A383D;color:#FFFFFF}
+.nav a[aria-current="page"]{background:#33464C;color:#FFFFFF;font-weight:500}
+.sb{padding:12px 8px 0;border-top:1px solid #33464C;display:flex;flex-direction:column;gap:7px;font-size:12px;color:#C3CCCA}
+.sbh{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8E9A98}
+.sbi{display:flex;align-items:center;gap:8px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:0 0 auto}
+.top{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;padding:14px 32px;background:#FFFFFF;border-bottom:1px solid #DADDD6;min-height:44px}
+.fl{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#535B63}
+.sel{height:40px;padding:0 10px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:14px;color:#1C2024}
+.sync{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:13px;color:#535B63}
+.content{padding:28px 32px 40px;display:flex;flex-direction:column;gap:20px;max-width:1280px;box-sizing:border-box;width:100%}
+.sec{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;padding-bottom:6px;border-bottom:1px solid #DADDD6}
+.chip{height:36px;padding:0 12px;border:1px solid #C9CDC5;border-radius:999px;background:#FFFFFF;font:inherit;font-size:13px;color:#1C2024;cursor:pointer}
+.chip[aria-pressed="true"]{background:#E2ECF8;border-color:#9DB6D8;color:#1F4E8C}
+.btn{height:44px;padding:0 18px;border:0;border-radius:8px;background:#0B5C7A;color:#FFFFFF;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.btn2{height:36px;padding:0 12px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:13px;color:#1C2024;cursor:pointer;white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center}
+.sen{display:inline-flex;gap:6px;align-items:center;padding:2px 8px;border-radius:6px;background:#F1F3EF;font-size:12px;white-space:nowrap}
+.kv{display:grid;grid-template-columns:minmax(120px,40%) minmax(0,1fr);gap:8px 12px;font-size:13px}.kv dt{color:#535B63}.kv dd{margin:0}
+.in{height:40px;padding:0 10px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:14px;color:#1C2024;box-sizing:border-box}
+.tag{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:6px;background:#F1F3EF;font-size:12px;margin:2px 4px 2px 0}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between;padding:14px 0;border-bottom:1px solid #ECEEEA}
+.lg{display:flex;gap:6px 16px;font-size:12px;color:#535B63;flex-wrap:wrap}
+.lg>span{display:flex;align-items:center;gap:6px}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block;flex:0 0 auto}
+.seg{display:flex;border:1px solid #C9CDC5;border-radius:8px;overflow:hidden}
+.seg button{border:0;height:40px;padding:0 14px;font:inherit;font-size:13px;cursor:pointer;background:#FFFFFF;color:#1C2024}
+.seg button+button{border-left:1px solid #C9CDC5}
+.seg button[aria-pressed="true"]{background:#1F2A2E;color:#FFFFFF}
+.seg button[aria-disabled="true"]{color:#8C939A;cursor:not-allowed}
+.chart{display:flex;gap:10px}
+.yax{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:#535B63;text-align:right;width:30px;padding-bottom:4px;box-sizing:border-box;flex:0 0 auto}
+.plot{position:relative;flex:1 1 auto;min-width:0;display:flex;align-items:flex-end;gap:3px;border-bottom:1px solid #DADDD6;box-sizing:border-box;padding-bottom:4px}
+.col{flex:1 1 0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;border-radius:4px 4px 0 0;outline:none;cursor:default}
+.col.on{background:#E6E9E3}
+.col:focus-visible{box-shadow:0 0 0 2px #0B5C7A}
+.xax{position:relative;height:18px;font-size:12px;color:#535B63;margin-left:40px}
+.xax span{position:absolute;top:0;white-space:nowrap}
+.tip{position:absolute;top:0;z-index:20;min-width:180px;padding:9px 11px;background:#FFFFFF;border:1px solid #C9CDC5;border-radius:8px;box-shadow:0 6px 18px rgba(28,32,36,.16);font-size:12px;line-height:1.4;pointer-events:none;white-space:nowrap;display:flex;flex-direction:column;gap:3px}
+.th{color:#535B63;font-weight:500;margin-bottom:2px}
+.tr{display:flex;align-items:center;gap:8px}
+.tr i{width:12px;height:3px;border-radius:2px;flex:0 0 auto}
+.tr b{font-weight:600;font-size:13px;color:#1C2024;min-width:30px;text-align:right}
+.tr span{color:#535B63}
+.tn{color:#535B63;border-top:1px solid #ECEEEA;padding-top:4px;margin-top:2px;white-space:normal;max-width:240px}
+.hint{min-height:22px;padding:8px 12px;border-radius:8px;background:#F4F5F2;font-size:13px;color:#1C2024}
+.cell{flex:1 1 0;border-radius:2px}
+.cell.on{outline:2px solid #1C2024;outline-offset:-1px}
+.ramp{display:flex;align-items:center;gap:6px;font-size:11px;color:#535B63}
+.ramp i{width:18px;height:12px;border-radius:2px;display:inline-block}
+</style>
+</helmet>
+<div class="app">
+<nav class="side" aria-label="Main navigation">
+<div style="display: flex; flex-direction: column; gap: 2px; padding: 0 8px;">
+<span style="font-weight: 600; font-size: 16px; color: #FFFFFF;">Wi-Fi Sensor</span>
+<span style="font-size: 12px; color: #A9B4B2;">Account: KIS FRI</span>
+</div>
+<div class="nav">
+<a href="Main.dc.html">Overview</a>
+<a href="Events.dc.html">Events</a>
+<a href="Networks.dc.html">Networks</a>
+<a href="Aps.dc.html">Access points</a>
+<a href="Spectrum.dc.html">Spectrum</a>
+<a href="Sensors.dc.html">Sensors</a>
+<a href="Settings.dc.html" aria-current="page">Settings</a>
+</div>
+<div class="sb" style="margin-top: auto;">
+<span class="sbh">Sensors</span>
+<span class="sbi"><span class="dot" style="background: #0ca30c;"></span>pi-fri · online</span>
+<span class="sbi"><span class="dot" style="background: #d03b3b;"></span>pi-lab · offline 3 h</span>
+</div>
+<div class="sb">
+<span class="sbh">System</span>
+<span class="sbi" title="GET /api/health"><span class="dot" style="background: #0ca30c;"></span>API ok · database ok</span>
+<span class="sbi" style="padding-left: 16px;">schema v8</span>
+</div>
+</nav>
+<main class="main">
+<header class="top" style="align-items: center;">
+<span class="muted" style="font-size: 13px;">Settings / {{tabLabel}} · <span class="mono">/settings/{{tab}}</span></span>
+<div class="sync"><span>Latest data: 10 Oct 17:52</span><span class="b neu">Write locked</span></div>
+</header>
+
+<div class="content" style="max-width: 1100px;">
+<h1 style="font-size: 26px;">Settings</h1>
+
+<nav aria-label="Settings sections" style="display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid #DADDD6;">
+<sc-for list="{{tabs}}" as="t" hint-placeholder-count="5"><button type="button" aria-current="{{t.current}}" aria-disabled="{{t.disabled}}" onClick="{{t.pick}}" style="height: 44px; padding: 0 14px; border: 0; border-bottom: 2px solid {{t.line}}; background: transparent; font: inherit; color: {{t.color}}; font-weight: {{t.fw}}; cursor: pointer;">{{t.label}}</button></sc-for>
+</nav>
+
+<section aria-labelledby="tok-h" style="padding: 14px 16px; border-radius: 10px; background: #F1F5F8; border: 1px solid #C9D7E2; display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; justify-content: space-between;">
+<div style="display: flex; flex-direction: column; gap: 2px; flex: 1 1 380px;">
+<h2 id="tok-h" style="font-size: 15px;">Changes are protected by a write token</h2>
+<span style="font-size: 13px; color: #3F474E;">Reading is public for now. Changing settings and classification requires the write token from the server's .env file until login exists.</span>
+</div>
+<div style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap;">
+<label class="fl">Write token
+<input type="password" class="in" placeholder="••••••••••••" style="width: 220px;">
+</label>
+<button type="button" class="btn" style="height: 40px;">Unlock</button>
+</div>
+</section>
+
+<sc-if value="{{isNetworks}}" hint-placeholder-val="{{true}}">
+<section class="card" aria-labelledby="net-h" style="padding: 20px 22px; display: flex; flex-direction: column; gap: 12px;">
+<div style="display: flex; flex-direction: column; gap: 4px;">
+<h2 id="net-h" style="font-size: 17px;">Managed and friendly networks</h2>
+<span class="muted" style="font-size: 13px;"><b style="color: #1C2024; font-weight: 500;">Managed</b>: a network you run. Its security is checked and every BSSID using its name that is not in the allowed list raises an alert (evil twin). <b style="color: #1C2024; font-weight: 500;">Friendly</b>: someone else's known, legitimate network (a neighbour, the next building). It is not checked and raises no events; it is only kept out of the unknown list.</span>
+</div>
+<div style="overflow-x: auto;">
+<table class="t">
+<thead><tr><th>SSID</th><th>Type</th><th>Expected security</th><th>MFP required</th><th>Allowed BSSIDs / vendors</th><th><span style="position: absolute; left: -9999px;">Actions</span></th></tr></thead>
+<tbody>
+<tr>
+<td style="font-weight: 500;">IK-WIFI-DOT1X</td>
+<td><select class="in" aria-label="Network type"><option selected>Managed</option><option>Friendly</option></select></td>
+<td><select class="in" aria-label="Expected security"><option selected>Enterprise (802.1X)</option><option>WPA2-PSK or better</option><option>WPA3</option><option>Open allowed</option></select></td>
+<td><label style="display: inline-flex; gap: 8px; align-items: center; min-height: 40px;"><input type="checkbox" checked style="width: 18px; height: 18px;">yes</label></td>
+<td><span class="tag">Ruckus <span class="mono">EC:58:EA</span></span><span class="tag">Ruckus <span class="mono">3C:46:A1</span></span></td>
+<td><button type="button" class="btn2">Remove</button></td>
+</tr>
+<tr>
+<td style="font-weight: 500;">IK-WIFI</td>
+<td><select class="in" aria-label="Network type"><option selected>Managed</option><option>Friendly</option></select></td>
+<td><select class="in" aria-label="Expected security"><option>Enterprise (802.1X)</option><option>WPA2-PSK or better</option><option>WPA3</option><option selected>Open allowed</option></select></td>
+<td><label style="display: inline-flex; gap: 8px; align-items: center; min-height: 40px;"><input type="checkbox" style="width: 18px; height: 18px;">no</label></td>
+<td><span class="tag">Ruckus <span class="mono">EC:58:EA</span></span></td>
+<td><button type="button" class="btn2">Remove</button></td>
+</tr>
+<tr>
+<td style="font-weight: 500;">FRI_wifi</td>
+<td><select class="in" aria-label="Network type"><option selected>Managed</option><option>Friendly</option></select></td>
+<td><select class="in" aria-label="Expected security"><option>Enterprise (802.1X)</option><option selected>WPA2-PSK or better</option><option>WPA3</option><option>Open allowed</option></select></td>
+<td><label style="display: inline-flex; gap: 8px; align-items: center; min-height: 40px;"><input type="checkbox" style="width: 18px; height: 18px;">no</label></td>
+<td><span class="tag"><span class="mono">E4:8D:8C:41:7B:A1</span></span><span class="tag"><span class="mono">E4:8D:8C:41:7B:A2</span></span></td>
+<td><button type="button" class="btn2">Remove</button></td>
+</tr>
+<tr>
+<td style="font-weight: 500;">[Friendly network 1]</td>
+<td><select class="in" aria-label="Network type"><option>Managed</option><option selected>Friendly</option></select></td>
+<td class="muted">not checked</td>
+<td class="muted">–</td>
+<td><span class="tag"><span class="mono">50:C7:BF:6A:01:2E</span></span></td>
+<td><button type="button" class="btn2">Remove</button></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; padding-top: 4px;">
+<label class="fl" style="flex: 1 1 220px;">Add network (SSID)
+<input type="text" class="in" placeholder="e.g. eduroam" style="width: 100%;">
+</label>
+<label class="fl">Type
+<select class="in"><option>Managed</option><option>Friendly</option></select>
+</label>
+<button type="button" class="btn2" style="height: 40px; padding: 0 16px; border-color: #0B5C7A; color: #0B5C7A; font-weight: 500;">Add</button>
+</div>
+</section>
+</sc-if>
+
+<sc-if value="{{isClassification}}" hint-placeholder-val="{{false}}">
+<section class="card" aria-labelledby="cls-h" style="padding: 20px 22px 6px; display: flex; flex-direction: column;">
+<h2 id="cls-h" style="font-size: 17px; margin-bottom: 4px;">Classification rules</h2>
+<span class="muted" style="font-size: 13px; padding-bottom: 6px;">How new APs are classified automatically. Manual classification on the AP detail always wins.</span>
+<div class="row">
+<div style="display: flex; flex-direction: column; gap: 2px; flex: 1 1 380px;"><span style="font-weight: 500;">Ignore hotspots with a randomized BSSID</span><span class="muted" style="font-size: 13px;">Locally administered MAC addresses (phones). 100 APs today.</span></div>
+<label style="display: inline-flex; gap: 8px; align-items: center; min-height: 40px;"><input type="checkbox" checked style="width: 18px; height: 18px;">on</label>
+</div>
+<div class="row">
+<div style="display: flex; flex-direction: column; gap: 2px; flex: 1 1 380px;"><span style="font-weight: 500;">Managed SSID from a BSSID that is not allowed → suspicious</span><span class="muted" style="font-size: 13px;">Enables evil twin detection (a). Without a list of managed networks it stays off.</span></div>
+<label style="display: inline-flex; gap: 8px; align-items: center; min-height: 40px;"><input type="checkbox" checked style="width: 18px; height: 18px;">on</label>
+</div>
+<div class="row">
+<div style="display: flex; flex-direction: column; gap: 2px; flex: 1 1 380px;"><span style="font-weight: 500;">AP from an allowed vendor with a managed SSID → managed</span><span class="muted" style="font-size: 13px;">New campus BSSIDs classify themselves. Convenient, but less strict.</span></div>
+<label style="display: inline-flex; gap: 8px; align-items: center; min-height: 40px;"><input type="checkbox" style="width: 18px; height: 18px;">off</label>
+</div>
+<div class="row" style="border-bottom: 0;">
+<div style="display: flex; flex-direction: column; gap: 2px; flex: 1 1 380px;"><span style="font-weight: 500;">Ignore APs weaker than</span><span class="muted" style="font-size: 13px;">Distant APs at the sensitivity limit of the adapter (floor −106 dBm).</span></div>
+<label style="display: flex; gap: 8px; align-items: center;"><input type="number" class="in" value="-92" style="width: 90px;" aria-label="Threshold in dBm"> dBm</label>
+</div>
+</section>
+</sc-if>
+
+<sc-if value="{{isDetectors}}" hint-placeholder-val="{{false}}">
+<section class="card" aria-labelledby="det-h" style="padding: 20px 22px 6px; display: flex; flex-direction: column;">
+<h2 id="det-h" style="font-size: 17px; margin-bottom: 4px;">Detectors</h2>
+<span class="muted" style="font-size: 13px; padding-bottom: 6px;">Detector sensitivity. A change applies to the next run; past events are re-evaluated.</span>
+<div class="row">
+<div style="display: flex; flex-direction: column; gap: 2px; flex: 1 1 380px;"><span style="font-weight: 500;">Deauth flood – minimum number of bursts in a window</span><span class="muted" style="font-size: 13px;">Kismet DEAUTHFLOOD is always reported; this catches slow attacks below its threshold.</span></div>
+<div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;"><input type="number" class="in" value="3" aria-label="Number of bursts" style="width: 80px;"><span>in</span><input type="number" class="in" value="300" aria-label="Window in seconds" style="width: 90px;"><span>s</span></div>
+</div>
+<div class="row">
+<div style="display: flex; flex-direction: column; gap: 2px; flex: 1 1 380px;"><span style="font-weight: 500;">Evil twin (b) – RSSI deviation from baseline</span><span class="muted" style="font-size: 13px;">Multiple of the robust σ and the minimum deviation in dB.</span></div>
+<div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;"><span>k =</span><input type="number" class="in" value="6" aria-label="Sigma multiple" style="width: 70px;"><span>min.</span><input type="number" class="in" value="8" aria-label="Minimum deviation in dB" style="width: 70px;"><span>dB</span></div>
+</div>
+<div class="row">
+<div style="display: flex; flex-direction: column; gap: 2px; flex: 1 1 380px;"><span style="font-weight: 500;">Evil twin (b) – guard period after an AP channel change</span><span class="muted" style="font-size: 13px;">Fewer false positives, but also a blind spot (with 1 h, up to 41 % of the time for campus APs).</span></div>
+<select class="in" aria-label="Guard period"><option selected>off</option><option>10 min</option><option>30 min</option><option>1 h</option></select>
+</div>
+<div class="row" style="border-bottom: 0;">
+<div style="display: flex; flex-direction: column; gap: 2px; flex: 1 1 380px;"><span style="font-weight: 500;">Alert when a sensor sends no data for longer than</span><span class="muted" style="font-size: 13px;">Creates an event of type Sensor.</span></div>
+<label style="display: flex; gap: 8px; align-items: center;"><input type="number" class="in" value="15" style="width: 80px;" aria-label="Minutes"> min</label>
+</div>
+</section>
+</sc-if>
+
+<sc-if value="{{hasSave}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end;">
+<button type="button" class="btn2" style="height: 44px; padding: 0 18px; font-size: 14px;">Discard changes</button>
+<button type="button" class="btn">Save {{tabLabelLower}}</button>
+</div>
+</sc-if>
+
+<sc-if value="{{isSensors}}" hint-placeholder-val="{{false}}">
+<section class="card" aria-labelledby="sen-h" style="padding: 20px 22px; display: flex; flex-direction: column; gap: 16px;">
+<div style="display: flex; flex-direction: column; gap: 4px;">
+<h2 id="sen-h" style="font-size: 17px;">Capture configuration</h2>
+<span class="muted" style="font-size: 13px;">Select one, several or all sensors and give them a common configuration. A sensor picks it up in the response to its next upload (within ~30 s when online). “Sensor settings” on the Sensors page opens this tab with that sensor selected.</span>
+</div>
+<div style="overflow-x: auto;">
+<table class="t nw">
+<thead><tr>
+<th><label style="display: inline-flex; gap: 8px; align-items: center; min-height: 32px;"><input type="checkbox" checked="{{allSel}}" onChange="{{toggleAll}}" style="width: 18px; height: 18px;">All</label></th>
+<th>Sensor</th><th>Status</th><th>Channel plan</th><th>Dwell</th><th>Poll</th><th>Configuration</th>
+</tr></thead>
+<tbody>
+<tr style="background: {{friBg}};">
+<td><label style="display: inline-flex; gap: 8px; align-items: center; min-height: 32px;"><input type="checkbox" checked="{{selFri}}" onChange="{{toggleFri}}" style="width: 18px; height: 18px;"><span style="position: absolute; left: -9999px;">Select pi-fri</span></label></td>
+<td style="font-weight: 500;">pi-fri</td><td><span class="b ok">Online</span></td><td>89 settings (20/40/80 MHz)</td><td>0.2 s</td><td>30 s</td><td><span class="b ok">Confirmed 27 Sep 14:15</span></td>
+</tr>
+<tr style="background: {{labBg}};">
+<td><label style="display: inline-flex; gap: 8px; align-items: center; min-height: 32px;"><input type="checkbox" checked="{{selLab}}" onChange="{{toggleLab}}" style="width: 18px; height: 18px;"><span style="position: absolute; left: -9999px;">Select pi-lab</span></label></td>
+<td style="font-weight: 500;">pi-lab</td><td><span class="b bad">Offline 3 h</span></td><td>37 settings (20 MHz only)</td><td>0.2 s</td><td>30 s → <b style="font-weight: 500;">60 s</b></td><td><span class="b warn">Waiting for the sensor</span></td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<sc-if value="{{mixed}}" hint-placeholder-val="{{false}}">
+<div style="padding: 10px 12px; border-radius: 8px; background: #FDF8F1; border: 1px solid #F0D9B5; font-size: 13px; color: #6B3A00;">The selected sensors currently use different channel plans (89 and 37). After saving both get the same one, so their measurements become directly comparable.</div>
+</sc-if>
+
+<div style="display: flex; flex-wrap: wrap; gap: 24px; opacity: {{formOpacity}};">
+<fieldset style="flex: 1 1 460px; margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px;">
+<legend style="font-weight: 500; padding: 0 0 6px;">Channel plan</legend>
+<sc-for list="{{plans}}" as="p" hint-placeholder-count="5">
+<label style="display: flex; gap: 12px; align-items: flex-start; padding: 10px 12px; border: 1px solid {{p.border}}; border-radius: 8px; background: {{p.bg}};"><input type="radio" name="plan" checked="{{p.on}}" onChange="{{p.pick}}" style="width: 18px; height: 18px; margin-top: 2px;"><span style="display: flex; flex-direction: column; gap: 2px;"><span style="font-weight: 500;">{{p.title}}</span><span class="muted" style="font-size: 13px;">{{p.desc}}</span></span></label>
+</sc-for>
+<sc-if value="{{showLock}}" hint-placeholder-val="{{false}}"><label class="fl" style="padding-left: 42px;">Channel<select class="in" style="width: 140px;"><option>channel 6</option><option>channel 1</option><option>channel 44</option></select></label></sc-if>
+<sc-if value="{{showCustom}}" hint-placeholder-val="{{false}}"><label class="fl" style="padding-left: 42px;">Channels, comma separated<input type="text" class="in mono" placeholder="1,6,11,36,40,44,48"><span>The list length is checked: it must be coprime with Kismet's hop stride, otherwise some channels are never visited.</span></label></sc-if>
+</fieldset>
+<div style="flex: 1 1 300px; display: flex; flex-direction: column; gap: 14px;">
+<label class="fl" style="font-size: 13px; color: #1C2024;"><span style="font-weight: 500;">Dwell time per channel</span>
+<select class="in"><option>0.2 s (5 hops/s)</option><option>0.5 s (2 hops/s)</option><option>1 s</option></select>
+<span class="muted" style="font-size: 12px;">Longer = more frames per channel, but a longer cycle.</span>
+</label>
+<label class="fl" style="font-size: 13px; color: #1C2024;"><span style="font-weight: 500;">Collector poll interval</span>
+<select class="in"><option>15 s</option><option selected>30 s</option><option>60 s</option></select>
+<span class="muted" style="font-size: 12px;">Shorter = finer RSSI series, ~2× more data on the sensor and the server.</span>
+</label>
+<div style="display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 8px; background: #F4F5F2; font-size: 13px; color: #3F474E;">
+<span style="font-weight: 500; color: #1C2024;">Upload to the server: automatic, after every poll</span>
+<span>Not configurable. After a connection outage the sensor uploads the backlog from its 14-day buffer in batches.</span>
+</div>
+<button type="button" class="btn" aria-disabled="{{noSel}}" style="background: {{btnBg}};">{{btnLabel}}</button>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 6px;">
+<span style="font-weight: 500;">Configuration history <span class="muted" style="font-weight: 400;">· every channel-plan change is a boundary in the data; measurements before and after are evaluated separately</span></span>
+<div style="overflow-x: auto;">
+<table class="t">
+<thead><tr><th>Valid from</th><th>Sensor</th><th>Change</th><th>Effect on data</th></tr></thead>
+<tbody>
+<tr><td>10 Oct 15:02</td><td>pi-lab</td><td>Poll 30 s → 60 s (waiting for the sensor)</td><td>no boundary</td></tr>
+<tr><td>27 Sep 14:15</td><td>pi-fri</td><td>Hop guard: after a crash the channel list is restored within 10 s</td><td>no boundary</td></tr>
+<tr><td>27 Sep 13:04</td><td>pi-fri</td><td>List of 89 settings (prime length)</td><td><span class="b neu">boundary</span> full coverage</td></tr>
+<tr><td>27 Sep 11:30</td><td>pi-lab</td><td>Installed, 20 MHz only (37 settings)</td><td><span class="b neu">boundary</span> start of measurements</td></tr>
+<tr><td>26 Sep 22:45</td><td>pi-fri</td><td>List of 90 settings without 165HT40-</td><td><span class="b warn">boundary</span> only half visited</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+</sc-if>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview": {"width": 1440, "height": 1560}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    // each tab is its own route: /settings/networks, /classification, /detectors, /sensors
+    this.state = { tab: 'sensors', fri: true, lab: false, plan: '89' };
+  }
+  renderVals() {
+    var self = this, st = this.state;
+    var TABS = [
+      { id: 'networks', label: 'Networks' }, { id: 'classification', label: 'Classification' },
+      { id: 'detectors', label: 'Detectors' }, { id: 'sensors', label: 'Sensors' }, { id: 'users', label: 'Users (later)', disabled: true }
+    ];
+    var tabs = TABS.map(function (t) {
+      var on = st.tab === t.id;
+      return {
+        label: t.label, current: on ? 'page' : 'false', disabled: t.disabled ? 'true' : 'false',
+        line: on ? '#0B5C7A' : 'transparent', color: t.disabled ? '#8C939A' : (on ? '#1C2024' : '#535B63'), fw: on ? '500' : '400',
+        pick: function () { if (!t.disabled) self.setState({ tab: t.id }); }
+      };
+    });
+    var cur = TABS.filter(function (t) { return t.id === st.tab; })[0];
+
+    var n = (st.fri ? 1 : 0) + (st.lab ? 1 : 0);
+    function setSel(fri, lab) {
+      var plan = st.plan;
+      if (fri && !lab) plan = '89';
+      if (lab && !fri) plan = '37';
+      self.setState({ fri: fri, lab: lab, plan: plan });
+    }
+    var PLANS = [
+      ['89', 'All channels and widths · 89 settings', 'cycle 19.1 s · also captures data frames of 40/80 MHz networks'],
+      ['37', '20 MHz only · 37 settings', 'cycle 8.0 s · returns to each channel faster, enough for beacons and deauth'],
+      ['59', 'Without empty DFS channels · 59 settings', 'cycle 12.7 s · blind spot on 10 channels without APs'],
+      ['lock', 'Locked to one channel', 'for experiments: sees everything on that channel, nothing elsewhere'],
+      ['custom', 'Custom list', 'your own list of channels']
+    ];
+    var plans = PLANS.map(function (p) {
+      var on = st.plan === p[0];
+      return { title: p[1], desc: p[2], on: on, border: on ? '#9DB6D8' : '#DADDD6', bg: on ? '#F3F7FC' : '#FFFFFF',
+        pick: function () { self.setState({ plan: p[0] }); } };
+    });
+
+    return {
+      tab: st.tab, tabs: tabs, tabLabel: cur.label, tabLabelLower: cur.label.toLowerCase(),
+      isNetworks: st.tab === 'networks', isClassification: st.tab === 'classification',
+      isDetectors: st.tab === 'detectors', isSensors: st.tab === 'sensors',
+      hasSave: st.tab !== 'sensors',
+      selFri: st.fri, selLab: st.lab, allSel: n === 2,
+      toggleFri: function () { setSel(!st.fri, st.lab); },
+      toggleLab: function () { setSel(st.fri, !st.lab); },
+      toggleAll: function () { if (n === 2) setSel(false, false); else setSel(true, true); },
+      friBg: st.fri ? '#F3F7FC' : '#FFFFFF', labBg: st.lab ? '#F3F7FC' : '#FFFFFF',
+      mixed: n === 2, noSel: n === 0 ? 'true' : 'false',
+      formOpacity: n === 0 ? '0.5' : '1',
+      plans: plans, showLock: st.plan === 'lock', showCustom: st.plan === 'custom',
+      btnBg: n === 0 ? '#8C939A' : '#0B5C7A',
+      btnLabel: n === 0 ? 'Select at least one sensor' : (n === 1 ? 'Send to ' + (st.fri ? 'pi-fri' : 'pi-lab') : 'Send to 2 sensors'),
+      false: false, true: true
+    };
+  }
+}
+</script>
+</body>
+</html>

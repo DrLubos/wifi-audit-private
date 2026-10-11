@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Networks</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F2;color:#1C2024;font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px;line-height:1.45}
+a{color:#0B5C7A}a:hover{color:#07445B}
+h1,h2,h3{margin:0;font-weight:600}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:13px}
+.muted{color:#535B63}
+.b{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E3F1E8;color:#1D6B43}.warn{background:#FCEBD5;color:#8A4B00}.bad{background:#FBE3E1;color:#A61B1B}.info{background:#E2ECF8;color:#1F4E8C}.neu{background:#ECEEEA;color:#3F474E}.mute{background:#F4F5F2;color:#535B63;border:1px solid #DADDD6}
+.card{background:#FFFFFF;border:1px solid #DADDD6;border-radius:10px}
+.t{width:100%;border-collapse:collapse}.t th{text-align:left;font-weight:500;color:#535B63;font-size:12px;padding:10px 12px;border-bottom:1px solid #DADDD6;white-space:nowrap}.t td{padding:10px 12px;border-bottom:1px solid #ECEEEA;vertical-align:middle}
+.nw td{white-space:nowrap}
+.app{display:flex;flex-wrap:wrap;min-height:100vh}
+.side{flex:1 1 220px;background:#1F2A2E;color:#E6EAE8;padding:22px 14px;box-sizing:border-box;display:flex;flex-direction:column;gap:18px}
+@media (min-width:900px){.side{flex:0 0 232px;position:sticky;top:0;height:100vh;align-self:flex-start}}
+.main{flex:999 1 560px;min-width:0;display:flex;flex-direction:column}
+.nav{display:flex;flex-wrap:wrap;gap:2px}
+.nav a{display:flex;align-items:center;padding:10px 12px;border-radius:8px;color:#E6EAE8;text-decoration:none;min-height:24px;flex:1 1 180px}
+.nav a:hover{background:#2A383D;color:#FFFFFF}
+.nav a[aria-current="page"]{background:#33464C;color:#FFFFFF;font-weight:500}
+.sb{padding:12px 8px 0;border-top:1px solid #33464C;display:flex;flex-direction:column;gap:7px;font-size:12px;color:#C3CCCA}
+.sbh{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8E9A98}
+.sbi{display:flex;align-items:center;gap:8px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:0 0 auto}
+.top{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;padding:14px 32px;background:#FFFFFF;border-bottom:1px solid #DADDD6;min-height:44px}
+.fl{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#535B63}
+.sel{height:40px;padding:0 10px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:14px;color:#1C2024}
+.sync{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:13px;color:#535B63}
+.content{padding:28px 32px 40px;display:flex;flex-direction:column;gap:20px;max-width:1280px;box-sizing:border-box;width:100%}
+.sec{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;padding-bottom:6px;border-bottom:1px solid #DADDD6}
+.chip{height:36px;padding:0 12px;border:1px solid #C9CDC5;border-radius:999px;background:#FFFFFF;font:inherit;font-size:13px;color:#1C2024;cursor:pointer}
+.chip[aria-pressed="true"]{background:#E2ECF8;border-color:#9DB6D8;color:#1F4E8C}
+.btn{height:44px;padding:0 18px;border:0;border-radius:8px;background:#0B5C7A;color:#FFFFFF;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.btn2{height:36px;padding:0 12px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:13px;color:#1C2024;cursor:pointer;white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center}
+.sen{display:inline-flex;gap:6px;align-items:center;padding:2px 8px;border-radius:6px;background:#F1F3EF;font-size:12px;white-space:nowrap}
+.kv{display:grid;grid-template-columns:minmax(120px,40%) minmax(0,1fr);gap:8px 12px;font-size:13px}.kv dt{color:#535B63}.kv dd{margin:0}
+.in{height:40px;padding:0 10px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:14px;color:#1C2024;box-sizing:border-box}
+.tag{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:6px;background:#F1F3EF;font-size:12px;margin:2px 4px 2px 0}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between;padding:14px 0;border-bottom:1px solid #ECEEEA}
+.lg{display:flex;gap:6px 16px;font-size:12px;color:#535B63;flex-wrap:wrap}
+.lg>span{display:flex;align-items:center;gap:6px}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block;flex:0 0 auto}
+.seg{display:flex;border:1px solid #C9CDC5;border-radius:8px;overflow:hidden}
+.seg button{border:0;height:40px;padding:0 14px;font:inherit;font-size:13px;cursor:pointer;background:#FFFFFF;color:#1C2024}
+.seg button+button{border-left:1px solid #C9CDC5}
+.seg button[aria-pressed="true"]{background:#1F2A2E;color:#FFFFFF}
+.seg button[aria-disabled="true"]{color:#8C939A;cursor:not-allowed}
+.chart{display:flex;gap:10px}
+.yax{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:#535B63;text-align:right;width:30px;padding-bottom:4px;box-sizing:border-box;flex:0 0 auto}
+.plot{position:relative;flex:1 1 auto;min-width:0;display:flex;align-items:flex-end;gap:3px;border-bottom:1px solid #DADDD6;box-sizing:border-box;padding-bottom:4px}
+.col{flex:1 1 0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;border-radius:4px 4px 0 0;outline:none;cursor:default}
+.col.on{background:#E6E9E3}
+.col:focus-visible{box-shadow:0 0 0 2px #0B5C7A}
+.xax{position:relative;height:18px;font-size:12px;color:#535B63;margin-left:40px}
+.xax span{position:absolute;top:0;white-space:nowrap}
+.tip{position:absolute;top:0;z-index:20;min-width:180px;padding:9px 11px;background:#FFFFFF;border:1px solid #C9CDC5;border-radius:8px;box-shadow:0 6px 18px rgba(28,32,36,.16);font-size:12px;line-height:1.4;pointer-events:none;white-space:nowrap;display:flex;flex-direction:column;gap:3px}
+.th{color:#535B63;font-weight:500;margin-bottom:2px}
+.tr{display:flex;align-items:center;gap:8px}
+.tr i{width:12px;height:3px;border-radius:2px;flex:0 0 auto}
+.tr b{font-weight:600;font-size:13px;color:#1C2024;min-width:30px;text-align:right}
+.tr span{color:#535B63}
+.tn{color:#535B63;border-top:1px solid #ECEEEA;padding-top:4px;margin-top:2px;white-space:normal;max-width:240px}
+.hint{min-height:22px;padding:8px 12px;border-radius:8px;background:#F4F5F2;font-size:13px;color:#1C2024}
+.cell{flex:1 1 0;border-radius:2px}
+.cell.on{outline:2px solid #1C2024;outline-offset:-1px}
+.ramp{display:flex;align-items:center;gap:6px;font-size:11px;color:#535B63}
+.ramp i{width:18px;height:12px;border-radius:2px;display:inline-block}
+</style>
+</helmet>
+<div class="app">
+<nav class="side" aria-label="Main navigation">
+<div style="display: flex; flex-direction: column; gap: 2px; padding: 0 8px;">
+<span style="font-weight: 600; font-size: 16px; color: #FFFFFF;">Wi-Fi Sensor</span>
+<span style="font-size: 12px; color: #A9B4B2;">Account: KIS FRI</span>
+</div>
+<div class="nav">
+<a href="Main.dc.html">Overview</a>
+<a href="Events.dc.html">Events</a>
+<a href="Networks.dc.html" aria-current="page">Networks</a>
+<a href="Aps.dc.html">Access points</a>
+<a href="Spectrum.dc.html">Spectrum</a>
+<a href="Sensors.dc.html">Sensors</a>
+<a href="Settings.dc.html">Settings</a>
+</div>
+<div class="sb" style="margin-top: auto;">
+<span class="sbh">Sensors</span>
+<span class="sbi"><span class="dot" style="background: #0ca30c;"></span>pi-fri · online</span>
+<span class="sbi"><span class="dot" style="background: #d03b3b;"></span>pi-lab · offline 3 h</span>
+</div>
+<div class="sb">
+<span class="sbh">System</span>
+<span class="sbi" title="GET /api/health"><span class="dot" style="background: #0ca30c;"></span>API ok · database ok</span>
+<span class="sbi" style="padding-left: 16px;">schema v8</span>
+</div>
+</nav>
+<main class="main">
+<header class="top">
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;">
+<label class="fl">Sensor
+<select class="sel"><option>All sensors (2)</option><option>pi-fri</option><option>pi-lab</option></select>
+</label>
+<label class="fl">Period
+<select class="sel" value="{{range}}" onChange="{{onRange}}"><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select>
+</label>
+</div>
+<div class="sync"><span>Latest data: 10 Oct 17:52</span><span class="b neu">Write locked</span></div>
+</header>
+
+<div class="content">
+<div style="display: flex; flex-direction: column; gap: 4px;">
+<h1 style="font-size: 26px;">Networks</h1>
+<span class="muted">BSSIDs grouped by SSID · {{rangeText}}. A <b style="color: #1C2024; font-weight: 500;">managed</b> network is yours: its security is checked against a policy and any unknown BSSID using its name raises an alert. A <b style="color: #1C2024; font-weight: 500;">friendly</b> network belongs to someone else but is known and legitimate: it is not checked, it is only kept out of the unknown list. Both are set in <a href="Settings.dc.html">Settings</a>.</span>
+</div>
+
+<section aria-labelledby="rogue-h" style="padding: 16px 18px; border-radius: 10px; background: #FFF4F2; border: 1px solid #F0C4BE; display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between;">
+<div style="display: flex; flex-direction: column; gap: 4px; flex: 1 1 420px;">
+<h2 id="rogue-h" style="font-size: 16px; color: #7A1414;">1 unknown BSSID is broadcasting a managed SSID</h2>
+<span style="font-size: 13px; color: #5C1F1F;"><b style="font-weight: 500;">IK-WIFI-DOT1X</b> from <span class="mono">9A:1F:3C:52:E0:07</span> · open instead of Enterprise · randomized BSSID · pi-lab only, −52 dBm · since 10 Oct 17:40</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px;">
+<a href="Events.dc.html" class="btn" style="background: #A61B1B;">Open event</a>
+<button type="button" class="btn2" style="height: 44px; padding: 0 16px;">Add to allowed BSSIDs</button>
+</div>
+</section>
+
+<section class="card" aria-labelledby="time-h" style="padding: 20px 22px; display: flex; flex-direction: column; gap: 14px;">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: baseline;">
+<div style="display: flex; flex-direction: column; gap: 2px;">
+<h2 id="time-h" style="font-size: 17px;">Networks over time</h2>
+<span class="muted" style="font-size: 13px;">{{netSub}}</span>
+</div>
+<div class="lg">
+<span><span class="sw" style="background: #2a78d6;"></span>configured (managed + friendly)</span>
+<span><span class="sw" style="background: #eb6834;"></span>mobile (hotspots)</span>
+<span><span class="sw" style="background: #1baf7a;"></span>other, not configured</span>
+</div>
+</div>
+<div class="chart">
+<div class="yax" aria-hidden="true" style="height: 180px;"><span>{{netTop}}</span><span>{{netMid}}</span><span>0</span></div>
+<div class="plot" role="group" aria-label="Stacked columns of networks per period window; hover or focus a column for exact values" onMouseLeave="{{leave}}" style="height: 180px;">
+<sc-for list="{{nets}}" as="b" hint-placeholder-count="28">
+<div class="col {{b.cls}}" tabindex="0" aria-label="{{b.aria}}" onMouseEnter="{{b.enter}}" onFocus="{{b.enter}}">
+<div style="height: {{b.h3}}; background: #1baf7a; border-radius: 4px 4px 0 0;"></div>
+<div style="height: {{b.h2}}; background: #eb6834;"></div>
+<div style="height: {{b.h1}}; background: #2a78d6; min-height: 3px;"></div>
+</div>
+</sc-for>
+<sc-if value="{{netTip.show}}" hint-placeholder-val="{{false}}"><div class="tip" role="tooltip" style="{{netTip.pos}}"><div class="th">{{netTip.head}}</div><sc-for list="{{netTip.rows}}" as="tr" hint-placeholder-count="2"><div class="tr"><i style="background: {{tr.c}};"></i><b>{{tr.v}}</b><span>{{tr.l}}</span></div></sc-for><sc-for list="{{netTip.notes}}" as="tn" hint-placeholder-count="1"><div class="tn">{{tn}}</div></sc-for></div></sc-if>
+</div>
+</div>
+<div class="xax"><sc-for list="{{xlabels}}" as="x" hint-placeholder-count="5"><span style="left: {{x.left}};">{{x.t}}</span></sc-for></div>
+</section>
+
+<section class="card" aria-labelledby="sec-h" style="padding: 20px 22px; display: flex; flex-direction: column; gap: 14px;">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: baseline;">
+<div style="display: flex; flex-direction: column; gap: 2px;">
+<h2 id="sec-h" style="font-size: 17px;">Network security over time</h2>
+<span class="muted" style="font-size: 13px;">Networks (SSIDs) by the weakest security they offer · fixed networks rarely change, most of the variation comes from hotspots</span>
+</div>
+<div class="lg">
+<span><span class="sw" style="background: #d03b3b;"></span>open</span>
+<span><span class="sw" style="background: #ec835a;"></span>legacy (WEP, WPA1/TKIP)</span>
+<span><span class="sw" style="background: #fab219;"></span>WPA2-PSK without MFP</span>
+<span><span class="sw" style="background: #0ca30c;"></span>strong (MFP or Enterprise)</span>
+</div>
+</div>
+<div class="chart">
+<div class="yax" aria-hidden="true" style="height: 180px;"><span>{{netTop}}</span><span>{{netMid}}</span><span>0</span></div>
+<div class="plot" role="group" aria-label="Stacked columns of networks by security level; hover or focus a column to see every level, including the thin ones" onMouseLeave="{{leave}}" style="height: 180px;">
+<sc-for list="{{secs}}" as="b" hint-placeholder-count="28">
+<div class="col {{b.cls}}" tabindex="0" aria-label="{{b.aria}}" onMouseEnter="{{b.enter}}" onFocus="{{b.enter}}">
+<div style="height: {{b.h4}}; background: #0ca30c; border-radius: 4px 4px 0 0;"></div>
+<div style="height: {{b.h3}}; background: #fab219;"></div>
+<div style="height: {{b.h2}}; background: #ec835a; min-height: 2px;"></div>
+<div style="height: {{b.h1}}; background: #d03b3b;"></div>
+</div>
+</sc-for>
+<sc-if value="{{secTip.show}}" hint-placeholder-val="{{false}}"><div class="tip" role="tooltip" style="{{secTip.pos}}"><div class="th">{{secTip.head}}</div><sc-for list="{{secTip.rows}}" as="tr" hint-placeholder-count="2"><div class="tr"><i style="background: {{tr.c}};"></i><b>{{tr.v}}</b><span>{{tr.l}}</span></div></sc-for><sc-for list="{{secTip.notes}}" as="tn" hint-placeholder-count="1"><div class="tn">{{tn}}</div></sc-for></div></sc-if>
+</div>
+</div>
+<div class="xax"><sc-for list="{{xlabels}}" as="x" hint-placeholder-count="5"><span style="left: {{x.left}};">{{x.t}}</span></sc-for></div>
+<div style="display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid #ECEEEA;">
+<span style="font-weight: 500;">Security changes in the period <span class="muted" style="font-weight: 400;">· {{chgSummary}}</span></span>
+<sc-for list="{{changes}}" as="c" hint-placeholder-count="2">
+<div style="display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; font-size: 13px;"><span class="b {{c.cls}}">{{c.kind}}</span><span>{{c.when}} · <b style="font-weight: 500;">{{c.net}}</b> · <span class="mono">{{c.bssid}}</span> · {{c.what}}</span></div>
+</sc-for>
+</div>
+</section>
+
+<section class="card" aria-labelledby="own-h" style="padding: 18px 0 4px;">
+<div style="padding: 0 18px 10px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px;">
+<h2 id="own-h" style="font-size: 17px;">Managed networks</h2>
+<span class="muted" style="font-size: 13px;">compliance = actual security of every BSSID compared with the network policy</span>
+</div>
+<div style="overflow-x: auto;">
+<table class="t nw">
+<thead><tr><th>Network (SSID)</th><th>BSSIDs</th><th>Vendors</th><th>Policy</th><th>Actual</th><th>Compliance</th><th>Sensors</th><th>Clients now</th></tr></thead>
+<tbody>
+<tr><td style="font-weight: 500;">IK-WIFI-DOT1X</td><td>31 (29 active)</td><td>Ruckus</td><td>Enterprise + required MFP</td><td>Enterprise, MFP only capable</td><td><span class="b warn">Not met 31/31</span></td><td><span class="sen">pi-fri 31</span> <span class="sen">pi-lab 9</span></td><td>38</td></tr>
+<tr><td style="font-weight: 500;">IK-WIFI <span class="muted" style="font-weight: 400;">(guest)</span></td><td>31 (30 active)</td><td>Ruckus</td><td>Open allowed</td><td>Open</td><td><span class="b ok">Compliant</span></td><td><span class="sen">pi-fri 31</span> <span class="sen">pi-lab 8</span></td><td>9</td></tr>
+<tr style="background: #F7FAFB;"><td style="font-weight: 500;"><span aria-hidden="true">▾ </span>FRI_wifi</td><td>2 (2 active)</td><td>MikroTik</td><td>WPA2-PSK or better</td><td>WPA2-PSK, no MFP</td><td><span class="b ok">Compliant</span></td><td><span class="sen">pi-fri 2</span></td><td>5</td></tr>
+<tr style="background: #F7FAFB;"><td colspan="8" style="padding: 0 12px 14px 36px;">
+<table class="t nw" style="background: #FFFFFF; border: 1px solid #ECEEEA; border-radius: 8px;">
+<thead><tr><th>BSSID</th><th>Channel</th><th>Security</th><th>Clients</th><th>RSSI by sensor</th><th>Last seen</th></tr></thead>
+<tbody>
+<tr><td><a href="ApDetail.dc.html" class="mono">E4:8D:8C:41:7B:A1</a></td><td>5 · 2.4 GHz (HT40+)</td><td><span class="b warn">WPA2-PSK without MFP</span></td><td>3</td><td><span class="sen">pi-fri −80</span></td><td>1 min ago</td></tr>
+<tr><td><a href="ApDetail.dc.html" class="mono">E4:8D:8C:41:7B:A2</a></td><td>36 · 5 GHz</td><td><span class="b warn">WPA2-PSK without MFP</span></td><td>2</td><td><span class="sen">pi-fri −86</span></td><td>now</td></tr>
+</tbody>
+</table>
+</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section class="card" aria-labelledby="cli-h" style="padding: 20px 22px; display: flex; flex-direction: column; gap: 12px;">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: flex-end;">
+<div style="display: flex; flex-direction: column; gap: 2px;">
+<h2 id="cli-h" style="font-size: 17px;">Clients on managed networks – when is it busy</h2>
+<span class="muted" style="font-size: 13px;">{{cliSub}}</span>
+</div>
+<div role="group" aria-label="View" class="seg">
+<sc-for list="{{views}}" as="v" hint-placeholder-count="2"><button type="button" aria-pressed="{{v.pressed}}" aria-disabled="{{v.disabled}}" onClick="{{v.pick}}">{{v.label}}</button></sc-for>
+</div>
+</div>
+<div class="hint" aria-live="polite">{{hint}}</div>
+<div role="group" aria-label="{{cliAria}}" onMouseLeave="{{leaveCell}}" style="display: flex; flex-direction: column; gap: {{rowGap}};">
+<sc-for list="{{heat}}" as="row" hint-placeholder-count="8">
+<div style="display: flex; gap: 2px; align-items: center;">
+<span style="width: 84px; flex: 0 0 auto; font-size: 11px; line-height: 1; color: #535B63;">{{row.day}}</span>
+<sc-for list="{{row.cells}}" as="cell" hint-placeholder-count="24"><span class="cell {{cell.cls}}" onMouseEnter="{{cell.enter}}" style="height: {{rowH}}; background: {{cell.bg}};"></span></sc-for>
+</div>
+</sc-for>
+<div style="display: flex; padding-left: 86px; font-size: 11px; color: #535B63; justify-content: space-between; padding-top: 4px;">
+<span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:00</span>
+</div>
+</div>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: center;">
+<span class="muted" style="font-size: 12px; flex: 1 1 420px;">Clients = stations the AP reports in its BSS Load element; for APs without it, clients seen by the sensor. Not unique people: one person often carries several devices. Hatched = outside the period or no sensor collecting.</span>
+<span class="ramp" aria-hidden="true"><span>0</span><i style="background: #cde2fb;"></i><i style="background: #9ec5f4;"></i><i style="background: #6da7ec;"></i><i style="background: #3987e5;"></i><i style="background: #256abf;"></i><i style="background: #184f95;"></i><i style="background: #0d366b;"></i><span>450+</span></span>
+</div>
+</section>
+
+<section class="card" aria-labelledby="fr-h" style="padding: 18px 0 4px;">
+<div style="padding: 0 18px 10px;"><h2 id="fr-h" style="font-size: 17px;">Friendly networks</h2></div>
+<div style="overflow-x: auto;">
+<table class="t nw">
+<thead><tr><th>Network (SSID)</th><th>BSSIDs</th><th>Vendors</th><th>Security</th><th>Sensors</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td style="font-weight: 500;">[Friendly network 1]</td><td>1</td><td>TP-Link</td><td><span class="b warn">WPA2-PSK without MFP</span></td><td><span class="sen">pi-lab −71</span> <span class="sen">pi-fri −77</span></td><td class="muted">neighbouring lab</td></tr>
+<tr><td style="font-weight: 500;">[Friendly network 2]</td><td>11</td><td>Cisco</td><td><span class="b ok">Enterprise</span></td><td><span class="sen">pi-fri −88</span></td><td class="muted">next building</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section class="card" aria-labelledby="oth-h" style="padding: 18px 0 4px;">
+<div style="padding: 0 18px 10px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px;">
+<h2 id="oth-h" style="font-size: 17px;">Other networks nearby</h2>
+<span class="muted" style="font-size: 13px;">213 networks · 115 hidden SSIDs · sorted by number of BSSIDs</span>
+</div>
+<div style="overflow-x: auto;">
+<table class="t nw">
+<thead><tr><th>Network (SSID)</th><th>BSSIDs</th><th>Vendors</th><th>Security</th><th>Presence</th><th>Action</th></tr></thead>
+<tbody>
+<tr><td style="font-weight: 500;">Phone hotspots <span class="muted" style="font-weight: 400;">(randomized BSSIDs)</span></td><td>98</td><td>–</td><td><span class="b neu">various</span></td><td>transient, 35 min on average</td><td><span class="b mute">Ignored automatically</span></td></tr>
+<tr><td style="font-weight: 500;">[Unknown network A]</td><td>4</td><td>D-Link</td><td><span class="b ok">WPA2/WPA3 with MFP</span></td><td>permanent</td><td><div style="display: flex; gap: 6px;"><button type="button" class="btn2">Managed</button><button type="button" class="btn2">Friendly</button></div></td></tr>
+<tr><td style="font-weight: 500;">[Unknown network B]</td><td>2</td><td>D-Link</td><td><span class="b bad">WEP (legacy)</span></td><td>permanent</td><td><div style="display: flex; gap: 6px;"><button type="button" class="btn2">Managed</button><button type="button" class="btn2">Friendly</button></div></td></tr>
+<tr><td style="font-weight: 500;">[Unknown network C]</td><td>1</td><td>Xiaomi</td><td><span class="b bad">Open</span></td><td>daytime only</td><td><div style="display: flex; gap: 6px;"><button type="button" class="btn2">Managed</button><button type="button" class="btn2">Friendly</button></div></td></tr>
+</tbody>
+</table>
+</div>
+</section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview": {"width": 1440, "height": 2380}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { range: '7d', hc: null, hi: null, view: 'days', cell: null };
+  }
+  renderVals() {
+    var self = this, st = this.state, r = st.range;
+    // ---- shared mock-data helpers (identical in every board) ----
+    // All times are wall-clock Bratislava time stored in UTC fields, so the
+    // viewer's own time zone never shifts the mock data.
+    var DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    var HOUR = 3600e3;
+    function T(m, d, h, min) { return Date.UTC(2026, m - 1, d, h || 0, min || 0); }
+    function two(n) { return (n < 10 ? '0' : '') + n; }
+    function dt(t) { return new Date(t); }
+    function dayLabel(t) { var x = dt(t); return DAY[x.getUTCDay()] + ' ' + x.getUTCDate() + ' ' + MON[x.getUTCMonth()]; }
+    function hhmm(t) { var x = dt(t); return two(x.getUTCHours()) + ':' + two(x.getUTCMinutes()); }
+    var NOW = T(10, 10, 17, 52);
+    var FRI_START = T(9, 15, 14, 55);
+    var FRI_OUT = [[T(9, 21, 18, 26), T(9, 21, 23, 47)], [T(9, 22, 15, 43), T(9, 23, 11, 27)]];
+    var LAB_START = T(9, 27, 11, 30);
+    var LAB_DOWN = T(10, 10, 14, 41);
+    function overlap(a, b, c, d) { return Math.max(0, Math.min(b, d) - Math.max(a, c)); }
+    // fraction of [a, b) during which a sensor was collecting
+    function coverage(sensor, a, b) {
+      b = Math.min(b, NOW);
+      if (b <= a) return 0;
+      if (sensor === 'pi-lab') return overlap(a, b, LAB_START, LAB_DOWN) / (b - a);
+      var up = overlap(a, b, FRI_START, NOW);
+      FRI_OUT.forEach(function (o) { up -= overlap(a, b, o[0], o[1]); });
+      return Math.max(0, up) / (b - a);
+    }
+    // buckets of the selected period: 24 x 1 h, 28 x 6 h, or 30 x 1 day
+    function bucketsFor(r) {
+      var sp = r === '24h' ? { start: T(10, 9, 18), step: 1, n: 24 }
+        : (r === '7d' ? { start: T(10, 3, 18), step: 6, n: 28 } : { start: T(9, 11, 0), step: 24, n: 30 });
+      var out = [];
+      for (var i = 0; i < sp.n; i++) {
+        var a = sp.start + i * sp.step * HOUR, b = a + sp.step * HOUR;
+        var x = dt(a);
+        var label = sp.step === 24 ? dayLabel(a)
+          : dayLabel(a) + ', ' + hhmm(a) + '–' + (b > NOW ? hhmm(NOW) : (sp.step === 1 ? hhmm(b) : (hhmm(b) === '00:00' ? '24:00' : hhmm(b))));
+        out.push({ i: i, a: a, b: b, step: sp.step, wd: x.getUTCDay(), h0: x.getUTCHours(), label: label });
+      }
+      return out;
+    }
+    function rangeText(r) {
+      return r === '24h' ? 'last 24 h: 9 Oct 18:00 – 10 Oct 17:52'
+        : (r === '7d' ? 'last 7 days: 3 Oct 18:00 – 10 Oct 17:52' : 'last 30 days: 11 Sep – 10 Oct 17:52');
+    }
+    // x-axis labels placed at the bucket where a day (or 6-hour mark) starts
+    function xLabels(bs) {
+      var out = [];
+      bs.forEach(function (b, i) {
+        var x = dt(b.a), left = (i / bs.length * 100).toFixed(2) + '%';
+        if (b.step === 1) {
+          if (i === 0) out.push({ t: DAY[b.wd] + ' ' + hhmm(b.a), left: left });
+          else if (x.getUTCHours() % 6 === 0) out.push({ t: x.getUTCHours() === 0 ? DAY[b.wd] + ' 00:00' : hhmm(b.a), left: left });
+        } else if (b.step === 6) {
+          if (x.getUTCHours() === 0) out.push({ t: dayLabel(b.a), left: left });
+        } else if (i === 0 || b.wd === 1) {
+          out.push({ t: dayLabel(b.a), left: left });
+        }
+      });
+      return out;
+    }
+    // diurnal and weekly shape of activity on campus
+    function hourF(h) { return (h >= 8 && h <= 18) ? Math.sin((h - 7) / 12 * Math.PI) : 0; }
+    function dayF(wd) { return (wd === 0 || wd === 6) ? 0.16 : (wd === 5 ? 0.78 : (wd === 2 ? 1.02 : 0.95)); }
+    function termF(t) { return t < T(9, 21, 0) ? 0.35 : 1; }
+    // clients on managed networks in one hour (sum of BSS Load station counts)
+    function clientsAt(t) {
+      var x = dt(t), wd = x.getUTCDay(), h = x.getUTCHours();
+      var evening = (h >= 19 && h <= 21 && wd !== 0 && wd !== 6) ? 25 : 0;
+      return Math.round(12 + (510 * hourF(h) * dayF(wd) + evening) * termF(t));
+    }
+    function hoursOf(b) { var hs = []; for (var t = b.a; t < Math.min(b.b, NOW); t += HOUR) hs.push(t); return hs; }
+    // tooltip placed beside column i of n so it never covers the hovered column
+    function tipPos(i, n) {
+      return i < n / 2 ? 'left: calc(' + ((i + 1) / n * 100).toFixed(2) + '% + 6px);'
+        : 'right: calc(' + ((n - i) / n * 100).toFixed(2) + '% + 6px);';
+    }
+    function noTip() { return { show: false, pos: '', head: '', rows: [], notes: [] }; }
+    function fmt(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+    var RAMP = ['#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#256abf', '#184f95', '#0d366b'];
+    var HATCH = 'repeating-linear-gradient(45deg,#C9CDC5 0 3px,#FFFFFF 3px 6px)';
+    // ---- end of shared helpers ----
+    function mobAt(t) {
+      var x = dt(t);
+      return 46 * (0.08 + 0.92 * hourF(x.getUTCHours()) * dayF(x.getUTCDay())) * (0.5 + 0.5 * termF(t));
+    }
+    var bs = bucketsFor(r), n = bs.length;
+    var unit = r === '24h' ? 'hour' : (r === '7d' ? '6-hour window' : 'day');
+    var rows = bs.map(function (b) {
+      var on = coverage('pi-fri', b.a, b.b) > 0 || coverage('pi-lab', b.a, b.b) > 0;
+      var hs = hoursOf(b);
+      var mult = b.step === 1 ? 1 : (b.step === 6 ? 1.3 : 1.9);
+      var mob = Math.round(Math.max.apply(null, hs.map(mobAt).concat([0])) * mult);
+      var fix = Math.round(186 * (b.step === 24 ? 1.15 : 1) * (0.97 + 0.03 * Math.sin(b.i * 1.3)));
+      var oth = Math.round((fix - 76) * 0.85);
+      var cfg = 5, total = cfg + mob + oth;
+      var open = 11 + Math.round(mob * 0.03), leg = 3, strong = 22 + Math.round(mob * 0.3);
+      return { b: b, on: on, cfg: on ? cfg : 0, mob: on ? mob : 0, oth: on ? oth : 0, total: on ? total : 0,
+        open: on ? open : 0, leg: on ? leg : 0, strong: on ? strong : 0, weak: on ? total - open - leg - strong : 0 };
+    });
+    var max = Math.max.apply(null, rows.map(function (d) { return d.total; }).concat([1]));
+    var top = Math.ceil(max / 50) * 50;
+    function pct(v) { return (v / top * 100).toFixed(1) + '%'; }
+    function cls(i) { return st.hi === i ? 'on' : ''; }
+    function enter(c, i) { return function () { self.setState({ hc: c, hi: i }); }; }
+    var nets = rows.map(function (d, i) {
+      return { cls: cls(i), h1: pct(d.cfg), h2: pct(d.mob), h3: pct(d.oth), enter: enter('net', i),
+        aria: d.b.label + ': ' + d.cfg + ' configured, ' + d.mob + ' mobile, ' + d.oth + ' other networks' };
+    });
+    var secs = rows.map(function (d, i) {
+      return { cls: cls(i), h1: pct(d.open), h2: pct(d.leg), h3: pct(d.weak), h4: pct(d.strong), enter: enter('sec', i),
+        aria: d.b.label + ': ' + d.open + ' open, ' + d.leg + ' legacy, ' + d.weak + ' WPA2-PSK without MFP, ' + d.strong + ' strong' };
+    });
+    var netTip = noTip(), secTip = noTip();
+    if (st.hi !== null && rows[st.hi]) {
+      var h = rows[st.hi];
+      var gapNote = h.on ? [] : ['No sensor was collecting in this window'];
+      if (st.hc === 'net') netTip = { show: true, pos: tipPos(st.hi, n), head: h.b.label, notes: gapNote,
+        rows: h.on ? [{ c: '#1baf7a', v: h.oth, l: 'other' }, { c: '#eb6834', v: h.mob, l: 'mobile' }, { c: '#2a78d6', v: h.cfg, l: 'configured' }, { c: 'transparent', v: h.total, l: 'networks in total' }] : [] };
+      if (st.hc === 'sec') secTip = { show: true, pos: tipPos(st.hi, n), head: h.b.label, notes: gapNote,
+        rows: h.on ? [{ c: '#0ca30c', v: h.strong, l: 'strong' }, { c: '#fab219', v: h.weak, l: 'WPA2-PSK without MFP' }, { c: '#ec835a', v: h.leg, l: 'legacy' }, { c: '#d03b3b', v: h.open, l: 'open' }, { c: 'transparent', v: h.total, l: 'networks in total' }] : [] };
+    }
+    var last = rows[n - 1];
+
+    var CHANGES = [
+      [T(10, 6, 16, 20), 'Downgrade', 'bad', '[Unknown network C]', '64:09:80:5E:11:90', 'WPA2-PSK → open'],
+      [T(10, 6, 9, 5), 'Upgrade', 'ok', '[Unknown network A]', 'A0:AB:1B:30:7C:E2 + 3', 'WPA2-PSK → WPA2/WPA3 with MFP'],
+      [T(9, 24, 10, 12), 'Upgrade', 'ok', '[Unknown network D]', 'C8:3A:35:5E:20:11', 'open → WPA2-PSK']
+    ];
+    var from = bs[0].a;
+    var changes = CHANGES.filter(function (c) { return c[0] >= from; }).map(function (c) {
+      return { when: dayLabel(c[0]) + ' ' + hhmm(c[0]), kind: c[1], cls: c[2], net: c[3], bssid: c[4], what: c[5] };
+    });
+    var downs = changes.filter(function (c) { return c.kind === 'Downgrade'; }).length;
+
+    // ---- clients heatmap ----
+    var start = bs[0].a, end = NOW;
+    var dayStart = Date.UTC(dt(start).getUTCFullYear(), dt(start).getUTCMonth(), dt(start).getUTCDate());
+    function bin(v) { var th = [25, 75, 150, 250, 350, 450]; for (var i = 0; i < th.length; i++) if (v < th[i]) return RAMP[i]; return RAMP[6]; }
+    function collected(t) { return coverage('pi-fri', t, t + HOUR) > 0 || coverage('pi-lab', t, t + HOUR) > 0; }
+    function split(v) { var a = Math.round(v * 0.8), b = Math.round(v * 0.18); return 'IK-WIFI-DOT1X ' + a + ', IK-WIFI ' + b + ', FRI_wifi ' + (v - a - b); }
+    var view = r === '24h' ? 'days' : st.view;
+    var heat = [], peakV = 0, peakAt = '';
+    function cellObj(ri, ci, bg, text) {
+      var on = st.cell && st.cell.r === ri && st.cell.c === ci;
+      return { bg: bg, cls: on ? 'on' : '', enter: function () { self.setState({ cell: { r: ri, c: ci, text: text } }); } };
+    }
+    if (view === 'days') {
+      for (var d0 = dayStart, ri = 0; d0 < end; d0 += 24 * HOUR, ri++) {
+        var cells = [];
+        for (var hh = 0; hh < 24; hh++) {
+          var t = d0 + hh * HOUR, label = dayLabel(t) + ', ' + two(hh) + ':00–' + two((hh + 1) % 24) + ':00';
+          if (t + HOUR <= start || t >= end) { cells.push(cellObj(ri, hh, HATCH, label + ' · outside the period')); continue; }
+          if (!collected(t)) { cells.push(cellObj(ri, hh, HATCH, label + ' · no sensor collecting')); continue; }
+          var v = clientsAt(t);
+          if (v > peakV) { peakV = v; peakAt = label; }
+          cells.push(cellObj(ri, hh, bin(v), label + ' · ' + v + ' clients (' + split(v) + ')'));
+        }
+        heat.push({ day: dayLabel(d0), cells: cells });
+      }
+    } else {
+      var order = [1, 2, 3, 4, 5, 6, 0], names = ['Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays', 'Sundays'];
+      order.forEach(function (wd, ri) {
+        var cells = [];
+        for (var hh = 0; hh < 24; hh++) {
+          var sum = 0, cnt = 0;
+          for (var d1 = dayStart; d1 < end; d1 += 24 * HOUR) {
+            var t = d1 + hh * HOUR;
+            if (dt(t).getUTCDay() !== wd || t < start || t >= end || !collected(t)) continue;
+            sum += clientsAt(t); cnt++;
+          }
+          var label = names[ri] + ', ' + two(hh) + ':00–' + two((hh + 1) % 24) + ':00';
+          if (!cnt) { cells.push(cellObj(ri, hh, HATCH, label + ' · no data in the period')); continue; }
+          var v = Math.round(sum / cnt);
+          if (v > peakV) { peakV = v; peakAt = label; }
+          cells.push(cellObj(ri, hh, bin(v), label + ' · average ' + v + ' clients over ' + cnt + (cnt === 1 ? ' day' : ' days')));
+        }
+        heat.push({ day: DAY[wd], cells: cells });
+      });
+    }
+    var many = heat.length > 10;
+    var views = [{ id: 'days', label: 'Day by day' }, { id: 'week', label: 'Average week' }].map(function (o) {
+      var dis = o.id === 'week' && r === '24h';
+      return { label: o.label, pressed: view === o.id ? 'true' : 'false', disabled: dis ? 'true' : 'false',
+        pick: function () { if (!dis) self.setState({ view: o.id, cell: null }); } };
+    });
+
+    return {
+      range: r, rangeText: rangeText(r),
+      onRange: function (e) { self.setState({ range: e.target.value, hi: null, hc: null, cell: null }); },
+      netSub: 'Networks (SSIDs) per ' + unit + ' · latest window ' + last.total + ': ' + last.cfg + ' configured, ' + last.mob + ' mobile, ' + last.oth + ' other',
+      netTop: String(top), netMid: String(top / 2),
+      nets: nets, secs: secs, netTip: netTip, secTip: secTip,
+      leave: function () { self.setState({ hi: null, hc: null }); },
+      xlabels: xLabels(bs),
+      changes: changes,
+      chgSummary: changes.length ? changes.length + (changes.length === 1 ? ' change' : ' changes') + ', ' + downs + (downs === 1 ? ' downgrade' : ' downgrades') : 'no changes in this period',
+      views: views, heat: heat,
+      rowH: many ? '12px' : '22px', rowGap: many ? '2px' : '3px',
+      cliSub: (view === 'days' ? 'Sum of clients on all managed networks per hour' : 'Average for each weekday and hour over the period') + ' · peak ' + peakV + ' (' + peakAt + ')',
+      cliAria: 'Heatmap of clients on managed networks by day and hour; hover a cell for the value',
+      hint: st.cell ? st.cell.text : (r === '24h' ? 'Hover a cell for the hour and the number of clients per network. Average week needs a period of at least 7 days.' : 'Hover a cell for the hour and the number of clients per network.'),
+      leaveCell: function () { self.setState({ cell: null }); },
+      false: false, true: true
+    };
+  }
+}
+</script>
+</body>
+</html>

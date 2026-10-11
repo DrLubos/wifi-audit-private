@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Overview</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F2;color:#1C2024;font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px;line-height:1.45}
+a{color:#0B5C7A}a:hover{color:#07445B}
+h1,h2,h3{margin:0;font-weight:600}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:13px}
+.muted{color:#535B63}
+.b{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E3F1E8;color:#1D6B43}.warn{background:#FCEBD5;color:#8A4B00}.bad{background:#FBE3E1;color:#A61B1B}.info{background:#E2ECF8;color:#1F4E8C}.neu{background:#ECEEEA;color:#3F474E}.mute{background:#F4F5F2;color:#535B63;border:1px solid #DADDD6}
+.card{background:#FFFFFF;border:1px solid #DADDD6;border-radius:10px}
+.t{width:100%;border-collapse:collapse}.t th{text-align:left;font-weight:500;color:#535B63;font-size:12px;padding:10px 12px;border-bottom:1px solid #DADDD6;white-space:nowrap}.t td{padding:10px 12px;border-bottom:1px solid #ECEEEA;vertical-align:middle}
+.nw td{white-space:nowrap}
+.app{display:flex;flex-wrap:wrap;min-height:100vh}
+.side{flex:1 1 220px;background:#1F2A2E;color:#E6EAE8;padding:22px 14px;box-sizing:border-box;display:flex;flex-direction:column;gap:18px}
+@media (min-width:900px){.side{flex:0 0 232px;position:sticky;top:0;height:100vh;align-self:flex-start}}
+.main{flex:999 1 560px;min-width:0;display:flex;flex-direction:column}
+.nav{display:flex;flex-wrap:wrap;gap:2px}
+.nav a{display:flex;align-items:center;padding:10px 12px;border-radius:8px;color:#E6EAE8;text-decoration:none;min-height:24px;flex:1 1 180px}
+.nav a:hover{background:#2A383D;color:#FFFFFF}
+.nav a[aria-current="page"]{background:#33464C;color:#FFFFFF;font-weight:500}
+.sb{padding:12px 8px 0;border-top:1px solid #33464C;display:flex;flex-direction:column;gap:7px;font-size:12px;color:#C3CCCA}
+.sbh{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8E9A98}
+.sbi{display:flex;align-items:center;gap:8px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:0 0 auto}
+.top{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;padding:14px 32px;background:#FFFFFF;border-bottom:1px solid #DADDD6;min-height:44px}
+.fl{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#535B63}
+.sel{height:40px;padding:0 10px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:14px;color:#1C2024}
+.sync{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:13px;color:#535B63}
+.content{padding:28px 32px 40px;display:flex;flex-direction:column;gap:20px;max-width:1280px;box-sizing:border-box;width:100%}
+.sec{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;padding-bottom:6px;border-bottom:1px solid #DADDD6}
+.chip{height:36px;padding:0 12px;border:1px solid #C9CDC5;border-radius:999px;background:#FFFFFF;font:inherit;font-size:13px;color:#1C2024;cursor:pointer}
+.chip[aria-pressed="true"]{background:#E2ECF8;border-color:#9DB6D8;color:#1F4E8C}
+.btn{height:44px;padding:0 18px;border:0;border-radius:8px;background:#0B5C7A;color:#FFFFFF;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.btn2{height:36px;padding:0 12px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:13px;color:#1C2024;cursor:pointer;white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center}
+.sen{display:inline-flex;gap:6px;align-items:center;padding:2px 8px;border-radius:6px;background:#F1F3EF;font-size:12px;white-space:nowrap}
+.kv{display:grid;grid-template-columns:minmax(120px,40%) minmax(0,1fr);gap:8px 12px;font-size:13px}.kv dt{color:#535B63}.kv dd{margin:0}
+.in{height:40px;padding:0 10px;border:1px solid #C9CDC5;border-radius:8px;background:#FFFFFF;font:inherit;font-size:14px;color:#1C2024;box-sizing:border-box}
+.tag{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:6px;background:#F1F3EF;font-size:12px;margin:2px 4px 2px 0}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between;padding:14px 0;border-bottom:1px solid #ECEEEA}
+.lg{display:flex;gap:6px 16px;font-size:12px;color:#535B63;flex-wrap:wrap}
+.lg>span{display:flex;align-items:center;gap:6px}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block;flex:0 0 auto}
+.seg{display:flex;border:1px solid #C9CDC5;border-radius:8px;overflow:hidden}
+.seg button{border:0;height:40px;padding:0 14px;font:inherit;font-size:13px;cursor:pointer;background:#FFFFFF;color:#1C2024}
+.seg button+button{border-left:1px solid #C9CDC5}
+.seg button[aria-pressed="true"]{background:#1F2A2E;color:#FFFFFF}
+.seg button[aria-disabled="true"]{color:#8C939A;cursor:not-allowed}
+.chart{display:flex;gap:10px}
+.yax{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:#535B63;text-align:right;width:30px;padding-bottom:4px;box-sizing:border-box;flex:0 0 auto}
+.plot{position:relative;flex:1 1 auto;min-width:0;display:flex;align-items:flex-end;gap:3px;border-bottom:1px solid #DADDD6;box-sizing:border-box;padding-bottom:4px}
+.col{flex:1 1 0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;border-radius:4px 4px 0 0;outline:none;cursor:default}
+.col.on{background:#E6E9E3}
+.col:focus-visible{box-shadow:0 0 0 2px #0B5C7A}
+.xax{position:relative;height:18px;font-size:12px;color:#535B63;margin-left:40px}
+.xax span{position:absolute;top:0;white-space:nowrap}
+.tip{position:absolute;top:0;z-index:20;min-width:180px;padding:9px 11px;background:#FFFFFF;border:1px solid #C9CDC5;border-radius:8px;box-shadow:0 6px 18px rgba(28,32,36,.16);font-size:12px;line-height:1.4;pointer-events:none;white-space:nowrap;display:flex;flex-direction:column;gap:3px}
+.th{color:#535B63;font-weight:500;margin-bottom:2px}
+.tr{display:flex;align-items:center;gap:8px}
+.tr i{width:12px;height:3px;border-radius:2px;flex:0 0 auto}
+.tr b{font-weight:600;font-size:13px;color:#1C2024;min-width:30px;text-align:right}
+.tr span{color:#535B63}
+.tn{color:#535B63;border-top:1px solid #ECEEEA;padding-top:4px;margin-top:2px;white-space:normal;max-width:240px}
+.hint{min-height:22px;padding:8px 12px;border-radius:8px;background:#F4F5F2;font-size:13px;color:#1C2024}
+.cell{flex:1 1 0;border-radius:2px}
+.cell.on{outline:2px solid #1C2024;outline-offset:-1px}
+.ramp{display:flex;align-items:center;gap:6px;font-size:11px;color:#535B63}
+.ramp i{width:18px;height:12px;border-radius:2px;display:inline-block}
+</style>
+</helmet>
+<div class="app">
+<nav class="side" aria-label="Main navigation">
+<div style="display: flex; flex-direction: column; gap: 2px; padding: 0 8px;">
+<span style="font-weight: 600; font-size: 16px; color: #FFFFFF;">Wi-Fi Sensor</span>
+<span style="font-size: 12px; color: #A9B4B2;">Account: KIS FRI</span>
+</div>
+<div class="nav">
+<a href="Main.dc.html" aria-current="page">Overview</a>
+<a href="Events.dc.html">Events</a>
+<a href="Networks.dc.html">Networks</a>
+<a href="Aps.dc.html">Access points</a>
+<a href="Spectrum.dc.html">Spectrum</a>
+<a href="Sensors.dc.html">Sensors</a>
+<a href="Settings.dc.html">Settings</a>
+</div>
+<div class="sb" style="margin-top: auto;">
+<span class="sbh">Sensors</span>
+<span class="sbi"><span class="dot" style="background: #0ca30c;"></span>pi-fri · online</span>
+<span class="sbi"><span class="dot" style="background: #d03b3b;"></span>pi-lab · offline 3 h</span>
+</div>
+<div class="sb">
+<span class="sbh">System</span>
+<span class="sbi" title="GET /api/health"><span class="dot" style="background: #0ca30c;"></span>API ok · database ok</span>
+<span class="sbi" style="padding-left: 16px;">schema v8</span>
+</div>
+</nav>
+<main class="main">
+<header class="top">
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;">
+<label class="fl">Sensor
+<select class="sel" value="{{sensor}}" onChange="{{onSensor}}"><option value="all">All sensors (2)</option><option value="pi-fri">pi-fri</option><option value="pi-lab">pi-lab</option></select>
+</label>
+<label class="fl">Period
+<select class="sel" value="{{range}}" onChange="{{onRange}}"><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select>
+</label>
+</div>
+<div class="sync"><span>Latest data: 10 Oct 17:52</span><span class="b neu">Write locked</span></div>
+</header>
+
+<div class="content" style="gap: 22px;">
+<h1 style="font-size: 26px;">Overview</h1>
+
+<div class="sec">
+<h2 style="font-size: 18px;">Current status</h2>
+<span class="muted" style="font-size: 13px;">does not depend on the selected period</span>
+</div>
+
+<section aria-label="Current status" style="display: flex; flex-wrap: wrap; gap: 16px;">
+<div class="card" style="flex: 1 1 300px; padding: 16px 18px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;">
+<div style="display: flex; flex-direction: column; gap: 2px;">
+<span style="font-weight: 600;">pi-fri</span>
+<span class="muted" style="font-size: 13px;">FRI, 3rd floor · last poll 12 s ago</span>
+</div>
+<div style="display: flex; gap: 8px; flex-wrap: wrap;"><span class="b ok">Online</span><span class="b ok">Channels 89/89</span></div>
+</div>
+<div class="card" style="flex: 1 1 300px; padding: 16px 18px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;">
+<div style="display: flex; flex-direction: column; gap: 2px;">
+<span style="font-weight: 600;">pi-lab</span>
+<span class="muted" style="font-size: 13px;">Lab · last poll 10 Oct 14:41</span>
+</div>
+<div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;"><span class="b bad">Offline 3 h</span><a href="Sensors.dc.html" style="font-size: 13px;">Sensor details</a></div>
+</div>
+<a href="Events.dc.html" class="card" style="flex: 1 1 180px; padding: 16px 18px; display: flex; flex-direction: column; gap: 2px; text-decoration: none; color: #1C2024;">
+<span class="muted" style="font-size: 13px;">Open events</span>
+<span style="font-size: 28px; font-weight: 600; line-height: 1.15;">3</span>
+<span class="muted" style="font-size: 12px;">1 high · 1 medium · 1 info</span>
+</a>
+<a href="Networks.dc.html" class="card" style="flex: 1 1 180px; padding: 16px 18px; display: flex; flex-direction: column; gap: 2px; text-decoration: none; color: #1C2024;">
+<span class="muted" style="font-size: 13px;">Managed networks compliant</span>
+<span style="font-size: 28px; font-weight: 600; line-height: 1.15;">2 / 3</span>
+<span style="font-size: 12px; color: #8A4B00;">IK-WIFI-DOT1X: MFP not required</span>
+</a>
+</section>
+
+<section class="card" aria-labelledby="att-h" style="padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;">
+<h3 id="att-h" style="font-size: 16px;">Needs attention</h3>
+<div style="display: flex; flex-wrap: wrap; gap: 10px;">
+<div style="flex: 1 1 320px; display: flex; gap: 12px; align-items: flex-start; padding: 12px; border-radius: 8px; background: #FBF7F6;">
+<span class="b bad">High</span>
+<div style="display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto;">
+<span style="font-weight: 500;">Unknown BSSID broadcasting managed SSID “IK-WIFI-DOT1X”</span>
+<span class="muted" style="font-size: 13px;"><span class="mono">9A:1F:3C:52:E0:07</span> · open · pi-lab only · 6 min ago · <a href="Events.dc.html">Investigate</a></span>
+</div>
+</div>
+<div style="flex: 1 1 260px; display: flex; gap: 12px; align-items: flex-start; padding: 12px; border-radius: 8px; background: #FDF8F1;">
+<span class="b warn">Medium</span>
+<div style="display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto;">
+<span style="font-weight: 500;">Sensor pi-lab is not sending data</span>
+<span class="muted" style="font-size: 13px;">since 14:41 · <a href="Sensors.dc.html">Sensors</a></span>
+</div>
+</div>
+<div style="flex: 1 1 260px; display: flex; gap: 12px; align-items: flex-start; padding: 12px; border-radius: 8px; background: #F7F8F6;">
+<span class="b neu">Low</span>
+<div style="display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto;">
+<span style="font-weight: 500;">MFP is not required on a managed network</span>
+<span class="muted" style="font-size: 13px;">IK-WIFI-DOT1X · 31 BSSIDs · <a href="Networks.dc.html">Networks</a></span>
+</div>
+</div>
+</div>
+</section>
+
+<div class="sec" style="margin-top: 6px;">
+<h2 style="font-size: 18px;">Selected period</h2>
+<span class="muted" style="font-size: 13px;">{{rangeText}} · {{sensorLabel}}</span>
+</div>
+
+<section aria-label="Period indicators" style="display: flex; flex-wrap: wrap; gap: 16px;">
+<sc-for list="{{tiles}}" as="k" hint-placeholder-count="3">
+<div class="card" style="flex: 1 1 260px; padding: 18px; display: flex; flex-direction: column; gap: 6px;">
+<div style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px;">
+<span class="muted" style="font-size: 13px;">{{k.label}}</span>
+<a href="{{k.href}}" style="font-size: 12px;">{{k.link}}</a>
+</div>
+<div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 10px;">
+<span style="font-size: 32px; font-weight: 600; line-height: 1.1;">{{k.value}} <span style="font-size: 14px; font-weight: 400; color: #535B63;">{{k.unit}}</span></span>
+<div role="group" aria-label="{{k.aria}}" onMouseLeave="{{k.leave}}" style="position: relative; display: flex; align-items: flex-end; gap: 2px; height: 40px; width: 132px; flex: 0 0 auto;">
+<sc-for list="{{k.spark}}" as="s" hint-placeholder-count="28"><span tabindex="0" aria-label="{{s.aria}}" onMouseEnter="{{s.enter}}" onFocus="{{s.enter}}" style="flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; outline: none;"><span style="width: 100%; height: {{s.h}}; background: {{s.c}}; border-radius: 2px 2px 0 0;"></span></span></sc-for>
+<sc-if value="{{k.tipShow}}" hint-placeholder-val="{{false}}"><div class="tip" role="tooltip" style="top: auto; bottom: calc(100% + 8px); right: 0; min-width: 0;"><div class="th">{{k.tipHead}}</div><div class="tr"><i style="background: #2a78d6;"></i><b>{{k.tipV}}</b><span>{{k.tipL}}</span></div></div></sc-if>
+</div>
+</div>
+<span class="muted" style="font-size: 13px;">{{k.sub}}</span>
+</div>
+</sc-for>
+</section>
+
+<section class="card" aria-labelledby="act-h" style="padding: 20px 22px; display: flex; flex-direction: column; gap: 14px;">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: baseline;">
+<div style="display: flex; flex-direction: column; gap: 2px;">
+<h3 id="act-h" style="font-size: 16px;">Access points over time</h3>
+<span class="muted" style="font-size: 13px;">{{chartSub}}</span>
+</div>
+<div class="lg">
+<span><span class="sw" style="background: #2a78d6;"></span>fixed APs</span>
+<span><span class="sw" style="background: #eb6834;"></span>mobile APs (hotspots)</span>
+<span><span class="dot" style="background: #1C2024;"></span>event</span>
+<span><span class="sw" style="background: repeating-linear-gradient(45deg,#C9CDC5 0 3px,#FFFFFF 3px 6px); border: 1px solid #C9CDC5;"></span>sensor not collecting</span>
+</div>
+</div>
+<div class="chart">
+<div class="yax" aria-hidden="true" style="height: 200px;"><span>{{yTop}}</span><span>{{yMid}}</span><span>0</span></div>
+<div class="plot" role="group" aria-label="{{chartAria}}" onMouseLeave="{{leaveAp}}" style="height: 200px;">
+<sc-for list="{{bars}}" as="b" hint-placeholder-count="28">
+<div class="col {{b.cls}}" tabindex="0" aria-label="{{b.aria}}" onMouseEnter="{{b.enter}}" onFocus="{{b.enter}}">
+<sc-if value="{{b.event}}" hint-placeholder-val="{{false}}"><span style="align-self: center; width: 8px; height: 8px; border-radius: 50%; background: #1C2024; flex: 0 0 auto;"></span></sc-if>
+<sc-if value="{{b.gap}}" hint-placeholder-val="{{false}}"><div style="height: 100%; background: repeating-linear-gradient(45deg,#C9CDC5 0 3px,#FFFFFF 3px 6px); border-radius: 4px 4px 0 0;"></div></sc-if>
+<sc-if value="{{b.data}}" hint-placeholder-val="{{true}}">
+<div style="height: {{b.mobH}}; background: #eb6834; border-radius: 4px 4px 0 0;"></div>
+<div style="height: {{b.fixH}}; background: #2a78d6;"></div>
+</sc-if>
+</div>
+</sc-for>
+<sc-if value="{{apTip.show}}" hint-placeholder-val="{{false}}"><div class="tip" role="tooltip" style="{{apTip.pos}}"><div class="th">{{apTip.head}}</div><sc-for list="{{apTip.rows}}" as="tr" hint-placeholder-count="2"><div class="tr"><i style="background: {{tr.c}};"></i><b>{{tr.v}}</b><span>{{tr.l}}</span></div></sc-for><sc-for list="{{apTip.notes}}" as="tn" hint-placeholder-count="1"><div class="tn">{{tn}}</div></sc-for></div></sc-if>
+</div>
+</div>
+<div class="xax"><sc-for list="{{xlabels}}" as="x" hint-placeholder-count="5"><span style="left: {{x.left}};">{{x.t}}</span></sc-for></div>
+<span class="muted" style="font-size: 13px; padding-top: 6px; border-top: 1px solid #ECEEEA;"><b style="color: #1C2024; font-weight: 500;">Mobile AP</b> = randomized (locally administered) BSSID, phone vendor, or present for less than 2 h.</span>
+</section>
+
+<section class="card" aria-labelledby="sec-h" style="padding: 20px 22px; display: flex; flex-direction: column; gap: 14px;">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: baseline;">
+<h3 id="sec-h" style="font-size: 16px;">Security of nearby APs</h3>
+<span class="muted" style="font-size: 13px;">{{secTotal}} APs seen in the period · hover a segment to highlight it</span>
+</div>
+<div role="group" aria-label="{{secAria}}" onMouseLeave="{{leaveSec}}" style="display: flex; gap: 2px; height: 20px;">
+<sc-for list="{{sec}}" as="x" hint-placeholder-count="5"><div tabindex="0" aria-label="{{x.aria}}" onMouseEnter="{{x.enter}}" onFocus="{{x.enter}}" style="width: {{x.w}}; background: {{x.c}}; border-radius: {{x.r}}; outline: {{x.outline}}; outline-offset: 1px;"></div></sc-for>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px 28px; font-size: 13px;">
+<sc-for list="{{sec}}" as="x" hint-placeholder-count="5">
+<span style="display: flex; align-items: center; gap: 8px; justify-content: space-between; flex: 1 1 230px; padding: 4px 8px; border-radius: 6px; background: {{x.rowBg}}; font-weight: {{x.fw}};"><span style="display: flex; align-items: center; gap: 8px;"><span class="sw" style="background: {{x.c}}; width: 10px; height: 10px; border-radius: 2px;"></span>{{x.label}}</span><span>{{x.n}} APs · {{x.pct}}</span></span>
+</sc-for>
+</div>
+</section>
+
+<section class="card" aria-labelledby="ev-h" style="padding: 20px 22px 8px; display: flex; flex-direction: column; gap: 8px;">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px;">
+<div style="display: flex; flex-direction: column; gap: 2px;">
+<h3 id="ev-h" style="font-size: 16px;">Recent events</h3>
+<span class="muted" style="font-size: 12px;">always the 5 newest, independent of the period</span>
+</div>
+<a href="Events.dc.html" style="font-size: 13px;">All events</a>
+</div>
+<div style="overflow-x: auto;">
+<table class="t nw">
+<thead><tr><th>Time</th><th>Severity</th><th>Event</th><th>AP / network</th><th>Sensor</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>10 Oct 17:46</td><td><span class="b bad">High</span></td><td>Unknown BSSID with managed SSID</td><td>IK-WIFI-DOT1X</td><td>pi-lab</td><td><span class="b neu">Open</span></td></tr>
+<tr><td>10 Oct 14:41</td><td><span class="b warn">Medium</span></td><td>Sensor offline</td><td>–</td><td>pi-lab</td><td><span class="b neu">Open</span></td></tr>
+<tr><td>9 Oct 21:12</td><td><span class="b warn">Medium</span></td><td>Deauth flood (Kismet DEAUTHFLOOD)</td><td>FRI_wifi</td><td>pi-fri</td><td><span class="b ok">Confirmed</span></td></tr>
+<tr><td>9 Oct 19:30</td><td><span class="b neu">Low</span></td><td>RSSI deviation from baseline (+12 dB)</td><td>IK-WIFI-DOT1X</td><td>pi-fri</td><td><span class="b info">False positive</span></td></tr>
+<tr><td>8 Oct 08:03</td><td><span class="b neu">Info</span></td><td>Channel change 64 → 48</td><td>IK-WIFI-DOT1X</td><td>pi-fri, pi-lab</td><td><span class="b neu">Open</span></td></tr>
+</tbody>
+</table>
+</div>
+</section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview": {"width": 1440, "height": 1640}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { sensor: 'all', range: '7d', hAp: null, hSp: null, hSec: null };
+  }
+  renderVals() {
+    var self = this, st = this.state, s = st.sensor, r = st.range;
+    // ---- shared mock-data helpers (identical in every board) ----
+    // All times are wall-clock Bratislava time stored in UTC fields, so the
+    // viewer's own time zone never shifts the mock data.
+    var DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    var HOUR = 3600e3;
+    function T(m, d, h, min) { return Date.UTC(2026, m - 1, d, h || 0, min || 0); }
+    function two(n) { return (n < 10 ? '0' : '') + n; }
+    function dt(t) { return new Date(t); }
+    function dayLabel(t) { var x = dt(t); return DAY[x.getUTCDay()] + ' ' + x.getUTCDate() + ' ' + MON[x.getUTCMonth()]; }
+    function hhmm(t) { var x = dt(t); return two(x.getUTCHours()) + ':' + two(x.getUTCMinutes()); }
+    var NOW = T(10, 10, 17, 52);
+    var FRI_START = T(9, 15, 14, 55);
+    var FRI_OUT = [[T(9, 21, 18, 26), T(9, 21, 23, 47)], [T(9, 22, 15, 43), T(9, 23, 11, 27)]];
+    var LAB_START = T(9, 27, 11, 30);
+    var LAB_DOWN = T(10, 10, 14, 41);
+    function overlap(a, b, c, d) { return Math.max(0, Math.min(b, d) - Math.max(a, c)); }
+    // fraction of [a, b) during which a sensor was collecting
+    function coverage(sensor, a, b) {
+      b = Math.min(b, NOW);
+      if (b <= a) return 0;
+      if (sensor === 'pi-lab') return overlap(a, b, LAB_START, LAB_DOWN) / (b - a);
+      var up = overlap(a, b, FRI_START, NOW);
+      FRI_OUT.forEach(function (o) { up -= overlap(a, b, o[0], o[1]); });
+      return Math.max(0, up) / (b - a);
+    }
+    // buckets of the selected period: 24 x 1 h, 28 x 6 h, or 30 x 1 day
+    function bucketsFor(r) {
+      var sp = r === '24h' ? { start: T(10, 9, 18), step: 1, n: 24 }
+        : (r === '7d' ? { start: T(10, 3, 18), step: 6, n: 28 } : { start: T(9, 11, 0), step: 24, n: 30 });
+      var out = [];
+      for (var i = 0; i < sp.n; i++) {
+        var a = sp.start + i * sp.step * HOUR, b = a + sp.step * HOUR;
+        var x = dt(a);
+        var label = sp.step === 24 ? dayLabel(a)
+          : dayLabel(a) + ', ' + hhmm(a) + '–' + (b > NOW ? hhmm(NOW) : (sp.step === 1 ? hhmm(b) : (hhmm(b) === '00:00' ? '24:00' : hhmm(b))));
+        out.push({ i: i, a: a, b: b, step: sp.step, wd: x.getUTCDay(), h0: x.getUTCHours(), label: label });
+      }
+      return out;
+    }
+    function rangeText(r) {
+      return r === '24h' ? 'last 24 h: 9 Oct 18:00 – 10 Oct 17:52'
+        : (r === '7d' ? 'last 7 days: 3 Oct 18:00 – 10 Oct 17:52' : 'last 30 days: 11 Sep – 10 Oct 17:52');
+    }
+    // x-axis labels placed at the bucket where a day (or 6-hour mark) starts
+    function xLabels(bs) {
+      var out = [];
+      bs.forEach(function (b, i) {
+        var x = dt(b.a), left = (i / bs.length * 100).toFixed(2) + '%';
+        if (b.step === 1) {
+          if (i === 0) out.push({ t: DAY[b.wd] + ' ' + hhmm(b.a), left: left });
+          else if (x.getUTCHours() % 6 === 0) out.push({ t: x.getUTCHours() === 0 ? DAY[b.wd] + ' 00:00' : hhmm(b.a), left: left });
+        } else if (b.step === 6) {
+          if (x.getUTCHours() === 0) out.push({ t: dayLabel(b.a), left: left });
+        } else if (i === 0 || b.wd === 1) {
+          out.push({ t: dayLabel(b.a), left: left });
+        }
+      });
+      return out;
+    }
+    // diurnal and weekly shape of activity on campus
+    function hourF(h) { return (h >= 8 && h <= 18) ? Math.sin((h - 7) / 12 * Math.PI) : 0; }
+    function dayF(wd) { return (wd === 0 || wd === 6) ? 0.16 : (wd === 5 ? 0.78 : (wd === 2 ? 1.02 : 0.95)); }
+    function termF(t) { return t < T(9, 21, 0) ? 0.35 : 1; }
+    // clients on managed networks in one hour (sum of BSS Load station counts)
+    function clientsAt(t) {
+      var x = dt(t), wd = x.getUTCDay(), h = x.getUTCHours();
+      var evening = (h >= 19 && h <= 21 && wd !== 0 && wd !== 6) ? 25 : 0;
+      return Math.round(12 + (510 * hourF(h) * dayF(wd) + evening) * termF(t));
+    }
+    function hoursOf(b) { var hs = []; for (var t = b.a; t < Math.min(b.b, NOW); t += HOUR) hs.push(t); return hs; }
+    // tooltip placed beside column i of n so it never covers the hovered column
+    function tipPos(i, n) {
+      return i < n / 2 ? 'left: calc(' + ((i + 1) / n * 100).toFixed(2) + '% + 6px);'
+        : 'right: calc(' + ((n - i) / n * 100).toFixed(2) + '% + 6px);';
+    }
+    function noTip() { return { show: false, pos: '', head: '', rows: [], notes: [] }; }
+    function fmt(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+    var RAMP = ['#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#256abf', '#184f95', '#0d366b'];
+    var HATCH = 'repeating-linear-gradient(45deg,#C9CDC5 0 3px,#FFFFFF 3px 6px)';
+    // ---- end of shared helpers ----
+    var EVENTS = [
+      [T(10, 10, 17, 46), 'High', 'Unknown BSSID with managed SSID', ['pi-lab']],
+      [T(10, 10, 14, 41), 'Medium', 'Sensor pi-lab offline', ['pi-lab']],
+      [T(10, 9, 21, 12), 'Medium', 'Deauth flood on FRI_wifi', ['pi-fri']],
+      [T(10, 9, 19, 30), 'Low', 'RSSI deviation from baseline', ['pi-fri']],
+      [T(10, 8, 8, 3), 'Info', 'Channel change 64 → 48', ['pi-fri', 'pi-lab']],
+      [T(10, 7, 11, 52), 'Info', 'Client without MFP', ['pi-fri']],
+      [T(10, 6, 16, 20), 'High', 'Security downgrade to open', ['pi-fri']],
+      [T(9, 27, 1, 9), 'Medium', 'Capture stuck on channel 1', ['pi-fri']],
+      [T(9, 22, 15, 43), 'Medium', 'Sensor pi-fri offline', ['pi-fri']],
+      [T(9, 21, 18, 26), 'Medium', 'Sensor pi-fri offline', ['pi-fri']]
+    ];
+    var sensF = s === 'all' ? 1 : (s === 'pi-fri' ? 0.88 : 0.36);
+    var cliF = s === 'all' ? 1 : (s === 'pi-fri' ? 0.97 : 0.3);
+    function mobAt(t) {
+      var x = dt(t);
+      var base = s === 'all' ? 46 : (s === 'pi-fri' ? 39 : 15);
+      return base * (0.08 + 0.92 * hourF(x.getUTCHours()) * dayF(x.getUTCDay())) * (0.5 + 0.5 * termF(t));
+    }
+
+    var bs = bucketsFor(r);
+    var data = bs.map(function (b) {
+      var cf = coverage('pi-fri', b.a, b.b), cl = coverage('pi-lab', b.a, b.b);
+      var on = s === 'all' ? (cf > 0 || cl > 0) : (s === 'pi-fri' ? cf > 0 : cl > 0);
+      var notes = [];
+      if (s === 'all' && on) {
+        if (cl > 0 && cl < 1) notes.push('pi-lab collected ' + Math.round(cl * 100) + ' % of this window');
+        if (cl === 0 && b.a >= LAB_START) notes.push('pi-lab was not collecting');
+        if (cf > 0 && cf < 1) notes.push('pi-fri collected ' + Math.round(cf * 100) + ' % of this window');
+        if (cf === 0) notes.push('pi-fri was not collecting');
+      } else if (on) {
+        var c = s === 'pi-fri' ? cf : cl;
+        if (c < 1) notes.push(s + ' collected ' + Math.round(c * 100) + ' % of this window');
+      }
+      var hs = hoursOf(b);
+      var fixBase = s === 'all' ? ((cf > 0 && cl > 0) ? 186 : (cf > 0 ? 162 : 58)) : (s === 'pi-fri' ? 162 : 58);
+      var mobMax = Math.max.apply(null, hs.map(mobAt).concat([0]));
+      var mult = b.step === 1 ? 1 : (b.step === 6 ? 1.3 : 1.9);
+      var fix = Math.round(fixBase * (b.step === 24 ? 1.15 : 1) * (0.97 + 0.03 * Math.sin(b.i * 1.3)));
+      var mob = Math.round(mobMax * mult);
+      var cli = Math.round(Math.max.apply(null, hs.map(clientsAt).concat([0])) * cliF);
+      var mobNew = Math.round(mob * 0.42), fixNew = b.i % 4 === 0 ? 1 : 0;
+      var evs = EVENTS.filter(function (e) { return e[0] >= b.a && e[0] < b.b && (s === 'all' || e[3].indexOf(s) >= 0); });
+      evs.forEach(function (e) { notes.push('Event · ' + e[1].toLowerCase() + ' · ' + e[2]); });
+      return {
+        b: b, on: on, fix: on ? fix : 0, mob: on ? mob : 0, cli: on ? cli : 0,
+        newAp: on ? mobNew + fixNew : 0, mobNew: on ? mobNew : 0,
+        open: on ? Math.round(fix * 0.115 + mob * 0.04) : 0,
+        notes: notes, event: evs.length > 0
+      };
+    });
+
+    // ---- access points over time ----
+    var max = 0;
+    data.forEach(function (d) { if (d.fix + d.mob > max) max = d.fix + d.mob; });
+    var top = Math.ceil(max / 50) * 50 || 50;
+    var n = data.length;
+    var bars = data.map(function (d, i) {
+      return {
+        cls: st.hAp === i ? 'on' : '',
+        fixH: (d.fix / top * 100).toFixed(1) + '%',
+        mobH: (d.mob / top * 100).toFixed(1) + '%',
+        gap: !d.on, data: d.on, event: d.event,
+        aria: d.b.label + (d.on ? ': ' + d.fix + ' fixed, ' + d.mob + ' mobile APs' : ': no sensor collecting'),
+        enter: function () { self.setState({ hAp: i }); }
+      };
+    });
+    var apTip = noTip();
+    if (st.hAp !== null && data[st.hAp]) {
+      var h = data[st.hAp];
+      apTip = {
+        show: true, pos: tipPos(st.hAp, n), head: h.b.label,
+        rows: h.on ? [
+          { c: '#eb6834', v: h.mob, l: 'mobile APs' },
+          { c: '#2a78d6', v: h.fix, l: 'fixed APs' },
+          { c: 'transparent', v: h.fix + h.mob, l: 'total' }
+        ] : [],
+        notes: h.on ? h.notes : ['No sensor was collecting in this window'].concat(h.notes)
+      };
+    }
+    var withData = data.filter(function (d) { return d.on; });
+    var peak = withData.reduce(function (a, d) { return d.fix + d.mob > a.fix + a.mob ? d : a; }, withData[0] || data[0]);
+    var last = data[n - 1];
+    var unit = r === '24h' ? 'hour' : (r === '7d' ? '6-hour window' : 'day');
+
+    // ---- period tiles ----
+    var kNew = data.reduce(function (a, d) { return a + d.newAp; }, 0);
+    var kMobNew = data.reduce(function (a, d) { return a + d.mobNew; }, 0);
+    var base = r === '24h' ? { extra: 7, total: 268 } : (r === '7d' ? { extra: 12, total: 612 } : { extra: 26, total: 703 });
+    var total = Math.round(base.total * sensF);
+    var kOpen = Math.max.apply(null, data.map(function (d) { return d.open; })) + Math.round(base.extra * sensF);
+    var cliVals = data.map(function (d) { return d.cli; });
+    var cliPeak = Math.max.apply(null, cliVals);
+    var cliPeakAt = data[cliVals.indexOf(cliPeak)].b.label;
+    var cliAvg = Math.round(withData.reduce(function (a, d) { return a + d.cli; }, 0) / Math.max(1, withData.length));
+    function spark(key, label, k) {
+      var vals = data.map(function (d) { return d[key]; });
+      var m = Math.max.apply(null, vals.concat([1]));
+      var hv = st.hSp && st.hSp.k === k ? st.hSp.i : null;
+      return {
+        spark: data.map(function (d, i) {
+          return {
+            h: d.on ? Math.max(4, Math.round(d[key] / m * 100)) + '%' : '3px',
+            c: !d.on ? '#DADDD6' : (hv === i ? '#184f95' : '#2a78d6'),
+            aria: d.b.label + ': ' + (d.on ? d[key] + ' ' + label : 'no data'),
+            enter: function () { self.setState({ hSp: { k: k, i: i } }); }
+          };
+        }),
+        tipShow: hv !== null,
+        tipHead: hv !== null ? data[hv].b.label : '',
+        tipV: hv !== null ? (data[hv].on ? String(data[hv][key]) : '–') : '',
+        tipL: hv !== null ? (data[hv].on ? label : 'no sensor collecting') : '',
+        leave: function () { self.setState({ hSp: null }); }
+      };
+    }
+    function tile(o, sp) { for (var key in sp) o[key] = sp[key]; return o; }
+    var tiles = [
+      tile({ label: 'New APs', link: 'Access points', href: 'Aps.dc.html', value: fmt(kNew), unit: '',
+        sub: Math.round(kMobNew / Math.max(1, kNew) * 100) + ' % of them mobile hotspots · first seen in this period',
+        aria: 'New APs per ' + unit }, spark('newAp', 'new APs', 0)),
+      tile({ label: 'Open networks nearby', link: 'Networks', href: 'Networks.dc.html', value: String(kOpen), unit: '',
+        sub: Math.round(kOpen / total * 100) + ' % of ' + total + ' APs seen in the period',
+        aria: 'Open APs seen per ' + unit }, spark('open', 'open APs seen', 1)),
+      tile({ label: 'Clients on managed APs', link: 'Weekly pattern', href: 'Networks.dc.html', value: String(cliPeak), unit: 'peak',
+        sub: (r === '24h' ? 'hourly average ' : (r === '7d' ? 'average 6-hour peak ' : 'average daily peak ')) + cliAvg + ' · peak ' + cliPeakAt,
+        aria: 'Peak clients per ' + unit }, spark('cli', 'clients (hourly peak)', 2))
+    ];
+
+    // ---- security of nearby APs ----
+    var secDef = [['Open', '#d03b3b', 12], ['Legacy (WEP, WPA1/TKIP)', '#ec835a', 2], ['WPA2-PSK without MFP', '#fab219', 46], ['Strong (MFP or Enterprise)', '#0ca30c', 38], ['Unknown', '#C9CDC5', 2]];
+    if (r === '30d') { secDef[0][2] = 14; secDef[2][2] = 45; secDef[3][2] = 37; }
+    var sec = secDef.map(function (x, i) {
+      var cnt = Math.round(total * x[2] / 100), on = st.hSec === i;
+      return {
+        label: x[0], c: x[1], w: x[2] + '%', pct: x[2] + ' %', n: cnt,
+        r: i === 0 ? '4px 0 0 4px' : (i === secDef.length - 1 ? '0 4px 4px 0' : '0'),
+        outline: on ? '2px solid #1C2024' : 'none',
+        rowBg: on ? '#F1F3EF' : 'transparent', fw: on ? '600' : '400',
+        aria: x[0] + ': ' + cnt + ' APs, ' + x[2] + ' %',
+        enter: function () { self.setState({ hSec: i }); }
+      };
+    });
+
+    return {
+      sensor: s, range: r,
+      onSensor: function (e) { self.setState({ sensor: e.target.value, hAp: null, hSp: null }); },
+      onRange: function (e) { self.setState({ range: e.target.value, hAp: null, hSp: null }); },
+      sensorLabel: s === 'all' ? 'all sensors' : 'sensor ' + s,
+      rangeText: rangeText(r),
+      tiles: tiles,
+      chartSub: 'APs per ' + unit + ' · peak ' + (peak.fix + peak.mob) + ' (' + peak.b.label + ') · latest window ' + (last.on ? (last.fix + last.mob) + ', of which ' + last.mob + ' mobile' : 'no data'),
+      chartAria: 'Stacked columns of fixed and mobile APs per ' + unit + '; hover or focus a column for exact values',
+      yTop: String(top), yMid: String(top / 2),
+      bars: bars, apTip: apTip,
+      leaveAp: function () { self.setState({ hAp: null }); },
+      xlabels: xLabels(bs),
+      sec: sec, secTotal: String(total),
+      secAria: 'Security of ' + total + ' APs: ' + sec.map(function (x) { return x.label + ' ' + x.pct; }).join(', '),
+      leaveSec: function () { self.setState({ hSec: null }); },
+      false: false, true: true
+    };
+  }
+}
+</script>
+</body>
+</html>
