@@ -13,19 +13,21 @@ import "./styles/charts.css";
 import Shell from "./app/Shell.jsx";
 import Pending from "./app/Pending.jsx";
 import NotFound from "./app/NotFound.jsx";
+import Overview from "./pages/overview/Overview.jsx";
 import Legacy from "./legacy/Legacy.jsx";
 import OldOverview from "./legacy/pages/Overview.jsx";
 import Inventory from "./legacy/pages/Inventory.jsx";
 import ApDetail from "./legacy/pages/ApDetail.jsx";
 import Detections from "./legacy/pages/Detections.jsx";
 
+const PERIOD = ["sensor", "range"];
 const DETECTIONS = { to: "/detections", label: "Detections" };
 
 const router = createBrowserRouter([
   {
     element: <Shell />,
     children: [
-      { index: true, element: <Legacy><OldOverview /></Legacy>, handle: { title: "Overview" } },
+      { index: true, element: <Overview />, handle: { filters: PERIOD, title: "Overview" } },
       { path: "events", element: <Pending title="Events" phase="phase 4e" legacy={DETECTIONS} />,
         handle: { title: "Events" } },
       { path: "networks", element: <Pending title="Networks" phase="phase 4b" />, handle: { title: "Networks" } },
