@@ -10,7 +10,7 @@ docker-compose stack.
 
 | Part | State |
 |---|---|
-| `schema.sql` | done - idempotent PostgreSQL schema: the collector's tables mirrored with a `sensor_id` on every row, plus `sensors`, `ap_baselines`, `detections`, `refresh_ap_baselines()` and the `ap_inventory` view. Schema 6: the dashboard read tables `ap_rssi_hourly`, `sensor_hourly`, `ap_summary`, `sensor_summary`, built by `refresh_rollups(sensor_id, from)` (the importer calls it), and `ap_config_changes` materialized. Schema 7 (`ops/migrate_schema7.sh`): `observations` slim and AP-only, keyed `(sensor_id, device_key, ts)` INCLUDE (rssi, rssi_floor) + BRIN on ts, `devices.cur_*`, `client_bssids`, `ap_baselines.band`. Schema 8 (`ops/migrate_schema8.sh`): `ap_load_hourly` (AP load per hour and advertised channel, from collector buffer v7 and the backfilled per-poll columns of buffers <= v5). TimescaleDB-ready (ts in the key), not enabled. |
+| `schema.sql` | done - idempotent PostgreSQL schema: the collector's tables mirrored with a `sensor_id` on every row, plus `sensors`, `ap_baselines`, `detections`, `refresh_ap_baselines()` and the `ap_inventory` view. Schema 6: the dashboard read tables `ap_rssi_hourly`, `sensor_hourly`, `ap_summary`, `sensor_summary`, built by `refresh_rollups(sensor_id, from)` (the importer calls it), and `ap_config_changes` materialized. Schema 7 (`ops/migrate_schema7.sh`): `observations` slim and AP-only, keyed `(sensor_id, device_key, ts)` INCLUDE (rssi, rssi_floor) + BRIN on ts, `devices.cur_*`, `client_bssids`, `ap_baselines.band`. Schema 8 (`ops/migrate_schema8.sh`): `ap_load_hourly` (AP load per hour and advertised channel, from collector buffer v7 and the backfilled per-poll columns of buffers <= v5). Schema 9 (`ops/migrate_schema9.sh`): the dashboard v2 model - account, settings, networks, account-level APs, `detections` as the event table with operator statuses, security levels, sensor periods (`docs/dashboard-v2/`). TimescaleDB-ready (ts in the key), not enabled. |
 | `seed/` | done - `export_snapshot.py` (consistent copy of the Pi buffer) and `import_snapshot.py` (SQL + COPY stream piped into psql, idempotent merge). See `seed/README.md`. |
 | `docker-compose.yml`, `api/`, `frontend/` | done - the stack below |
 | dashboard (read-only) | done - `/api/overview`, `/api/aps`, `/api/aps/{key}` (all three from the schema-6 read tables, never raw observations; ETag from `sensor_summary.refreshed_at`), `/api/aps/{key}/rssi` (hourly from `ap_rssi_hourly`; `bucket=900` with `from`/`to` at most 48 h apart reads raw observations), `/api/alerts`, `/api/findings`, `/api/detections` (filters `severity`, `type`, `acked`; no evidence) and `/api/detections/{id}` (with evidence); React pages Overview, Access points, AP detail with the RSSI timeline vs baseline (uPlot), Detections with a per-row evidence expand. Before/after measurements: `docs/performance.md` |
@@ -52,7 +52,7 @@ docker compose build frontend                 # the node build is the memory pea
 docker compose build api
 docker compose up -d
 docker compose ps                             # db healthy -> api healthy -> frontend running
-curl -s http://localhost/api/health           # {"status":"ok","database":"ok","schema_version":"8"}
+curl -s http://localhost/api/health           # {"status":"ok","database":"ok","schema_version":"9"}
 ```
 
 `SITE_ADDRESS=:80` serves plain HTTP; a domain name switches Caddy to automatic

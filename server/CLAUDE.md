@@ -147,6 +147,25 @@ Conventions for the stack:
     `ap_config_changes`). There is no load history between buffer v6
     (2026-10-03 11:00:20 UTC) and v7. Dashboard v2 plan:
     `docs/dashboard-v2/PLAN.md`.
+  - **Dashboard v2 model (schema 9, `ops/migrate_schema9.sh`; design in
+    `docs/dashboard-v2/SPEC.md` and `PLAN.md`):** one account (`accounts`,
+    tz Europe/Bratislava) with `account_settings`, `networks` (managed /
+    friendly) and account-level `aps` (one per BSSID; `ap_sensors` maps each
+    sensor's device). `aps.classification` is the MANUAL classification only;
+    the effective one is `ap_classification()` / view `account_aps`.
+    **`detections` is the event table** (`kind` detection | kismet | config |
+    sensor): the batch detectors and `refresh_events()` write rows; `status`
+    (open | confirmed | false_positive), `status_at`, `status_note` are the
+    operator's labels (input for the false-positive analysis) and are never
+    touched by a detector re-run or a refresh. Kismet alerts become episodes
+    per header and AP, attributed by `transmitter_mac` only - **no client MAC
+    in an event row**. Derived by `refresh_rollups()`: `ap_security_periods`
+    (`security_level()` from Kismet 2025-09-R1's crypt bits, "weakest
+    offered"), `sensor_periods`, the events. **A collecting poll is `ok AND
+    ds_running AND devices_active > 0`** (`ok` alone counted the adapter loss
+    as successful). Fixture tests: `security_level_test.sql`,
+    `classification_test.sql`, `events_test.sql`, the extended
+    `refresh_rollups_test.sql`; read-only check `check_schema9.sql`.
   - **An AP's band comes from its advertised channel** (`ap_band()`:
     `devices.adv_channel`, else the busiest frequency of `device_freq_hist`),
     stored as `ap_baselines.band`. `observations.freq_khz` was never the

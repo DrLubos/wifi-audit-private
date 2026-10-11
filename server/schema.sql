@@ -6,7 +6,7 @@
 -- created from it, and re-applying it to a database at the same version only
 -- replaces functions and views. Upgrades between versions are separate
 -- migration scripts (ops/migrate_schema7.sh for 6 -> 7, ops/migrate_schema8.sh
--- for 7 -> 8).
+-- for 7 -> 8, ops/migrate_schema9.sh for 8 -> 9).
 --
 -- Mirrors the sensor's SQLite buffer (wifi-sensor/collector/store.py, schema v7)
 -- with a sensor_id on every row, and adds sensors, ap_baselines and detections.
@@ -47,16 +47,39 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 -- 8: ap_load_hourly (AP load per hour and advertised channel: collector
 --    buffer v7, and the per-poll load columns of buffers <= v5 as source
 --    'v5_obs'); ap_channel_at(), load_ap_load_samples() (ops/migrate_schema8.sh)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '8')
+-- 9: dashboard v2 model (server/docs/dashboard-v2/PLAN.md section 4.3):
+--    accounts, account_settings, networks, account-level aps + ap_sensors,
+--    ap_security_periods, sensor_periods, sensor_annotations, sensor_config,
+--    sensor_uploads, kismet_alert_rules, audit_log; detections as the event
+--    table (kind, status, ts_end, updated_at; acked -> status); security_level()
+--    and friends; refresh_events(); new rollup columns (ops/migrate_schema9.sh)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '9')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
--- --- sensors ------------------------------------------------------------------
+-- --- accounts and sensors ------------------------------------------------------------
+
+-- The account the dashboard shows (schema 9). One today; the api takes it from
+-- one place (deps.get_account) so login can replace that later. tz sets the
+-- dashboard's bucket and day boundaries; it must have whole-hour offsets, so
+-- every bucket edge is a UTC hour.
+CREATE TABLE IF NOT EXISTS accounts (
+  id            serial PRIMARY KEY,
+  name          text NOT NULL UNIQUE,
+  tz            text NOT NULL DEFAULT 'Europe/Bratislava',
+  write_version bigint NOT NULL DEFAULT 0,     -- bumped by every write endpoint (part of the ETags)
+  created_at    timestamptz NOT NULL DEFAULT now());
+INSERT INTO accounts (id, name) VALUES (1, 'Account') ON CONFLICT DO NOTHING;
+SELECT setval(pg_get_serial_sequence('accounts', 'id'), (SELECT max(id) FROM accounts));
+COMMENT ON TABLE accounts IS
+  'The account the dashboard shows (schema 9): name, time zone of its buckets, write version for the ETags.';
 
 CREATE TABLE IF NOT EXISTS sensors (
   id          serial PRIMARY KEY,
+  account_id  integer NOT NULL DEFAULT 1 REFERENCES accounts(id),
   name        text NOT NULL UNIQUE,          -- short handle, e.g. 'pi-fri'
   description text,
   location    text,                          -- free text, no coordinates
+  hardware    text,                          -- e.g. 'Raspberry Pi 3B+ · RTL8821CU (USB)'
   tz          text NOT NULL DEFAULT 'UTC',   -- day boundaries for daily statistics
   created_at  timestamptz NOT NULL DEFAULT now());
 COMMENT ON TABLE sensors IS
@@ -316,33 +339,189 @@ CREATE INDEX IF NOT EXISTS ap_baselines_bssid ON ap_baselines (sensor_id, bssid)
 COMMENT ON TABLE ap_baselines IS
   'Per-sensor per-AP RSSI baseline (median + MAD-robust sigma, same definition as analysis/rssi_stability.py) and the known BSSID<->SSID pair. trusted = operator whitelist.';
 
+-- The event table of the dashboard (schema 9). kind 'detection': the batch
+-- detectors in detection/ (and the classification rule event
+-- unknown_bssid_managed_ssid); 'kismet': episodes of Kismet's WIDS alerts;
+-- 'config': security changes of an AP's advertised configuration; 'sensor':
+-- outages and limited capture. Only the detectors and refresh_events() write
+-- rows; the status columns are the operator's labels (input for the
+-- false-positive analysis) and are never touched by either - only by the
+-- status endpoint of the api (audit_log).
 CREATE TABLE IF NOT EXISTS detections (
-  id         bigserial PRIMARY KEY,
-  sensor_id  integer NOT NULL REFERENCES sensors(id),
-  ts         timestamptz NOT NULL,           -- time of the evidence
-  type       text NOT NULL,                  -- e.g. 'unknown_bssid_protected_ssid'
-  severity   text NOT NULL CHECK (severity IN ('info', 'low', 'medium', 'high', 'critical')),
-  -- subject: a stored device, or just a MAC/SSID when no device row exists
-  device_key text,
-  mac        macaddr,
-  ssid       text,
-  summary    text NOT NULL,
-  evidence   jsonb NOT NULL DEFAULT '{}',
-  acked      boolean NOT NULL DEFAULT false,
-  acked_at   timestamptz,
-  ack_note   text,
-  created_at timestamptz NOT NULL DEFAULT now());
+  id          bigserial PRIMARY KEY,
+  sensor_id   integer NOT NULL REFERENCES sensors(id),
+  kind        text NOT NULL DEFAULT 'detection' CHECK (kind IN ('detection', 'kismet', 'config', 'sensor')),
+  ts          timestamptz NOT NULL,          -- time of the evidence / start of the episode
+  ts_end      timestamptz,                   -- end of the episode or outage (NULL: a point, or still going)
+  type        text NOT NULL,                 -- detector type, Kismet header, 'security_change', 'sensor_outage', ...
+  severity    text NOT NULL CHECK (severity IN ('info', 'low', 'medium', 'high', 'critical')),
+  -- subject: a stored device, or just a MAC/SSID when no device row exists;
+  -- never a client MAC (Kismet alerts are attributed to their BSSID only)
+  device_key  text,
+  mac         macaddr,
+  ssid        text,
+  summary     text NOT NULL,
+  evidence    jsonb NOT NULL DEFAULT '{}',
+  status      text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'confirmed', 'false_positive')),
+  status_at   timestamptz,
+  status_note text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now());   -- last change by a detector or refresh_events() (ETags)
 CREATE INDEX IF NOT EXISTS detections_ts   ON detections (sensor_id, ts);
-CREATE INDEX IF NOT EXISTS detections_open ON detections (sensor_id) WHERE NOT acked;
--- One row per (detector, subject, episode start). The batch detectors in
--- detection/ refresh the row of an episode they have already stored
--- (detection/detections.py matches on the stored window) instead of adding one;
--- this index is the guarantee for an exact re-run. The subject is the device_key
--- or, for a BSSID without a device row, the upper-case MAC.
+CREATE INDEX IF NOT EXISTS detections_open ON detections (sensor_id, severity) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS detections_feed ON detections (ts DESC, id DESC);   -- keyset paging of the feed
+-- One row per (type, subject, episode start). The batch detectors refresh the
+-- row of an episode they have already stored (detection/detections.py matches
+-- on the stored window) instead of adding one, refresh_events() likewise; this
+-- index is the guarantee for an exact re-run. The subject is the device_key or,
+-- for a BSSID without a device row, the upper-case MAC; sensor events have none
+-- (NULLS NOT DISTINCT).
 CREATE UNIQUE INDEX IF NOT EXISTS detections_dedupe
-  ON detections (sensor_id, type, coalesce(device_key, upper(mac::text)), ts);
+  ON detections (sensor_id, type, coalesce(device_key, upper(mac::text)), ts) NULLS NOT DISTINCT;
 COMMENT ON TABLE detections IS
-  'Server-side detections, written only by the batch detectors in detection/ (deauth_flood so far); the dashboard reads and acknowledges them. Re-runs refresh a stored episode, acked/ack_note survive.';
+  'Events (schema 9): detector results, Kismet alert episodes, security configuration changes, sensor outages. Written by the batch detectors and refresh_events(); status/status_at/status_note are the operator''s and survive every re-run.';
+
+-- --- account configuration (schema 9; written by the api's write endpoints) ----------------
+
+-- Typed columns, not jsonb: CHECKs and explicit migrations. Defaults: the
+-- detectors' own CLI defaults; the evil_twin channel guard off (coverage over
+-- false-positive suppression until a staged evaluation measures its cost).
+CREATE TABLE IF NOT EXISTS account_settings (
+  account_id           integer PRIMARY KEY REFERENCES accounts(id),
+  -- classification rules (ap_classification())
+  ignore_random_bssid  boolean NOT NULL DEFAULT true,
+  suspicious_unallowed boolean NOT NULL DEFAULT true,
+  managed_by_vendor    boolean NOT NULL DEFAULT false,
+  ignore_weaker_dbm    smallint,                       -- NULL = off
+  -- mobile APs: case-insensitive prefixes of devices.manuf
+  mobile_vendors       text[] NOT NULL DEFAULT ARRAY['Apple', 'Samsung', 'Google', 'OnePlus', 'Motorola'],
+  -- detector parameters (the batch detectors read them in a later step)
+  deauth_min_bursts    integer NOT NULL DEFAULT 3,
+  deauth_window_s      integer NOT NULL DEFAULT 600,
+  evil_twin_k          real NOT NULL DEFAULT 6,
+  evil_twin_min_db     real NOT NULL DEFAULT 8,
+  evil_twin_guard_s    integer NOT NULL DEFAULT 0,
+  sensor_offline_min   integer NOT NULL DEFAULT 15,
+  updated_at           timestamptz NOT NULL DEFAULT now());
+INSERT INTO account_settings (account_id) VALUES (1) ON CONFLICT DO NOTHING;
+
+-- Managed (operator's own, checked against a policy) and friendly (someone
+-- else's, known and legitimate) networks. allowed_ouis hold truncated MACs
+-- (trunc(): EC:58:EA:00:00:00); comparisons truncate both sides.
+CREATE TABLE IF NOT EXISTS networks (
+  id                bigserial PRIMARY KEY,
+  account_id        integer NOT NULL REFERENCES accounts(id),
+  ssid              text NOT NULL CHECK (ssid <> ''),
+  kind              text NOT NULL CHECK (kind IN ('managed', 'friendly')),
+  expected_security text CHECK (expected_security IN ('enterprise', 'psk_or_better', 'wpa3', 'open_allowed')),
+  require_mfp       boolean NOT NULL DEFAULT false,
+  allowed_bssids    macaddr[] NOT NULL DEFAULT '{}',
+  allowed_ouis      macaddr[] NOT NULL DEFAULT '{}',
+  note              text,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (account_id, ssid),
+  CHECK (kind = 'managed' OR (expected_security IS NULL AND NOT require_mfp)));
+
+-- One physical AP = one BSSID in the account, seen by one or more sensors.
+-- first_seen / last_seen and ap_sensors are derived (refresh_rollups());
+-- classification is the MANUAL classification only (NULL = the rules decide,
+-- ap_classification()), note the operator's - the refresh never touches them.
+CREATE TABLE IF NOT EXISTS aps (
+  id             bigserial PRIMARY KEY,
+  account_id     integer NOT NULL REFERENCES accounts(id),
+  bssid          macaddr NOT NULL,
+  first_seen     timestamptz NOT NULL,        -- first observation by any of its sensors
+  last_seen      timestamptz NOT NULL,
+  classification text CHECK (classification IN ('managed', 'friendly', 'unknown', 'suspicious', 'ignored')),
+  classified_at  timestamptz,
+  note           text,
+  note_at        timestamptz,
+  UNIQUE (account_id, bssid));
+CREATE TABLE IF NOT EXISTS ap_sensors (
+  ap_id      bigint NOT NULL REFERENCES aps(id),
+  sensor_id  integer NOT NULL,
+  device_key text NOT NULL,
+  PRIMARY KEY (sensor_id, device_key),
+  FOREIGN KEY (sensor_id, device_key) REFERENCES devices (sensor_id, device_key));
+CREATE INDEX IF NOT EXISTS ap_sensors_ap ON ap_sensors (ap_id);
+
+-- Documented causes and changes of a sensor (wifi-sensor/docs/findings.md
+-- sections 6 and 7, detection/degraded_windows.csv): the cause text of the
+-- outage table and of sensor events, the data boundaries of the
+-- configuration history. Seeded by ops/seed_sensor_history.sql.
+CREATE TABLE IF NOT EXISTS sensor_annotations (
+  sensor_id integer NOT NULL REFERENCES sensors(id),
+  starts_at timestamptz NOT NULL,
+  ends_at   timestamptz,                       -- NULL = a point in time (a restart, a change)
+  kind      text NOT NULL CHECK (kind IN ('gap', 'no_frames', 'coverage', 'restart', 'change')),
+  boundary  boolean NOT NULL DEFAULT false,    -- a data boundary (a channel-plan change)
+  label     text NOT NULL,
+  ref       text,                              -- e.g. 'findings.md section 6'
+  PRIMARY KEY (sensor_id, starts_at, kind));
+
+-- Capture configuration of a sensor; the newest version is the desired one.
+-- confirmed_at: the sensor reported it applied it (ingest, later); for rows
+-- seeded from findings section 7 the effective time. channels NULL when only
+-- the length of a historical list is known.
+CREATE TABLE IF NOT EXISTS sensor_config (
+  sensor_id    integer NOT NULL REFERENCES sensors(id),
+  version      integer NOT NULL,
+  channel_plan text NOT NULL CHECK (channel_plan IN ('auto', 'all_89', 'ht20_37', 'no_empty_dfs_59', 'locked', 'custom')),
+  channels     text[],                         -- explicit Kismet hop entries
+  n_channels   integer NOT NULL,
+  dwell_s      real NOT NULL,
+  poll_s       integer NOT NULL,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  created_by   text NOT NULL DEFAULT 'operator',   -- 'seed' for rows taken from findings section 7
+  confirmed_at timestamptz,
+  note         text,
+  PRIMARY KEY (sensor_id, version));
+
+-- One row per snapshot import (and, later, per ingest batch).
+CREATE TABLE IF NOT EXISTS sensor_uploads (
+  id             bigserial PRIMARY KEY,
+  sensor_id      integer NOT NULL REFERENCES sensors(id),
+  received_at    timestamptz NOT NULL DEFAULT now(),
+  via            text NOT NULL CHECK (via IN ('snapshot', 'ingest')),
+  buffer_version text,
+  polls_from     timestamptz,
+  polls_to       timestamptz,
+  buffer_bytes   bigint,                       -- size of the sensor's buffer (export_snapshot.py meta)
+  rows           jsonb NOT NULL DEFAULT '{}'); -- rows inserted per table
+CREATE INDEX IF NOT EXISTS sensor_uploads_sensor ON sensor_uploads (sensor_id, received_at);
+
+-- Which Kismet alerts become events, and severity overrides (NULL = Kismet's
+-- own: kismet_severity()). SOURCEERROR / SOURCEOPEN are sensor health (the
+-- capture-crash count, sensor_periods), not events.
+CREATE TABLE IF NOT EXISTS kismet_alert_rules (
+  header        text PRIMARY KEY,
+  as_event      boolean NOT NULL DEFAULT true,
+  severity      text CHECK (severity IN ('info', 'low', 'medium', 'high', 'critical')),
+  episode_gap_s integer NOT NULL DEFAULT 3600, -- alerts of one header on one AP closer than this form one event
+  label         text);
+INSERT INTO kismet_alert_rules (header, as_event, severity, label) VALUES
+  ('SOURCEERROR',       false, NULL,  'Capture source error'),
+  ('SOURCEOPEN',        false, NULL,  'Capture source opened'),
+  ('DEAUTHFLOOD',       true,  NULL,  'Deauthentication flood (Kismet)'),
+  ('BCASTDISCON',       true,  NULL,  'Broadcast deauthentication or disassociation'),
+  ('NOCLIENTMFP',       true,  NULL,  'Client without MFP on a network with MFP'),
+  ('BEACONRATE',        true,  'low', 'Beacon rate changed'),
+  ('DISCONCODEINVALID', true,  'low', 'Invalid disconnection reason code'),
+  ('ADVCRYPTCHANGE',    true,  NULL,  'Advertised encryption changed (Kismet)'),
+  ('CRYPTODROP',        true,  NULL,  'Encryption downgrade (Kismet)')
+  ON CONFLICT DO NOTHING;
+
+-- Every write endpoint of the api appends one row (thesis traceability of the
+-- operator's labels and settings).
+CREATE TABLE IF NOT EXISTS audit_log (
+  id         bigserial PRIMARY KEY,
+  at         timestamptz NOT NULL DEFAULT now(),
+  account_id integer NOT NULL REFERENCES accounts(id),
+  action     text NOT NULL,                  -- e.g. 'event.status', 'ap.classification'
+  target     text,
+  old        jsonb,
+  new        jsonb);
 
 -- --- helpers ------------------------------------------------------------------------------
 
@@ -504,6 +683,229 @@ BEGIN
          (count(*) FILTER (WHERE NOT up.is_insert))::integer
   FROM up;
 END
+$$;
+
+-- --- security of an AP (schema 9) -------------------------------------------------------
+--
+-- crypt_bits is Kismet's dot11.advertisedssid.crypt_bitfield: the 64-bit
+-- dot11_crypt_* set of Kismet 2025-09-R1 (packet_ieee80211.h:216-289; the
+-- field is registered on crypt_set, phy_80211_components.cc:273 - the legacy
+-- 32-bit crypt_* set is another field and not stored). Bits used:
+--   general   0 WEP, 1 WPA, 2 WPA1, 3 WPA2, 4 WPA3
+--   group     7 WEP40, 8 WEP104, 9 TKIP, 10 CCMP, ... 17 BIP-CMAC-256
+--   pairwise  23 WEP40, 24 WEP104, 25 TKIP, 26 CCMP, 28/29 GCMP, 30 CCMP-256, 34 OCB
+--   AKM       37 802.1X, 38 PSK, 39 802.1X-FT, 40 PSK-FT, 41 802.1X-SHA256,
+--             42 PSK-SHA256, 43 TDLS, 44 SAE, 45 SAE-FT, 46 AP-peer, 47/48
+--             802.1X suite B, 49 802.1X-FT-SHA384, 50-53 FILS, 54 OWE,
+--             55 PSK-FT-SHA384, 56 PSK-SHA384, 57 WPS
+-- Kismet quirks: the OWE-transition vendor IE ORs the LEGACY constant
+-- crypt_wpa_owe (1 << 17) into this set (phy_80211_dissectors.cc:2383), so
+-- an open BSS in OWE transition shows bit 17 alone; the crypt string
+-- (crypt_to_simple_string()) labels OWE '-SAE' and hides WPA1 behind WPA2.
+-- Levels are read from the bits; the string only when the bits are unknown
+-- (0 is Kismet's missing field unless the crypt string is 'Open', the same
+-- rule as ap_config_changes). Mapping and live combinations:
+-- server/docs/dashboard-v2/PLAN.md section 5. Fixture test:
+-- tests/sql/security_level_test.sql.
+
+-- true when any of the given bit positions is set
+CREATE OR REPLACE FUNCTION crypt_has(p_bits bigint, VARIADIC p_positions integer[])
+RETURNS boolean
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT (p_bits & (SELECT bit_or(1::bigint << b) FROM unnest(p_positions) AS b)) <> 0
+$$;
+
+-- The kind of security an AP offers, "weakest offered" first: open, wep,
+-- wpa1_mixed (WPA1 + WPA2), wpa1, tkip (TKIP as group or pairwise cipher),
+-- transition (PSK + SAE), psk, enterprise3 (802.1X suite B / FT-SHA384),
+-- enterprise, sae, owe, unknown.
+CREATE OR REPLACE FUNCTION crypt_kind(p_crypt text, p_bits bigint)
+RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE
+    WHEN p_bits IS NULL OR (p_bits = 0 AND p_crypt IS DISTINCT FROM 'Open') THEN
+      CASE WHEN p_crypt = 'Open' THEN 'open'
+           WHEN p_crypt ~ 'WEP' THEN 'wep'
+           WHEN p_crypt ~ 'WPA1' THEN 'wpa1'
+           WHEN p_crypt ~ 'TKIP' THEN 'tkip'
+           WHEN p_crypt ~ '-PSK' AND p_crypt ~ '-SAE' THEN 'transition'
+           WHEN p_crypt ~ '-PSK' THEN 'psk'
+           WHEN p_crypt ~ '-EAP' THEN 'enterprise'
+           WHEN p_crypt ~ '-SAE' THEN 'sae'
+           ELSE 'unknown' END
+    WHEN NOT crypt_has(p_bits, VARIADIC ARRAY[0, 1, 2, 3, 4, 7, 8, 23, 24]
+                                        || ARRAY(SELECT generate_series(37, 57))) THEN 'open'
+    WHEN crypt_has(p_bits, 0, 7, 8, 23, 24) THEN 'wep'
+    WHEN crypt_has(p_bits, 2) AND crypt_has(p_bits, 3) THEN 'wpa1_mixed'
+    WHEN crypt_has(p_bits, 2) THEN 'wpa1'
+    WHEN crypt_has(p_bits, 9, 25) THEN 'tkip'
+    WHEN crypt_has(p_bits, 38, 40, 42, 55, 56) AND crypt_has(p_bits, 44, 45) THEN 'transition'
+    WHEN crypt_has(p_bits, 38, 40, 42, 55, 56) THEN 'psk'
+    WHEN crypt_has(p_bits, 47, 48, 49) THEN 'enterprise3'
+    WHEN crypt_has(p_bits, 37, 39, 41, 50, 51, 52, 53) THEN 'enterprise'
+    WHEN crypt_has(p_bits, 44, 45) THEN 'sae'
+    WHEN crypt_has(p_bits, 54) THEN 'owe'
+    ELSE 'unknown' END
+$$;
+
+-- open | legacy (WEP, WPA1, TKIP offered) | psk_no_mfp (any PSK AKM, incl.
+-- WPA2/WPA3 transition, without MFP required) | strong (802.1X, SAE, OWE, or
+-- PSK with MFP required) | unknown. mfp_sup is part of the signature (SPEC);
+-- the level depends on mfp_req only.
+CREATE OR REPLACE FUNCTION security_level(p_crypt text, p_bits bigint, p_mfp_sup boolean, p_mfp_req boolean)
+RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE k
+    WHEN 'open' THEN 'open'
+    WHEN 'wep' THEN 'legacy' WHEN 'wpa1_mixed' THEN 'legacy' WHEN 'wpa1' THEN 'legacy' WHEN 'tkip' THEN 'legacy'
+    WHEN 'psk' THEN CASE WHEN p_mfp_req THEN 'strong' ELSE 'psk_no_mfp' END
+    WHEN 'transition' THEN CASE WHEN p_mfp_req THEN 'strong' ELSE 'psk_no_mfp' END
+    WHEN 'enterprise3' THEN 'strong' WHEN 'enterprise' THEN 'strong' WHEN 'sae' THEN 'strong' WHEN 'owe' THEN 'strong'
+    ELSE 'unknown' END
+  FROM (SELECT crypt_kind(p_crypt, p_bits) AS k) x
+$$;
+
+-- The name of the configuration in tables ("WPA2/WPA3 transition" stays apart
+-- from plain "WPA2-PSK").
+CREATE OR REPLACE FUNCTION security_label(p_crypt text, p_bits bigint)
+RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE crypt_kind(p_crypt, p_bits)
+    WHEN 'open' THEN 'Open' WHEN 'wep' THEN 'WEP' WHEN 'wpa1_mixed' THEN 'WPA1/WPA2 mixed'
+    WHEN 'wpa1' THEN 'WPA1' WHEN 'tkip' THEN 'WPA2 (TKIP)' WHEN 'transition' THEN 'WPA2/WPA3 transition'
+    WHEN 'psk' THEN 'WPA2-PSK' WHEN 'enterprise3' THEN 'WPA3-Enterprise' WHEN 'enterprise' THEN 'WPA2-Enterprise'
+    WHEN 'sae' THEN 'WPA3-SAE' WHEN 'owe' THEN 'OWE' ELSE 'Unknown' END
+$$;
+
+-- required | capable | no; NULL when neither flag is known
+CREATE OR REPLACE FUNCTION mfp_state(p_mfp_sup boolean, p_mfp_req boolean)
+RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN p_mfp_req THEN 'required' WHEN p_mfp_sup THEN 'capable'
+              WHEN p_mfp_sup IS NOT NULL OR p_mfp_req IS NOT NULL THEN 'no' END
+$$;
+
+-- open 0 < legacy 1 < psk_no_mfp 2 < strong 3 (unknown: NULL)
+CREATE OR REPLACE FUNCTION security_rank(p_level text)
+RETURNS integer
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE p_level WHEN 'open' THEN 0 WHEN 'legacy' THEN 1 WHEN 'psk_no_mfp' THEN 2 WHEN 'strong' THEN 3 END
+$$;
+
+-- The set bits by name: {"general": [...], "group": [...], "pairwise": [...],
+-- "akm": [...], "eap": [...]}; NULL for an unknown (NULL / 0) bitfield.
+CREATE OR REPLACE FUNCTION security_detail(p_bits bigint)
+RETURNS jsonb
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN p_bits IS NULL OR p_bits = 0 THEN NULL ELSE (
+    SELECT jsonb_object_agg(g.grp, g.names)
+    FROM (SELECT b.grp, jsonb_agg(b.name ORDER BY b.pos) AS names
+          FROM (VALUES
+            (0, 'general', 'WEP'), (1, 'general', 'WPA'), (2, 'general', 'WPA1'), (3, 'general', 'WPA2'),
+            (4, 'general', 'WPA3'),
+            (7, 'group', 'WEP40'), (8, 'group', 'WEP104'), (9, 'group', 'TKIP'), (10, 'group', 'CCMP'),
+            (11, 'group', 'BIP-CMAC-128'), (12, 'group', 'GCMP-128'), (13, 'group', 'GCMP-256'),
+            (14, 'group', 'CCMP-256'), (15, 'group', 'BIP-GMAC-128'), (16, 'group', 'BIP-GMAC-256'),
+            (17, 'group', 'BIP-CMAC-256'), (18, 'group', 'OCB'),
+            (23, 'pairwise', 'WEP40'), (24, 'pairwise', 'WEP104'), (25, 'pairwise', 'TKIP'),
+            (26, 'pairwise', 'CCMP'), (27, 'pairwise', 'BIP-CMAC-128'), (28, 'pairwise', 'GCMP-128'),
+            (29, 'pairwise', 'GCMP-256'), (30, 'pairwise', 'CCMP-256'), (31, 'pairwise', 'BIP-GMAC-128'),
+            (32, 'pairwise', 'BIP-GMAC-256'), (33, 'pairwise', 'BIP-CMAC-256'), (34, 'pairwise', 'OCB'),
+            (37, 'akm', '802.1X'), (38, 'akm', 'PSK'), (39, 'akm', '802.1X-FT'), (40, 'akm', 'PSK-FT'),
+            (41, 'akm', '802.1X-SHA256'), (42, 'akm', 'PSK-SHA256'), (43, 'akm', 'TDLS'), (44, 'akm', 'SAE'),
+            (45, 'akm', 'SAE-FT'), (46, 'akm', 'AP-PEER'), (47, 'akm', '802.1X-SUITE-B'),
+            (48, 'akm', '802.1X-SUITE-B-192'), (49, 'akm', '802.1X-FT-SHA384'), (50, 'akm', 'FILS-SHA256'),
+            (51, 'akm', 'FILS-SHA384'), (52, 'akm', 'FILS-SHA256-FT'), (53, 'akm', 'FILS-SHA384-FT'),
+            (54, 'akm', 'OWE'), (55, 'akm', 'PSK-FT-SHA384'), (56, 'akm', 'PSK-SHA384'), (57, 'akm', 'WPS'),
+            (58, 'eap', 'LEAP'), (59, 'eap', 'TLS'), (60, 'eap', 'TTLS'), (61, 'eap', 'PEAP'),
+            (62, 'eap', 'IDENTITY')) AS b(pos, grp, name)
+          WHERE (p_bits & (1::bigint << b.pos)) <> 0
+          GROUP BY b.grp) g) END
+$$;
+
+-- Does an AP meet a managed network's policy? NULL = met, else the first
+-- reason. enterprise: an 802.1X AKM and no PSK; psk_or_better: PSK (also
+-- transition), 802.1X or SAE (OWE has no authentication); wpa3: SAE without
+-- PSK, or 802.1X with MFP required; open_allowed: anything. require_mfp:
+-- MFP required (not applicable to an open AP). Unknown security never meets
+-- a policy other than open_allowed.
+CREATE OR REPLACE FUNCTION security_meets(p_expected text, p_require_mfp boolean, p_crypt text,
+                                          p_bits bigint, p_mfp_req boolean)
+RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE
+    WHEN p_expected IS NULL OR p_expected = 'open_allowed' THEN
+      CASE WHEN p_require_mfp AND x.k NOT IN ('open', 'unknown') AND NOT coalesce(p_mfp_req, false)
+           THEN 'MFP not required' END
+    WHEN x.k = 'unknown' THEN 'security unknown'
+    WHEN p_expected = 'enterprise' AND x.k NOT IN ('enterprise', 'enterprise3') THEN 'not Enterprise'
+    WHEN p_expected = 'psk_or_better' AND x.k NOT IN ('psk', 'transition', 'enterprise', 'enterprise3', 'sae')
+      THEN 'weaker than WPA2-PSK'
+    WHEN p_expected = 'wpa3'
+         AND NOT (x.k = 'sae' OR (x.k IN ('enterprise', 'enterprise3') AND coalesce(p_mfp_req, false)))
+      THEN 'not WPA3'
+    WHEN p_require_mfp AND NOT coalesce(p_mfp_req, false) THEN 'MFP not required'
+  END
+  FROM (SELECT crypt_kind(p_crypt, p_bits) AS k) x
+$$;
+
+-- Kismet's alert severity scale (alertracker.h, kis_alert_severity: info 0,
+-- low 5, medium 10, high 15, critical 20) as the event severity.
+CREATE OR REPLACE FUNCTION kismet_severity(p_severity smallint)
+RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT CASE WHEN p_severity >= 20 THEN 'critical' WHEN p_severity >= 15 THEN 'high'
+              WHEN p_severity >= 10 THEN 'medium' WHEN p_severity >= 5 THEN 'low' ELSE 'info' END
+$$;
+
+-- --- classification of an account AP (schema 9) ------------------------------------------
+--
+-- Effective classification: the manual one if set, else the rules of
+-- account_settings, in this order: (1) the AP's network name (SSID, or the
+-- name seen for a hidden AP) is a MANAGED network: BSSID in allowed_bssids ->
+-- managed; OUI in allowed_ouis -> managed if managed_by_vendor, else unknown;
+-- neither -> suspicious if suspicious_unallowed and the network has an
+-- allowed list at all, else unknown; (2) a FRIENDLY network -> friendly;
+-- (3) a randomized BSSID and ignore_random_bssid -> ignored; (4) typical RSSI
+-- below ignore_weaker_dbm -> ignored; (5) unknown. Rule 1 comes before 3 on
+-- purpose: a randomized BSSID broadcasting a managed SSID is suspicious, not
+-- ignored. Fixture test: tests/sql/classification_test.sql.
+CREATE OR REPLACE FUNCTION ap_classification(p_account integer, p_manual text, p_network text,
+                                             p_bssid macaddr, p_random boolean, p_rssi_typical real)
+RETURNS text
+LANGUAGE sql STABLE AS $$
+  SELECT coalesce(
+    p_manual,
+    (SELECT CASE
+       WHEN n.kind = 'managed' THEN
+         CASE WHEN p_bssid = ANY (n.allowed_bssids) THEN 'managed'
+              WHEN trunc(p_bssid) IN (SELECT trunc(o) FROM unnest(n.allowed_ouis) AS o) THEN
+                CASE WHEN st.managed_by_vendor THEN 'managed' ELSE 'unknown' END
+              WHEN st.suspicious_unallowed
+                   AND (cardinality(n.allowed_bssids) > 0 OR cardinality(n.allowed_ouis) > 0) THEN 'suspicious'
+              ELSE 'unknown' END
+       ELSE 'friendly' END
+     FROM networks n
+     JOIN account_settings st ON st.account_id = n.account_id
+     WHERE n.account_id = p_account AND n.ssid = p_network),
+    (SELECT CASE WHEN p_random AND st.ignore_random_bssid THEN 'ignored'
+                 WHEN p_rssi_typical < st.ignore_weaker_dbm THEN 'ignored' END
+     FROM account_settings st WHERE st.account_id = p_account),
+    'unknown')
+$$;
+
+-- Mobile AP (SPEC section 4): randomized BSSID, a vendor of the account's
+-- mobile list (case-insensitive prefix of devices.manuf), or a lifetime under
+-- 2 h once it has ended (not seen for an hour before p_latest, the account's
+-- latest collecting poll).
+CREATE OR REPLACE FUNCTION ap_is_mobile(p_account integer, p_random boolean, p_manuf text,
+                                        p_first timestamptz, p_last timestamptz, p_latest timestamptz)
+RETURNS boolean
+LANGUAGE sql STABLE AS $$
+  SELECT coalesce(p_random, false)
+      OR EXISTS (SELECT 1 FROM account_settings st, unnest(st.mobile_vendors) AS v
+                 WHERE st.account_id = p_account AND p_manuf ILIKE v || '%')
+      OR coalesce(p_last - p_first < interval '2 hours' AND p_last < p_latest - interval '1 hour', false)
 $$;
 
 -- Recompute the RSSI baselines of one sensor from its observations.
@@ -744,6 +1146,10 @@ CREATE TABLE IF NOT EXISTS ap_rssi_hourly (
   max        smallint,
   PRIMARY KEY (sensor_id, device_key, hour),
   FOREIGN KEY (sensor_id, device_key) REFERENCES devices (sensor_id, device_key));
+-- The dashboard's period cards (schema 9) count distinct APs per bucket of
+-- hours across all APs: index-only by hour.
+CREATE INDEX IF NOT EXISTS ap_rssi_hourly_hour
+  ON ap_rssi_hourly (sensor_id, hour) INCLUDE (device_key, n_obs, n_valid, median);
 COMMENT ON TABLE ap_rssi_hourly IS
   'Per AP and UTC hour: observation count and the valid-RSSI distribution (floor readings counted in n_floor, never in the statistics). Filled by refresh_rollups().';
 
@@ -759,6 +1165,10 @@ CREATE TABLE IF NOT EXISTS sensor_hourly (
   new_aps         integer NOT NULL,          -- APs first observed in the hour
   alerts          integer NOT NULL,          -- Kismet alerts with ts in the hour
   ap_obs          integer NOT NULL,          -- AP observation rows in the hour
+  -- schema 9: a collecting poll = ok AND datasource running AND devices > 0
+  -- (ok alone counted the 2026-10-06 adapter loss as successful)
+  capture_polls   integer NOT NULL DEFAULT 0,
+  limited_polls   integer NOT NULL DEFAULT 0,  -- collecting with ds_hop_ok = false
   PRIMARY KEY (sensor_id, hour));
 COMMENT ON TABLE sensor_hourly IS
   'Per sensor and UTC hour: poll health, hop coverage, gap time, AP activity and alerts. An hour inside a long gap has a row with polls = 0. Filled by refresh_rollups().';
@@ -823,6 +1233,14 @@ CREATE TABLE IF NOT EXISTS ap_summary (
   n_changes      integer NOT NULL,           -- change events in ap_config_changes (distinct ts)
   last_change_at timestamptz,
   last_change    jsonb,                      -- [{field, old, new}] at last_change_at
+  -- schema 9: security (security_level() / security_label() of the current
+  -- configuration; crypt_bits_known = the bitfield, or the last known one of
+  -- the same crypt string when Kismet's missing-field 0 replaced it) and the
+  -- median of the hourly RSSI medians over the AP's life
+  security         text,
+  security_label   text,
+  crypt_bits_known bigint,
+  rssi_typical     real,
   PRIMARY KEY (sensor_id, device_key),
   FOREIGN KEY (sensor_id, device_key) REFERENCES devices (sensor_id, device_key));
 COMMENT ON TABLE ap_summary IS
@@ -845,9 +1263,358 @@ CREATE TABLE IF NOT EXISTS sensor_summary (
   alerts           integer NOT NULL,
   alerts_last_ts   timestamptz,
   baselines        integer NOT NULL,         -- ap_baselines rows with statistics
-  refreshed_at     timestamptz NOT NULL);    -- when refresh_rollups() last ran: the api's ETag
+  refreshed_at     timestamptz NOT NULL,     -- when refresh_rollups() last ran: the api's ETag
+  -- schema 9: the last collecting poll and the hop list of the last poll
+  last_capture_at  timestamptz,
+  last_hop_n       integer,
+  last_hop_visited integer,
+  last_hop_ok      boolean);
 COMMENT ON TABLE sensor_summary IS
   'One row per sensor: what the overview shows, plus country_expected for the AP page. refreshed_at versions every read table of the sensor.';
+
+-- The security reading of an AP's configuration timeline (schema 9): one row
+-- per period between changes of crypt, crypt_bits, mfp_sup or mfp_req in
+-- ap_config_changes (so a WPA2 -> Open downgrade is two periods), with the
+-- level and label of the period. Feeds the per-hour security of the period
+-- cards, "security changes in the period" and the config events.
+CREATE TABLE IF NOT EXISTS ap_security_periods (
+  sensor_id  integer NOT NULL,
+  device_key text NOT NULL,
+  valid_from timestamptz NOT NULL,           -- '-infinity' for the first known state
+  valid_to   timestamptz NOT NULL,           -- 'infinity' for the current state
+  crypt      text,
+  crypt_bits bigint,
+  mfp_sup    boolean,
+  mfp_req    boolean,
+  level      text NOT NULL,
+  label      text NOT NULL,
+  PRIMARY KEY (sensor_id, device_key, valid_from));
+COMMENT ON TABLE ap_security_periods IS
+  'Per AP and sensor: the periods between security-relevant configuration changes, with security_level()/security_label(). Rebuilt by refresh_rollups().';
+
+-- Outages and limited capture of a sensor (schema 9), from polls: every poll
+-- is collecting (ok, datasource running, devices > 0), limited (collecting,
+-- ds_hop_ok = false) or down; the interval to the next poll takes the poll's
+-- state, or down when it is longer than 90 s. Runs of down >= 90 s are
+-- outages, runs of limited >= 60 s limited periods. Before buffer v4
+-- (ds_hop_ok NULL) limited windows exist only as sensor_annotations.
+CREATE TABLE IF NOT EXISTS sensor_periods (
+  sensor_id integer NOT NULL REFERENCES sensors(id),
+  starts_at timestamptz NOT NULL,            -- an outage after a poll gap starts at the last good poll
+  ends_at   timestamptz,                     -- NULL = still going at the sensor's last poll
+  kind      text NOT NULL CHECK (kind IN ('outage', 'limited')),
+  polls     integer NOT NULL,                -- polls in the period in that state (not collecting / limited)
+  PRIMARY KEY (sensor_id, starts_at, kind));
+COMMENT ON TABLE sensor_periods IS
+  'Outages and limited-capture periods of a sensor, derived from polls. Rebuilt by refresh_rollups().';
+
+-- The security periods of one sensor's APs (schema 9; ap_security_periods):
+-- one row per period between changes of crypt, crypt_bits, mfp_sup, mfp_req in
+-- ap_config_changes; each field at the start of a period = the new value of
+-- its last change up to then, else the old value of its first later change,
+-- else the current value (ap_summary, so it runs after the ap_summary
+-- rebuild). A period whose crypt string differs from the current one takes the
+-- current bitfield only if the bitfield itself has changes on record
+-- (otherwise it is unknown and security_level() reads the crypt string).
+-- Whole-sensor rebuild; returns the rows written. Called by refresh_rollups();
+-- fixture test tests/sql/events_test.sql.
+CREATE OR REPLACE FUNCTION refresh_security_periods(p_sensor_id integer)
+RETURNS integer
+LANGUAGE plpgsql
+SET jit = off
+AS $$
+#variable_conflict use_column
+DECLARE v_n integer;
+BEGIN
+  DELETE FROM ap_security_periods WHERE sensor_id = p_sensor_id;
+  INSERT INTO ap_security_periods (sensor_id, device_key, valid_from, valid_to, crypt, crypt_bits,
+                                   mfp_sup, mfp_req, level, label)
+  WITH chg AS MATERIALIZED (
+    SELECT device_key, ts, field, old_value, new_value
+    FROM ap_config_changes
+    WHERE sensor_id = p_sensor_id AND field IN ('crypt', 'crypt_bits', 'mfp_sup', 'mfp_req')
+  ), pts AS (
+    SELECT device_key, '-infinity'::timestamptz AS valid_from FROM ap_summary WHERE sensor_id = p_sensor_id
+    UNION
+    SELECT c.device_key, c.ts FROM chg c
+    JOIN ap_summary s ON s.sensor_id = p_sensor_id AND s.device_key = c.device_key
+  ), st AS (
+    SELECT p.device_key, p.valid_from,
+           lead(p.valid_from, 1, 'infinity'::timestamptz)
+             OVER (PARTITION BY p.device_key ORDER BY p.valid_from) AS valid_to,
+           coalesce(
+             (SELECT c.new_value FROM chg c WHERE c.device_key = p.device_key AND c.field = 'crypt'
+                AND c.ts <= p.valid_from ORDER BY c.ts DESC LIMIT 1),
+             (SELECT c.old_value FROM chg c WHERE c.device_key = p.device_key AND c.field = 'crypt'
+                AND c.ts > p.valid_from ORDER BY c.ts LIMIT 1),
+             s.crypt) AS crypt,
+           coalesce(
+             (SELECT c.new_value FROM chg c WHERE c.device_key = p.device_key AND c.field = 'crypt_bits'
+                AND c.ts <= p.valid_from ORDER BY c.ts DESC LIMIT 1),
+             (SELECT c.old_value FROM chg c WHERE c.device_key = p.device_key AND c.field = 'crypt_bits'
+                AND c.ts > p.valid_from ORDER BY c.ts LIMIT 1))::bigint AS chg_bits,
+           EXISTS (SELECT 1 FROM chg c WHERE c.device_key = p.device_key AND c.field = 'crypt_bits')
+             AS bits_changed,
+           coalesce(
+             (SELECT c.new_value FROM chg c WHERE c.device_key = p.device_key AND c.field = 'mfp_sup'
+                AND c.ts <= p.valid_from ORDER BY c.ts DESC LIMIT 1),
+             (SELECT c.old_value FROM chg c WHERE c.device_key = p.device_key AND c.field = 'mfp_sup'
+                AND c.ts > p.valid_from ORDER BY c.ts LIMIT 1),
+             s.mfp_sup::text)::boolean AS mfp_sup,
+           coalesce(
+             (SELECT c.new_value FROM chg c WHERE c.device_key = p.device_key AND c.field = 'mfp_req'
+                AND c.ts <= p.valid_from ORDER BY c.ts DESC LIMIT 1),
+             (SELECT c.old_value FROM chg c WHERE c.device_key = p.device_key AND c.field = 'mfp_req'
+                AND c.ts > p.valid_from ORDER BY c.ts LIMIT 1),
+             s.mfp_req::text)::boolean AS mfp_req,
+           s.crypt AS cur_crypt, s.crypt_bits_known AS cur_bits
+    FROM pts p
+    JOIN ap_summary s ON s.sensor_id = p_sensor_id AND s.device_key = p.device_key
+  ), v AS (
+    SELECT st.*,
+           CASE WHEN st.bits_changed THEN coalesce(st.chg_bits, st.cur_bits)
+                WHEN st.crypt IS NOT DISTINCT FROM st.cur_crypt THEN st.cur_bits END AS crypt_bits
+    FROM st
+  )
+  SELECT p_sensor_id, v.device_key, v.valid_from, v.valid_to, v.crypt, v.crypt_bits, v.mfp_sup, v.mfp_req,
+         security_level(v.crypt, v.crypt_bits, v.mfp_sup, v.mfp_req), security_label(v.crypt, v.crypt_bits)
+  FROM v;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n;
+END
+$$;
+
+-- Outages and limited capture of one sensor (schema 9; sensor_periods), from
+-- polls (definition at the table). Whole-history rebuild (a window scan over
+-- ~70k polls, < 1 s); returns the rows written. Called by refresh_rollups();
+-- fixture test tests/sql/events_test.sql.
+CREATE OR REPLACE FUNCTION refresh_sensor_periods(p_sensor_id integer)
+RETURNS integer
+LANGUAGE plpgsql
+SET jit = off
+AS $$
+#variable_conflict use_column
+DECLARE v_n integer;
+BEGIN
+  DELETE FROM sensor_periods WHERE sensor_id = p_sensor_id;
+  INSERT INTO sensor_periods (sensor_id, starts_at, ends_at, kind, polls)
+  WITH p AS (
+    SELECT ts, lead(ts) OVER (ORDER BY ts) AS next_ts,
+           CASE WHEN NOT (ok AND coalesce(ds_running, false) AND coalesce(devices_active, 0) > 0) THEN 'outage'
+                WHEN ds_hop_ok = false THEN 'limited' ELSE 'ok' END AS poll_st
+    FROM polls WHERE sensor_id = p_sensor_id
+  ), s AS (
+    SELECT ts, next_ts, poll_st,
+           CASE WHEN next_ts - ts > interval '90 seconds' THEN 'outage' ELSE poll_st END AS st
+    FROM p
+  ), r AS (
+    SELECT x.*, sum(CASE WHEN x.st IS DISTINCT FROM x.prev_st THEN 1 ELSE 0 END) OVER (ORDER BY x.ts) AS run
+    FROM (SELECT s.*, lag(s.st) OVER (ORDER BY s.ts) AS prev_st FROM s) x
+  ), g AS (
+    SELECT min(ts) AS starts_at,
+           CASE WHEN bool_or(next_ts IS NULL) THEN NULL ELSE max(next_ts) END AS ends_at,
+           max(ts) AS last_ts, min(st) AS kind, (count(*) FILTER (WHERE poll_st = st))::integer AS polls
+    FROM r GROUP BY run
+  )
+  SELECT p_sensor_id, g.starts_at, g.ends_at, g.kind, g.polls
+  FROM g
+  WHERE g.kind IN ('outage', 'limited')
+    AND coalesce(g.ends_at, g.last_ts) - g.starts_at
+        >= CASE g.kind WHEN 'outage' THEN interval '90 seconds' ELSE interval '60 seconds' END;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n;
+END
+$$;
+
+-- The derived event rows of one sensor (schema 9), written into detections:
+--   kismet  episodes of Kismet's WIDS alerts: alerts of one header on one AP
+--           (the AP whose MAC is the alert's transmitter_mac - Kismet's BSSID
+--           argument; never a source/destination MAC, which can be a client)
+--           closer than kismet_alert_rules.episode_gap_s (1 h); headers with
+--           as_event = false (SOURCEERROR, SOURCEOPEN) are not events.
+--           Severity: the rule's override, else kismet_severity(). An episode
+--           is matched to the stored row of the same type and AP whose window
+--           overlaps it (as the batch detectors' sink does), else inserted.
+--   config  every change point of ap_security_periods: down to open high,
+--           other downgrades medium, same level low, upgrades info.
+--   sensor  sensor_periods of at least account_settings.sensor_offline_min
+--           (outage, medium) or 10 min (limited, low), cause from
+--           sensor_annotations.
+--   rule    detection 'unknown_bssid_managed_ssid' for every AP that the
+--           classification rules (not a manual classification) mark suspicious.
+-- Only ts/ts_end/severity/summary/evidence of a stored row are refreshed, and
+-- only when they change (updated_at = the ETag); status, status_at and
+-- status_note - the operator's labels - are never touched, and no stored row
+-- is deleted. No client MAC, probe or Kismet alert text is copied. Fixture
+-- test: tests/sql/events_test.sql. Called by refresh_rollups() and by the
+-- api's network/settings write endpoints.
+CREATE OR REPLACE FUNCTION refresh_events(p_sensor_id integer)
+RETURNS TABLE (n_kismet integer, n_config integer, n_sensor integer, n_rule integer)
+LANGUAGE plpgsql
+SET jit = off
+AS $$
+#variable_conflict use_column
+DECLARE
+  v_account   integer;
+  v_offline_s integer;
+  v_last_poll timestamptz;
+  v_kismet    integer := 0;
+  v_config    integer := 0;
+  v_sensor    integer := 0;
+  v_rule      integer := 0;
+  v_n         integer;
+  v_id        bigint;
+  e           record;
+BEGIN
+  SELECT se.account_id, coalesce(st.sensor_offline_min, 15) * 60
+    INTO v_account, v_offline_s
+  FROM sensors se LEFT JOIN account_settings st ON st.account_id = se.account_id
+  WHERE se.id = p_sensor_id;
+  IF v_account IS NULL THEN
+    RAISE EXCEPTION 'refresh_events: unknown sensor_id %', p_sensor_id;
+  END IF;
+  SELECT max(ts) INTO v_last_poll FROM polls WHERE sensor_id = p_sensor_id;
+
+  -- 1. Kismet alert episodes
+  FOR e IN
+    WITH a AS (
+      SELECT al.id, al.ts, al.header, al.severity AS kseverity, al.channel,
+             ap.device_key, ap.mac, ap.ssid,
+             coalesce(r.episode_gap_s, 3600) AS gap_s, r.severity AS override,
+             coalesce(r.label, al.header) AS label
+      FROM alerts al
+      LEFT JOIN kismet_alert_rules r ON r.header = al.header
+      LEFT JOIN LATERAL (SELECT d.device_key, d.mac, nullif(d.ssid, '') AS ssid
+                         FROM devices d
+                         WHERE d.sensor_id = al.sensor_id AND d.type = 'ap' AND d.mac = al.transmitter_mac
+                         ORDER BY d.last_seen DESC LIMIT 1) ap ON true
+      WHERE al.sensor_id = p_sensor_id AND al.ts IS NOT NULL AND coalesce(r.as_event, true)
+    ), b AS (
+      SELECT a.*,
+             CASE WHEN lag(a.ts) OVER w IS NULL
+                    OR a.ts - lag(a.ts) OVER w > make_interval(secs => a.gap_s) THEN 1 ELSE 0 END AS starts
+      FROM a
+      WINDOW w AS (PARTITION BY a.header, a.device_key ORDER BY a.ts, a.id)
+    ), c AS (
+      SELECT b.*, sum(b.starts) OVER (PARTITION BY b.header, b.device_key ORDER BY b.ts, b.id) AS episode
+      FROM b
+    )
+    SELECT c.header, c.device_key, (array_agg(c.mac))[1] AS mac, (array_agg(c.ssid))[1] AS ssid,
+           min(c.ts) AS ts, max(c.ts) AS ts_end, count(*) AS n, max(c.gap_s) AS gap_s,
+           coalesce(min(c.override), kismet_severity(max(c.kseverity))) AS severity,
+           min(c.label) || CASE WHEN count(*) > 1 THEN ' (' || count(*) || ' alerts)' ELSE '' END AS summary,
+           jsonb_build_object(
+             'header', c.header, 'alerts', count(*), 'first', min(c.ts), 'last', max(c.ts),
+             'kismet_severity', max(c.kseverity),
+             'channels', coalesce(to_jsonb(array_agg(DISTINCT c.channel) FILTER (WHERE c.channel IS NOT NULL)),
+                                  '[]'::jsonb)) AS evidence
+    FROM c
+    GROUP BY c.header, c.device_key, c.episode
+  LOOP
+    v_id := NULL;
+    SELECT x.id INTO v_id FROM detections x
+    WHERE x.sensor_id = p_sensor_id AND x.kind = 'kismet' AND x.type = e.header
+      AND x.device_key IS NOT DISTINCT FROM e.device_key
+      AND x.ts <= e.ts_end + make_interval(secs => e.gap_s)
+      AND coalesce(x.ts_end, x.ts) >= e.ts - make_interval(secs => e.gap_s)
+    ORDER BY x.ts LIMIT 1;
+    IF v_id IS NULL THEN
+      INSERT INTO detections (sensor_id, kind, ts, ts_end, type, severity, device_key, mac, ssid,
+                              summary, evidence)
+      VALUES (p_sensor_id, 'kismet', e.ts, e.ts_end, e.header, e.severity, e.device_key, e.mac, e.ssid,
+              e.summary, e.evidence)
+      ON CONFLICT DO NOTHING;
+    ELSE
+      UPDATE detections x SET ts = e.ts, ts_end = e.ts_end, severity = e.severity, ssid = e.ssid,
+                              summary = e.summary, evidence = e.evidence, updated_at = now()
+      WHERE x.id = v_id
+        AND (x.ts, x.ts_end, x.severity, x.ssid, x.summary, x.evidence)
+            IS DISTINCT FROM (e.ts, e.ts_end, e.severity, e.ssid, e.summary, e.evidence);
+    END IF;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    v_kismet := v_kismet + v_n;
+  END LOOP;
+
+  -- 2. security changes
+  INSERT INTO detections AS x (sensor_id, kind, ts, type, severity, device_key, mac, ssid, summary, evidence)
+  SELECT p_sensor_id, 'config', cur.valid_from, 'security_change',
+         CASE WHEN security_rank(cur.level) < security_rank(prev.level) AND cur.level = 'open' THEN 'high'
+              WHEN security_rank(cur.level) < security_rank(prev.level) THEN 'medium'
+              WHEN security_rank(cur.level) > security_rank(prev.level) THEN 'info'
+              ELSE 'low' END,
+         cur.device_key, d.mac, nullif(d.ssid, ''),
+         CASE WHEN cur.label IS DISTINCT FROM prev.label
+                THEN 'Security ' || prev.label || ' → ' || cur.label
+              WHEN mfp_state(cur.mfp_sup, cur.mfp_req) IS DISTINCT FROM mfp_state(prev.mfp_sup, prev.mfp_req)
+                THEN 'MFP ' || coalesce(mfp_state(prev.mfp_sup, prev.mfp_req), 'unknown') || ' → '
+                     || coalesce(mfp_state(cur.mfp_sup, cur.mfp_req), 'unknown')
+              ELSE 'Encryption ' || coalesce(prev.crypt, 'unknown') || ' → ' || coalesce(cur.crypt, 'unknown') END,
+         jsonb_build_object(
+           'from', jsonb_build_object('crypt', prev.crypt, 'crypt_bits', prev.crypt_bits,
+                                      'mfp', mfp_state(prev.mfp_sup, prev.mfp_req),
+                                      'level', prev.level, 'label', prev.label),
+           'to', jsonb_build_object('crypt', cur.crypt, 'crypt_bits', cur.crypt_bits,
+                                    'mfp', mfp_state(cur.mfp_sup, cur.mfp_req),
+                                    'level', cur.level, 'label', cur.label))
+  FROM ap_security_periods cur
+  JOIN ap_security_periods prev
+    ON prev.sensor_id = cur.sensor_id AND prev.device_key = cur.device_key AND prev.valid_to = cur.valid_from
+  JOIN devices d ON d.sensor_id = cur.sensor_id AND d.device_key = cur.device_key
+  WHERE cur.sensor_id = p_sensor_id AND cur.valid_from > '-infinity'
+  ON CONFLICT (sensor_id, type, (coalesce(device_key, upper(mac::text))), ts) DO UPDATE SET
+      severity = EXCLUDED.severity, ssid = EXCLUDED.ssid, summary = EXCLUDED.summary,
+      evidence = EXCLUDED.evidence, updated_at = now()
+    WHERE (x.severity, x.ssid, x.summary, x.evidence)
+          IS DISTINCT FROM (EXCLUDED.severity, EXCLUDED.ssid, EXCLUDED.summary, EXCLUDED.evidence);
+  GET DIAGNOSTICS v_config = ROW_COUNT;
+
+  -- 3. sensor outages and limited capture
+  INSERT INTO detections AS x (sensor_id, kind, ts, ts_end, type, severity, summary, evidence)
+  SELECT p_sensor_id, 'sensor', sp.starts_at, sp.ends_at,
+         CASE sp.kind WHEN 'outage' THEN 'sensor_outage' ELSE 'sensor_limited' END,
+         CASE sp.kind WHEN 'outage' THEN 'medium' ELSE 'low' END,
+         CASE sp.kind WHEN 'outage' THEN 'Sensor not collecting' ELSE 'Capture limited (hop list degraded)' END,
+         jsonb_build_object(
+           'kind', sp.kind, 'polls', sp.polls, 'ongoing', sp.ends_at IS NULL,
+           'duration_s', extract(epoch FROM coalesce(sp.ends_at, v_last_poll) - sp.starts_at)::integer,
+           'cause', (SELECT string_agg(an.label, '; ' ORDER BY an.starts_at)
+                     FROM sensor_annotations an
+                     WHERE an.sensor_id = sp.sensor_id AND an.kind IN ('gap', 'no_frames', 'coverage')
+                       AND an.starts_at < coalesce(sp.ends_at, 'infinity')
+                       AND coalesce(an.ends_at, an.starts_at) > sp.starts_at))
+  FROM sensor_periods sp
+  WHERE sp.sensor_id = p_sensor_id
+    AND coalesce(sp.ends_at, v_last_poll) - sp.starts_at
+        >= CASE sp.kind WHEN 'outage' THEN make_interval(secs => v_offline_s) ELSE interval '10 minutes' END
+  ON CONFLICT (sensor_id, type, (coalesce(device_key, upper(mac::text))), ts) DO UPDATE SET
+      ts_end = EXCLUDED.ts_end, summary = EXCLUDED.summary, evidence = EXCLUDED.evidence, updated_at = now()
+    WHERE (x.ts_end, x.summary, x.evidence) IS DISTINCT FROM (EXCLUDED.ts_end, EXCLUDED.summary, EXCLUDED.evidence);
+  GET DIAGNOSTICS v_sensor = ROW_COUNT;
+
+  -- 4. the classification rule: an unknown BSSID broadcasting a managed SSID
+  INSERT INTO detections AS x (sensor_id, kind, ts, type, severity, device_key, mac, ssid, summary, evidence)
+  SELECT p_sensor_id, 'detection', coalesce(s.first_obs, s.first_seen), 'unknown_bssid_managed_ssid', 'high',
+         s.device_key, s.bssid, n.ssid,
+         'Unknown BSSID broadcasting managed SSID "' || n.ssid || '"',
+         jsonb_build_object(
+           'network', n.ssid, 'random_bssid', s.random_bssid, 'security', s.security,
+           'security_label', s.security_label, 'channel', s.adv_channel,
+           'allowed_bssids', cardinality(n.allowed_bssids),
+           'allowed_ouis', to_jsonb(ARRAY(SELECT upper(left(trunc(o)::text, 8)) FROM unnest(n.allowed_ouis) AS o)))
+  FROM ap_summary s
+  JOIN aps a ON a.account_id = v_account AND a.bssid = s.bssid
+  JOIN networks n ON n.account_id = v_account AND n.kind = 'managed'
+                 AND n.ssid = coalesce(nullif(s.ssid, ''), s.name_seen)
+  WHERE s.sensor_id = p_sensor_id AND a.classification IS NULL
+    AND ap_classification(v_account, NULL, n.ssid, s.bssid, s.random_bssid, s.rssi_typical) = 'suspicious'
+  ON CONFLICT (sensor_id, type, (coalesce(device_key, upper(mac::text))), ts) DO UPDATE SET
+      ssid = EXCLUDED.ssid, summary = EXCLUDED.summary, evidence = EXCLUDED.evidence, updated_at = now()
+    WHERE (x.ssid, x.summary, x.evidence) IS DISTINCT FROM (EXCLUDED.ssid, EXCLUDED.summary, EXCLUDED.evidence);
+  GET DIAGNOSTICS v_rule = ROW_COUNT;
+
+  RETURN QUERY SELECT v_kismet, v_config, v_sensor, v_rule;
+END
+$$;
 
 -- Recompute the read tables of one sensor from the hour of p_from onward
 -- (p_from NULL, or the sensor never refreshed: the whole history). Idempotent;
@@ -862,6 +1629,10 @@ COMMENT ON TABLE sensor_summary IS
 -- tests/sql/refresh_rollups_test.sql). Then ap_config_changes is refreshed
 -- (all sensors) and ap_summary / sensor_summary are rebuilt. Measured on the 12-day seed (2026-09-29, read-only): the
 -- full-history AP hour aggregate took 16 s cold, the config view 4.7 s.
+-- Schema 9 adds, all whole-sensor rebuilds or idempotent upserts (so the
+-- invariant holds): ap_summary security columns, ap_security_periods, the
+-- account-level aps (first/last seen only) and ap_sensors, sensor_periods,
+-- and finally refresh_events() (derived event rows; never their status).
 CREATE OR REPLACE FUNCTION refresh_rollups(p_sensor_id integer, p_from timestamptz DEFAULT NULL)
 RETURNS TABLE (from_hour timestamptz, ap_hours integer, sensor_hours integer, aps integer,
                refreshed_at timestamptz)
@@ -879,8 +1650,10 @@ DECLARE
   v_ap_hours integer;
   v_sensor_hours integer;
   v_aps integer;
+  v_account integer;
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM sensors WHERE id = p_sensor_id) THEN
+  SELECT account_id INTO v_account FROM sensors WHERE id = p_sensor_id;
+  IF v_account IS NULL THEN
     RAISE EXCEPTION 'refresh_rollups: unknown sensor_id %', p_sensor_id;
   END IF;
   -- one refresh per sensor at a time: two would delete and insert the same rows
@@ -940,11 +1713,13 @@ BEGIN
   --    the AP counts of its hours before v_from too)
   DELETE FROM sensor_hourly WHERE sensor_id = p_sensor_id AND hour >= v_sfrom;
   INSERT INTO sensor_hourly (sensor_id, hour, polls, polls_ok, hop_ok_polls, hop_known_polls,
-                             gap_s, active_aps, new_aps, alerts, ap_obs)
+                             gap_s, active_aps, new_aps, alerts, ap_obs, capture_polls, limited_polls)
   WITH p AS (
     SELECT date_trunc('hour', ts, 'UTC') AS hour, count(*) AS polls,
            count(*) FILTER (WHERE ok) AS polls_ok,
-           count(*) FILTER (WHERE ds_hop_ok) AS hop_ok, count(ds_hop_ok) AS hop_known
+           count(*) FILTER (WHERE ds_hop_ok) AS hop_ok, count(ds_hop_ok) AS hop_known,
+           count(*) FILTER (WHERE ok AND ds_running AND devices_active > 0) AS capture,
+           count(*) FILTER (WHERE ok AND ds_running AND devices_active > 0 AND ds_hop_ok = false) AS limited
     FROM polls WHERE sensor_id = p_sensor_id AND ts >= v_sfrom
     GROUP BY 1
   ), g AS (    -- poll gaps > 90 s as on the overview, incl. one ending at the first poll >= v_sfrom
@@ -983,7 +1758,7 @@ BEGIN
   SELECT p_sensor_id, hrs.hour, coalesce(p.polls, 0), coalesce(p.polls_ok, 0),
          coalesce(p.hop_ok, 0), coalesce(p.hop_known, 0), coalesce(gh.gap_s, 0),
          coalesce(a.active_aps, 0), coalesce(f.new_aps, 0), coalesce(al.alerts, 0),
-         coalesce(a.ap_obs, 0)
+         coalesce(a.ap_obs, 0), coalesce(p.capture, 0), coalesce(p.limited, 0)
   FROM hrs
   LEFT JOIN p  ON p.hour  = hrs.hour
   LEFT JOIN gh ON gh.hour = hrs.hour
@@ -1011,7 +1786,8 @@ BEGIN
       baseline_window_start, baseline_window_end, baseline_at,
       n_obs, n_valid, n_floor, first_obs, last_obs,
       cur_n_clients, cur_qbss_stations, cur_util_pct, cur_at,
-      history_rows, n_changes, last_change_at, last_change)
+      history_rows, n_changes, last_change_at, last_change,
+      security, security_label, crypt_bits_known, rssi_typical)
   SELECT d.sensor_id, d.device_key, d.mac,
          (d.mac & macaddr '02:00:00:00:00:00') <> macaddr '00:00:00:00:00:00',
          d.manuf, d.ssid, (d.ssid IS NULL OR d.ssid = ''), d.cloaked, d.crypt, d.crypt_bits,
@@ -1028,7 +1804,9 @@ BEGIN
          (SELECT max(o.ts) FROM observations o
           WHERE o.sensor_id = d.sensor_id AND o.device_key = d.device_key),
          d.cur_n_clients, d.cur_qbss_stations, d.cur_util_pct, d.cur_at,
-         coalesce(hi.n_rows, 0), coalesce(c.n_changes, 0), c.last_change_at, c.last_change
+         coalesce(hi.n_rows, 0), coalesce(c.n_changes, 0), c.last_change_at, c.last_change,
+         security_level(d.crypt, kb.bits, d.mfp_sup, d.mfp_req), security_label(d.crypt, kb.bits),
+         kb.bits, rt.rssi_typical
   FROM devices d
   LEFT JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.device_key
   LEFT JOIN (SELECT device_key, sum(n_obs) AS n_obs, sum(n_valid) AS n_valid, sum(n_floor) AS n_floor
@@ -1047,8 +1825,42 @@ BEGIN
                    FROM ap_config_changes WHERE sensor_id = p_sensor_id
                    GROUP BY device_key, ts) e
              GROUP BY device_key) c ON c.device_key = d.device_key
+  -- the bitfield, or the last known one of the same crypt string when
+  -- Kismet's missing-field 0 replaced it (ap_config_changes rule 3)
+  LEFT JOIN LATERAL (
+    SELECT CASE WHEN d.crypt_bits <> 0 OR d.crypt = 'Open' THEN d.crypt_bits
+                ELSE (SELECT h.crypt_bits FROM device_config_history h
+                      WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key
+                        AND h.crypt IS NOT DISTINCT FROM d.crypt AND h.crypt_bits <> 0
+                      ORDER BY h.ts DESC LIMIT 1) END AS bits) kb ON true
+  LEFT JOIN (SELECT device_key, percentile_cont(0.5) WITHIN GROUP (ORDER BY median) AS rssi_typical
+             FROM ap_rssi_hourly WHERE sensor_id = p_sensor_id AND median IS NOT NULL
+             GROUP BY device_key) rt ON rt.device_key = d.device_key
   WHERE d.sensor_id = p_sensor_id AND d.type = 'ap';
   GET DIAGNOSTICS v_aps = ROW_COUNT;
+
+  -- 5b. security periods (refresh_security_periods())
+  PERFORM refresh_security_periods(p_sensor_id);
+
+  -- 5c. account-level APs (one per BSSID of the account; first/last seen over
+  --     all its sensors - never the manual classification or the note) and the
+  --     sensor's mapping to them
+  -- (alias t: the function's OUT parameter is also called aps)
+  INSERT INTO aps AS t (account_id, bssid, first_seen, last_seen)
+  SELECT v_account, s.bssid, min(coalesce(s.first_obs, s.first_seen)), max(coalesce(s.last_obs, s.last_seen))
+  FROM ap_summary s
+  JOIN sensors se ON se.id = s.sensor_id AND se.account_id = v_account
+  WHERE s.bssid IN (SELECT x.bssid FROM ap_summary x WHERE x.sensor_id = p_sensor_id)
+  GROUP BY s.bssid
+  ON CONFLICT (account_id, bssid) DO UPDATE SET
+      first_seen = EXCLUDED.first_seen, last_seen = EXCLUDED.last_seen
+    WHERE (t.first_seen, t.last_seen) IS DISTINCT FROM (EXCLUDED.first_seen, EXCLUDED.last_seen);
+  DELETE FROM ap_sensors WHERE sensor_id = p_sensor_id;
+  INSERT INTO ap_sensors (ap_id, sensor_id, device_key)
+  SELECT a.id, s.sensor_id, s.device_key
+  FROM ap_summary s
+  JOIN aps a ON a.account_id = v_account AND a.bssid = s.bssid
+  WHERE s.sensor_id = p_sensor_id;
 
   -- 6. one row per sensor
   WITH gap AS (
@@ -1060,7 +1872,8 @@ BEGIN
   INSERT INTO sensor_summary (sensor_id, first_poll, last_poll, polls, polls_ok,
                               gap_count, gap_total_s, gap_max_s, gaps, devices_by_type,
                               obs_total, obs_ap, country_expected, alerts, alerts_last_ts,
-                              baselines, refreshed_at)
+                              baselines, refreshed_at, last_capture_at, last_hop_n, last_hop_visited,
+                              last_hop_ok)
   SELECT p_sensor_id, pl.first_poll, pl.last_poll, pl.polls, pl.polls_ok,
          (SELECT count(*) FROM gap),
          (SELECT coalesce(extract(epoch FROM sum(len)), 0) FROM gap),
@@ -1079,10 +1892,15 @@ BEGIN
          (SELECT count(*) FROM alerts WHERE sensor_id = p_sensor_id),
          (SELECT max(ts) FROM alerts WHERE sensor_id = p_sensor_id),
          (SELECT count(*) FROM ap_baselines WHERE sensor_id = p_sensor_id AND rssi_median IS NOT NULL),
-         v_now
+         v_now,
+         (SELECT max(ts) FROM polls
+          WHERE sensor_id = p_sensor_id AND ok AND ds_running AND devices_active > 0),
+         lp.ds_hop_n, lp.ds_hop_visited, lp.ds_hop_ok
   FROM (SELECT min(ts) AS first_poll, max(ts) AS last_poll, count(*) AS polls,
                count(*) FILTER (WHERE ok) AS polls_ok, coalesce(sum(new_obs), 0) AS obs_total
         FROM polls WHERE sensor_id = p_sensor_id) pl
+  LEFT JOIN LATERAL (SELECT ds_hop_n, ds_hop_visited, ds_hop_ok FROM polls
+                     WHERE sensor_id = p_sensor_id ORDER BY ts DESC LIMIT 1) lp ON true
   ON CONFLICT (sensor_id) DO UPDATE SET
       first_poll = EXCLUDED.first_poll, last_poll = EXCLUDED.last_poll,
       polls = EXCLUDED.polls, polls_ok = EXCLUDED.polls_ok,
@@ -1091,11 +1909,59 @@ BEGIN
       devices_by_type = EXCLUDED.devices_by_type, obs_total = EXCLUDED.obs_total,
       obs_ap = EXCLUDED.obs_ap, country_expected = EXCLUDED.country_expected,
       alerts = EXCLUDED.alerts, alerts_last_ts = EXCLUDED.alerts_last_ts,
-      baselines = EXCLUDED.baselines, refreshed_at = EXCLUDED.refreshed_at;
+      baselines = EXCLUDED.baselines, refreshed_at = EXCLUDED.refreshed_at,
+      last_capture_at = EXCLUDED.last_capture_at, last_hop_n = EXCLUDED.last_hop_n,
+      last_hop_visited = EXCLUDED.last_hop_visited, last_hop_ok = EXCLUDED.last_hop_ok;
+
+  -- 7. outages and limited capture (refresh_sensor_periods())
+  PERFORM refresh_sensor_periods(p_sensor_id);
+
+  -- 8. the derived events (Kismet episodes, security changes, sensor outages,
+  --    the classification rule); never their status
+  PERFORM refresh_events(p_sensor_id);
 
   RETURN QUERY SELECT v_sfrom, v_ap_hours, v_sensor_hours, v_aps, v_now;
 END
 $$;
+
+-- --- the dashboard's account-level AP (schema 9) -----------------------------------------
+--
+-- One row per account AP with its current attributes: the identity and
+-- configuration of its newest sensor row, the network it belongs to (SSID, or
+-- the name seen for a hidden AP; a hidden AP without one is its own network),
+-- mobile flag, effective classification and its source. Computed per request
+-- (~850 APs); the api pages and filters on it.
+CREATE OR REPLACE VIEW account_aps AS
+SELECT a.id AS ap_id, a.account_id, a.bssid, trunc(a.bssid) AS oui, a.first_seen, a.last_seen,
+       a.classification AS manual_classification, a.classified_at, a.note, a.note_at,
+       c.sensor_id, c.device_key, c.ssid, c.hidden, c.name_seen,
+       coalesce(nullif(c.ssid, ''), c.name_seen) AS network_name,
+       coalesce(nullif(c.ssid, ''), c.name_seen, 'hidden:' || upper(a.bssid::text)) AS network_key,
+       c.manuf, c.random_bssid, c.adv_channel, band_of_channel(c.adv_channel) AS band, c.ht_mode, c.country,
+       c.crypt, c.crypt_bits_known, c.mfp_sup, c.mfp_req, c.security, c.security_label,
+       c.cur_n_clients, c.cur_qbss_stations, c.cur_util_pct, c.cur_at,
+       n.id AS network_id, n.kind AS network_kind,
+       sen.sensor_ids, sen.rssi_typical,
+       ap_is_mobile(a.account_id, c.random_bssid, c.manuf, a.first_seen, a.last_seen, lat.latest) AS mobile,
+       ap_classification(a.account_id, a.classification, coalesce(nullif(c.ssid, ''), c.name_seen),
+                         a.bssid, c.random_bssid, sen.rssi_typical) AS classification,
+       CASE WHEN a.classification IS NOT NULL THEN 'manual' ELSE 'rule' END AS classified_by
+FROM aps a
+JOIN LATERAL (SELECT s.* FROM ap_sensors x
+              JOIN ap_summary s ON s.sensor_id = x.sensor_id AND s.device_key = x.device_key
+              WHERE x.ap_id = a.id
+              ORDER BY s.last_seen DESC, s.sensor_id LIMIT 1) c ON true
+JOIN LATERAL (SELECT array_agg(x.sensor_id ORDER BY x.sensor_id) AS sensor_ids,
+                     max(s.rssi_typical) AS rssi_typical
+              FROM ap_sensors x
+              JOIN ap_summary s ON s.sensor_id = x.sensor_id AND s.device_key = x.device_key
+              WHERE x.ap_id = a.id) sen ON true
+LEFT JOIN networks n ON n.account_id = a.account_id AND n.ssid = coalesce(nullif(c.ssid, ''), c.name_seen)
+LEFT JOIN LATERAL (SELECT max(ss.last_capture_at) AS latest
+                   FROM sensor_summary ss JOIN sensors se ON se.id = ss.sensor_id
+                   WHERE se.account_id = a.account_id) lat ON true;
+COMMENT ON VIEW account_aps IS
+  'One row per account AP (schema 9): current identity/configuration from its newest sensor row, network, security, mobile flag, effective classification (manual, else the rules of account_settings).';
 
 COMMIT;
 

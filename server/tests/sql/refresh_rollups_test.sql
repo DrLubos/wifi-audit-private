@@ -24,6 +24,12 @@
 --      a new AP, a client re-classified as an AP, an AP re-classified as
 --      bridged - leaves exactly the rows of a full refresh;
 --   3. a second full refresh changes nothing (idempotent).
+-- Schema 9 adds: the collecting / limited polls per hour, the security
+-- columns of ap_summary, ap_security_periods, the account-level aps and
+-- ap_sensors (an AP re-classified away keeps its aps row, loses its mapping),
+-- sensor_periods, and the derived events of refresh_events() - each checked
+-- after the full and the incremental run, and incremental = full for all of
+-- them. (tests/sql/events_test.sql covers the event rules in detail.)
 
 \set ON_ERROR_STOP on
 BEGIN;
@@ -37,26 +43,38 @@ BEGIN
   PERFORM set_config('search_path', 'refresh_rollups_test, public', true);
   FOREACH t IN ARRAY ARRAY['sensors', 'polls', 'devices', 'device_config_history', 'observations',
                            'alerts', 'ap_baselines', 'ap_rssi_hourly', 'sensor_hourly',
-                           'ap_summary', 'sensor_summary'] LOOP
+                           'ap_summary', 'sensor_summary',
+                           -- schema 9
+                           'accounts', 'account_settings', 'networks', 'aps', 'ap_sensors',
+                           'ap_security_periods', 'sensor_periods', 'sensor_annotations',
+                           'kismet_alert_rules', 'detections'] LOOP
     EXECUTE format('CREATE TABLE %I (LIKE public.%I INCLUDING ALL)', t, t);
   END LOOP;
+  -- the copies keep the real tables' sequence defaults: give the two tables
+  -- the refresh inserts into without an id their own sequences
+  CREATE SEQUENCE refresh_rollups_test.aps_id;
+  ALTER TABLE aps ALTER COLUMN id SET DEFAULT nextval('refresh_rollups_test.aps_id');
+  CREATE SEQUENCE refresh_rollups_test.detections_id;
+  ALTER TABLE detections ALTER COLUMN id SET DEFAULT nextval('refresh_rollups_test.detections_id');
   EXECUTE 'CREATE MATERIALIZED VIEW ap_config_changes AS ' || cfg || ' WITH NO DATA';
   CREATE UNIQUE INDEX ON ap_config_changes (sensor_id, device_key, ts, field);
 END $$;
 
 -- --- fixtures: 2026-09-20, UTC -------------------------------------------------------
+INSERT INTO accounts (id, name) VALUES (1, 'test');
+INSERT INTO account_settings (account_id) VALUES (1);
 INSERT INTO sensors (id, name, tz) VALUES (1, 'test', 'UTC');
 
 -- polls: 10:00-10:59:30 every 30 s (10:05 failed; ds_hop_ok NULL before 10:30,
 -- true 10:30-10:44:30, false after), a gap to 12:20, then 12:20-12:29:30
-INSERT INTO polls (sensor_id, ts, new_obs, ok, ds_hop_ok)
+INSERT INTO polls (sensor_id, ts, new_obs, ok, ds_hop_ok, ds_running, devices_active)
 SELECT 1, t, 1, t <> timestamptz '2026-09-20 10:05:00+00',
        CASE WHEN t < timestamptz '2026-09-20 10:30:00+00' THEN NULL
-            WHEN t < timestamptz '2026-09-20 10:45:00+00' THEN true ELSE false END
+            WHEN t < timestamptz '2026-09-20 10:45:00+00' THEN true ELSE false END, true, 3
 FROM generate_series(timestamptz '2026-09-20 10:00:00+00', timestamptz '2026-09-20 10:59:30+00',
                      interval '30 seconds') t
 UNION ALL
-SELECT 1, t, 1, true, true
+SELECT 1, t, 1, true, true, true, 3
 FROM generate_series(timestamptz '2026-09-20 12:20:00+00', timestamptz '2026-09-20 12:29:30+00',
                      interval '30 seconds') t;
 
@@ -64,11 +82,11 @@ INSERT INTO devices (sensor_id, device_key, mac, type, first_seen, last_seen, ss
                      crypt, crypt_bits, mfp_sup, mfp_req, adv_channel, ht_mode, beacon_rate, country)
 VALUES
   (1, 'A1', 'A8:00:00:00:00:01', 'ap', '2026-09-20 10:00+00', '2026-09-20 12:21+00', 'Net', false,
-   'WPA2', 1, false, false, '6', 'HT20', 100, 'SK'),
+   'WPA2', 274945016842, false, false, '6', 'HT20', 100, 'SK'),
   (1, 'A2', 'A8:00:00:00:00:02', 'ap', '2026-09-20 12:00+00', '2026-09-20 12:22+00', '', true,
-   'WPA2', 1, false, false, '1', 'HT20', 100, 'SK'),
+   'WPA2', 274945016842, false, false, '1', 'HT20', 100, 'SK'),
   (1, 'A3', '02:00:00:00:00:03', 'ap', '2026-09-20 10:10+00', '2026-09-20 10:10+00', 'Phone', false,
-   'WPA2', 1, false, false, '11', 'HT20', 100, 'US'),
+   'WPA2', 274945016842, false, false, '11', 'HT20', 100, 'US'),
   (1, 'C1', '11:00:00:00:00:01', 'client', '2026-09-20 10:00+00', '2026-09-20 10:00+00',
    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
   (1, 'B1', '11:00:00:00:00:02', 'bridged', '2026-09-20 12:25+00', '2026-09-20 12:25+00',
@@ -104,8 +122,8 @@ FROM (VALUES
 INSERT INTO device_config_history (sensor_id, device_key, ts, ssid, cloaked, crypt, crypt_bits,
                                    mfp_sup, mfp_req, adv_channel, ht_mode, beacon_rate, country)
 VALUES
-  (1, 'A1', '2026-09-20 10:30+00', 'Net', false, 'WPA2', 1, false, false, '1', 'HT20', 100, 'SK'),
-  (1, 'A2', '2026-09-20 10:40+00', 'HiddenName', false, 'WPA2', 1, false, false, '1', 'HT20', 100, 'SK');
+  (1, 'A1', '2026-09-20 10:30+00', 'Net', false, 'WPA2', 274945016842, false, false, '1', 'HT20', 100, 'SK'),
+  (1, 'A2', '2026-09-20 10:40+00', 'HiddenName', false, 'WPA2', 274945016842, false, false, '1', 'HT20', 100, 'SK');
 
 INSERT INTO alerts (id, sensor_id, hash, ts, header, raw) VALUES
   (1, 1, 'h1', '2026-09-20 10:15+00', 'DEAUTHFLOOD', '{}'),
@@ -151,6 +169,25 @@ CREATE VIEW pg_temp.got_sensor_summary AS
   SELECT first_poll, last_poll, polls, polls_ok, gap_count, gap_total_s, gap_max_s, gaps,
          devices_by_type, obs_total, obs_ap, country_expected, alerts, alerts_last_ts, baselines
   FROM sensor_summary;
+-- schema 9
+CREATE VIEW pg_temp.got_capture AS
+  SELECT extract(hour FROM hour AT TIME ZONE 'UTC')::int AS h, capture_polls, limited_polls FROM sensor_hourly;
+CREATE VIEW pg_temp.got_security AS
+  SELECT device_key, security, security_label, round(rssi_typical::numeric, 1) AS rssi_typical FROM ap_summary;
+CREATE VIEW pg_temp.got_periods AS
+  SELECT device_key, valid_from, valid_to, level, label FROM ap_security_periods;
+CREATE VIEW pg_temp.got_aps AS
+  SELECT bssid::text AS bssid, first_seen, last_seen FROM aps;
+CREATE VIEW pg_temp.got_ap_sensors AS
+  SELECT x.device_key, a.bssid::text AS bssid FROM ap_sensors x JOIN aps a ON a.id = x.ap_id;
+CREATE VIEW pg_temp.got_sensor_periods AS
+  SELECT kind, to_char(starts_at AT TIME ZONE 'UTC', 'HH24:MI:SS') AS t0,
+         to_char(ends_at AT TIME ZONE 'UTC', 'HH24:MI:SS') AS t1, polls
+  FROM sensor_periods;
+CREATE VIEW pg_temp.got_events AS
+  SELECT kind, type, device_key, to_char(ts AT TIME ZONE 'UTC', 'HH24:MI:SS') AS t0,
+         to_char(ts_end AT TIME ZONE 'UTC', 'HH24:MI:SS') AS t1, severity, summary
+  FROM detections;
 
 -- --- 1. full refresh -----------------------------------------------------------------
 DO $$
@@ -194,15 +231,40 @@ SELECT pg_temp.check_rows('sensor_summary, full', 'SELECT * FROM pg_temp.got_sen
           '{"ap": 3, "client": 1, "bridged": 1}'::jsonb, 140::bigint, 12::bigint, 'SK', 2,
           timestamptz '2026-09-20 12:25+00', 1) $$);
 
+-- schema 9 after the full run
+SELECT pg_temp.check_rows('capture, full', 'SELECT * FROM pg_temp.got_capture', $$
+  VALUES (10, 119, 30), (11, 0, 0), (12, 20, 0) $$);
+SELECT pg_temp.check_rows('security, full', 'SELECT * FROM pg_temp.got_security', $$
+  VALUES ('A1', 'psk_no_mfp', 'WPA2-PSK', -57.5), ('A2', 'psk_no_mfp', 'WPA2-PSK', -70.0),
+         ('A3', 'psk_no_mfp', 'WPA2-PSK', -80.0) $$);
+SELECT pg_temp.check_rows('security periods, full', 'SELECT * FROM pg_temp.got_periods', $$
+  VALUES ('A1', timestamptz '-infinity', timestamptz 'infinity', 'psk_no_mfp', 'WPA2-PSK'),
+         ('A2', '-infinity', 'infinity', 'psk_no_mfp', 'WPA2-PSK'),
+         ('A3', '-infinity', 'infinity', 'psk_no_mfp', 'WPA2-PSK') $$);
+SELECT pg_temp.check_rows('aps, full', 'SELECT * FROM pg_temp.got_aps', $$
+  VALUES ('a8:00:00:00:00:01', timestamptz '2026-09-20 10:00+00', timestamptz '2026-09-20 12:21+00'),
+         ('a8:00:00:00:00:02', '2026-09-20 12:22+00', '2026-09-20 12:22+00'),
+         ('02:00:00:00:00:03', '2026-09-20 10:10+00', '2026-09-20 10:10+00') $$);
+SELECT pg_temp.check_rows('ap_sensors, full', 'SELECT * FROM pg_temp.got_ap_sensors', $$
+  VALUES ('A1', 'a8:00:00:00:00:01'), ('A2', 'a8:00:00:00:00:02'), ('A3', '02:00:00:00:00:03') $$);
+-- hop list degraded 10:45 - 10:59:30 (29 polls), then the gap to 12:20
+SELECT pg_temp.check_rows('sensor periods, full', 'SELECT * FROM pg_temp.got_sensor_periods', $$
+  VALUES ('limited', '10:45:00', '10:59:30', 29), ('outage', '10:59:30', '12:20:00', 0) $$);
+SELECT pg_temp.check_rows('events, full', 'SELECT * FROM pg_temp.got_events', $$
+  VALUES ('kismet', 'DEAUTHFLOOD', NULL, '10:15:00', '10:15:00', 'info', 'DEAUTHFLOOD'),
+         ('kismet', 'BCASTDISCON', NULL, '12:25:00', '12:25:00', 'info', 'BCASTDISCON'),
+         ('sensor', 'sensor_limited', NULL, '10:45:00', '10:59:30', 'low', 'Capture limited (hop list degraded)'),
+         ('sensor', 'sensor_outage', NULL, '10:59:30', '12:20:00', 'medium', 'Sensor not collecting') $$);
+
 -- --- 2. a later import, then an incremental refresh ---------------------------------------
-INSERT INTO polls (sensor_id, ts, new_obs, ok, ds_hop_ok)
-SELECT 1, t, 1, true, true
+INSERT INTO polls (sensor_id, ts, new_obs, ok, ds_hop_ok, ds_running, devices_active)
+SELECT 1, t, 1, true, true, true, 3
 FROM generate_series(timestamptz '2026-09-20 13:00:00+00', timestamptz '2026-09-20 13:04:30+00',
                      interval '30 seconds') t;
 INSERT INTO devices (sensor_id, device_key, mac, type, first_seen, last_seen, ssid, cloaked, crypt,
                      crypt_bits, mfp_sup, mfp_req, adv_channel, country)
 VALUES (1, 'A4', 'A8:00:00:00:00:04', 'ap', '2026-09-20 13:02+00', '2026-09-20 13:02+00', 'New',
-        false, 'WPA2', 1, false, false, '36', 'SK');
+        false, 'WPA2', 274945016842, false, false, '36', 'SK');
 UPDATE devices SET type = 'ap' WHERE device_key = 'C1';        -- re-classified, history from 10:00
 UPDATE devices SET type = 'bridged' WHERE device_key = 'A3';   -- no longer an AP
 INSERT INTO observations (sensor_id, ts, device_key, rssi) VALUES
@@ -237,23 +299,59 @@ SELECT pg_temp.check_rows('sensor_hourly, incremental', 'SELECT * FROM pg_temp.g
          (12, 20, 20, 20, 20, 3030, 2, 1, 1, 3),
          (13, 10, 10, 10, 10, 0, 2, 1, 1, 2) $$);
 
+-- schema 9 after the incremental run: A3 (now bridged) keeps its aps row but
+-- loses its mapping; C1 (now an AP) and A4 are new account APs
+SELECT pg_temp.check_rows('capture, incremental', 'SELECT * FROM pg_temp.got_capture', $$
+  VALUES (10, 119, 30), (11, 0, 0), (12, 20, 0), (13, 10, 0) $$);
+SELECT pg_temp.check_rows('security, incremental', 'SELECT * FROM pg_temp.got_security', $$
+  VALUES ('A1', 'psk_no_mfp', 'WPA2-PSK', -61.0), ('A2', 'psk_no_mfp', 'WPA2-PSK', -70.0),
+         ('A4', 'psk_no_mfp', 'WPA2-PSK', -75.0), ('C1', 'unknown', 'Unknown', -40.0) $$);
+SELECT pg_temp.check_rows('aps, incremental', 'SELECT * FROM pg_temp.got_aps', $$
+  VALUES ('a8:00:00:00:00:01', timestamptz '2026-09-20 10:00+00', timestamptz '2026-09-20 13:00+00'),
+         ('a8:00:00:00:00:02', '2026-09-20 12:22+00', '2026-09-20 12:22+00'),
+         ('02:00:00:00:00:03', '2026-09-20 10:10+00', '2026-09-20 10:10+00'),
+         ('a8:00:00:00:00:04', '2026-09-20 13:02+00', '2026-09-20 13:02+00'),
+         ('11:00:00:00:00:01', '2026-09-20 10:00+00', '2026-09-20 10:00+00') $$);
+SELECT pg_temp.check_rows('ap_sensors, incremental', 'SELECT * FROM pg_temp.got_ap_sensors', $$
+  VALUES ('A1', 'a8:00:00:00:00:01'), ('A2', 'a8:00:00:00:00:02'), ('A4', 'a8:00:00:00:00:04'),
+         ('C1', '11:00:00:00:00:01') $$);
+SELECT pg_temp.check_rows('sensor periods, incremental', 'SELECT * FROM pg_temp.got_sensor_periods', $$
+  VALUES ('limited', '10:45:00', '10:59:30', 29), ('outage', '10:59:30', '12:20:00', 0),
+         ('outage', '12:29:30', '13:00:00', 0) $$);
+SELECT pg_temp.check_rows('events, incremental', 'SELECT * FROM pg_temp.got_events', $$
+  VALUES ('kismet', 'DEAUTHFLOOD', NULL, '10:15:00', '10:15:00', 'info', 'DEAUTHFLOOD'),
+         ('kismet', 'BCASTDISCON', NULL, '12:25:00', '12:25:00', 'info', 'BCASTDISCON'),
+         ('kismet', 'DEAUTHFLOOD', NULL, '13:03:00', '13:03:00', 'info', 'DEAUTHFLOOD'),
+         ('sensor', 'sensor_limited', NULL, '10:45:00', '10:59:30', 'low', 'Capture limited (hop list degraded)'),
+         ('sensor', 'sensor_outage', NULL, '10:59:30', '12:20:00', 'medium', 'Sensor not collecting'),
+         ('sensor', 'sensor_outage', NULL, '12:29:30', '13:00:00', 'medium', 'Sensor not collecting') $$);
+
 CREATE TEMP TABLE inc_ap_hourly AS SELECT * FROM pg_temp.got_ap_hourly;
 CREATE TEMP TABLE inc_sensor_hourly AS SELECT * FROM pg_temp.got_sensor_hourly;
 CREATE TEMP TABLE inc_ap_summary AS SELECT * FROM pg_temp.got_ap_summary;
 CREATE TEMP TABLE inc_sensor_summary AS SELECT * FROM pg_temp.got_sensor_summary;
+CREATE TEMP TABLE inc_capture AS SELECT * FROM pg_temp.got_capture;
+CREATE TEMP TABLE inc_security AS SELECT * FROM pg_temp.got_security;
+CREATE TEMP TABLE inc_periods AS SELECT * FROM pg_temp.got_periods;
+CREATE TEMP TABLE inc_aps AS SELECT * FROM pg_temp.got_aps;
+CREATE TEMP TABLE inc_ap_sensors AS SELECT * FROM pg_temp.got_ap_sensors;
+CREATE TEMP TABLE inc_sensor_periods AS SELECT * FROM pg_temp.got_sensor_periods;
+CREATE TEMP TABLE inc_events AS SELECT * FROM pg_temp.got_events;
 
 -- --- 2b/3. the same after a full refresh, twice -------------------------------------------
 SELECT count(*) FROM refresh_rollups(1, NULL);
 SELECT pg_temp.check_rows('incremental = full: ' || t, format('SELECT * FROM pg_temp.got_%s', t),
                           format('SELECT * FROM inc_%s', t))
-FROM unnest(ARRAY['ap_hourly', 'sensor_hourly', 'ap_summary', 'sensor_summary']) t;
+FROM unnest(ARRAY['ap_hourly', 'sensor_hourly', 'ap_summary', 'sensor_summary', 'capture', 'security',
+                  'periods', 'aps', 'ap_sensors', 'sensor_periods', 'events']) t;
 SELECT count(*) FROM refresh_rollups(1, NULL);
 SELECT pg_temp.check_rows('idempotent: ' || t, format('SELECT * FROM pg_temp.got_%s', t),
                           format('SELECT * FROM inc_%s', t))
-FROM unnest(ARRAY['ap_hourly', 'sensor_hourly', 'ap_summary', 'sensor_summary']) t;
+FROM unnest(ARRAY['ap_hourly', 'sensor_hourly', 'ap_summary', 'sensor_summary', 'capture', 'security',
+                  'periods', 'aps', 'ap_sensors', 'sensor_periods', 'events']) t;
 
 DO $$ BEGIN
-  RAISE NOTICE 'refresh_rollups: PASS (full run vs hand-computed rows; incremental run = full run after a new AP, 2 re-classifications and a closed gap; idempotent)';
+  RAISE NOTICE 'refresh_rollups: PASS (full run vs hand-computed rows; incremental run = full run after a new AP, 2 re-classifications and a closed gap; idempotent; schema 9: capture polls, security, periods, aps, sensor periods, events)';
 END $$;
 
 ROLLBACK;
