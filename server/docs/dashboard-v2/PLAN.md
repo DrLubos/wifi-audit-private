@@ -1145,7 +1145,7 @@ b61241d). Decisions taken while building, open to review:
   304 keeps the label of the earlier request until the bucket changes.
 - Extra fields beyond the table: `/aps` `header` and `hidden_hotspots`,
   `/networks` `collecting_hours` and `other_page`, `/sensors` `data_until`,
-  `window_7d`, `crashes_24h.unrecovered_since`, `/spectrum`
+  `window_7d`, `outage_since` (the ongoing outage), `/spectrum`
   `current_channel_aps`, `/events/{id}` `who_saw_it[].clients`.
 
 Deploy (also re-applies `schema.sql` for the hop-values fix 78f64da):

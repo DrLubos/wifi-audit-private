@@ -72,8 +72,8 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
                             dict(r["last_upload"], at=_ts(r["last_upload"]["at"]),
                                  polls_to=_ts(r["last_upload"]["polls_to"]))),
             "coverage_7d": coverage, "window_7d": window,
-            "crashes_24h": {"count": r["crashes"] or 0, "max_recovery_s": r["max_recovery_s"],
-                            "unrecovered_since": iso(r["unrecovered_since"])},
+            "outage_since": iso(r["outage_since"]),
+            "crashes_24h": {"count": r["crashes"] or 0, "max_recovery_s": r["max_recovery_s"]},
             "aps_7d": r["aps_7d"] or 0, "aps_only_here_7d": r["aps_only_here_7d"] or 0,
             "config": _config(r["config"]), "pending": _config(r["pending"]),
         })

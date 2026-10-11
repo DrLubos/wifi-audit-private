@@ -15,11 +15,11 @@ SELECT se.id, se.name, se.location, se.hardware,
                                  'buffer_version', u.buffer_version, 'polls_to', u.polls_to)
         FROM sensor_uploads u WHERE u.sensor_id = se.id ORDER BY u.received_at DESC LIMIT 1) AS last_upload,
        cr.crashes, cr.max_recovery_s,
-       -- a capture that failed and was not re-opened (the 2026-10-06 adapter loss)
-       (SELECT min(e.ts) FROM alerts e
-        WHERE e.sensor_id = se.id AND e.header = 'SOURCEERROR'
-          AND e.ts > coalesce((SELECT max(o.ts) FROM alerts o
-                               WHERE o.sensor_id = se.id AND o.header = 'SOURCEOPEN'), '-infinity')) AS unrecovered_since,
+       -- not collecting since (the ongoing outage, e.g. the 2026-10-06 adapter
+       -- loss); from sensor_periods - the same fact from the alerts walked back
+       -- over 9k SOURCEERROR rows, 2.9 s with a cold cache
+       (SELECT p.starts_at FROM sensor_periods p
+        WHERE p.sensor_id = se.id AND p.kind = 'outage' AND p.ends_at IS NULL) AS outage_since,
        ap7.aps_7d, ap7.aps_only_here_7d,
        (SELECT json_build_object('version', c.version, 'plan', c.channel_plan, 'channels', c.channels,
                                  'n_channels', c.n_channels, 'dwell_s', c.dwell_s, 'poll_s', c.poll_s,
