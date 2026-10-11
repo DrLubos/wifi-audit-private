@@ -303,3 +303,55 @@ credit was spent and they took 12.0 s / 3.5 s warm with the same buffer
 counts, and the 15-min view's HTTP p50 read 242 ms (= 20 ms + one ~220 ms
 throttle slice). `measure.sh` now runs the detector EXPLAINs last; the table
 above is the separate A/B (`~/perf-detectors-ab.txt`).
+
+## 6. Dashboard v2 API (2026-10-11)
+
+`measure.sh MODE=v2` against the deployed api (1809635, before the response
+cache): SQL = planning + execution of a group's statements (EXPLAIN cold
+after db restart + page-cache drop, warm the second run), RANGE=30d:
+
+| statement group (app/v2/sql) | endpoints | SQL cold | SQL warm |
+|---|---|---|---|
+| context (every request) | account, sensor hours | 152 ms | 3 ms |
+| sensors | /sensors, coverage, outages | 389 ms | 35 ms |
+| overview | /overview/status, /overview/period | 1,349 ms | 179 ms |
+| events | /events, /events/{id} | 277 ms | 18 ms |
+| networks | /networks, timeseries, clients heatmap | 2,052 ms | 391 ms |
+| aps | /aps, AP page, rssi, load | 1,182 ms | 197 ms |
+| spectrum | /spectrum, /spectrum/utilization | 1,060 ms | 557 ms |
+| settings | /settings/* | 45 ms | 2 ms |
+
+HTTP warm (api container direct, 20 requests after a minute of idle):
+
+| endpoint (30 d) | p50 | p95 | size |
+|---|---|---|---|
+| /api/v2/sensors | 42 ms | 53 ms | 1.6 kB |
+| /api/v2/overview/status | 36 ms | 41 ms | 3.4 kB |
+| /api/v2/overview/period | 189 ms | 229 ms | 14.8 kB |
+| /api/v2/events | 21 ms | 25 ms | 18.6 kB |
+| /api/v2/networks | 192 ms | 242 ms | 35.8 kB |
+| /api/v2/networks/timeseries | 105 ms | 135 ms | 3.8 kB |
+| /api/v2/clients/heatmap | 93 ms | 115 ms | 75.2 kB |
+| /api/v2/aps | 66 ms | 82 ms | 25.2 kB |
+| /api/v2/spectrum | 316 ms | 371 ms | 2.5 kB |
+| /api/v2/spectrum/utilization (timeline) | 13,243 ms | 16,750 ms | 259 kB |
+| /api/v2/settings/sensors | 11 ms | 231 ms | 4.1 kB |
+
+The smoke test (`v2_smoke.py`) passed: 80 checks, every 304 round trip,
+event paging back and forth, the 404 / 422 cases, and no MAC in any
+response that is not a BSSID of the account's APs.
+
+What changed after it: the utilization timeline located each row's cell
+and each cell's capture flag by linear search (~1.7 M datetime comparisons
+per request, 10b0509: binary search); `/api/v2/sensors` took 3.5 s cold for
+an outage start found by walking back over 9,414 SOURCEERROR alerts
+(1809635: from `sensor_periods`); and the period endpoints, which stay at
+0.1-0.3 s warm and 1-2 s cold at 30 days on the e2-micro, are answered from
+an in-process cache keyed by URL + ETag after their first request (26bbef5:
+the data changes only with an import, a write or a new bucket, all in the
+ETag). Lessons for the SQL (also in `server/CLAUDE.md`): JIT off per
+request, per-row functions once per distinct input, `width_bucket()`
+instead of joining an hour map, statements never prepared, and time
+queries after idle - back-to-back runs spend the CPU burst credit and
+read 3-8x slower.
+

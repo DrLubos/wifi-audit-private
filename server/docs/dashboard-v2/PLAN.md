@@ -1161,6 +1161,16 @@ docker compose run --rm --no-deps -v "$PWD/api/tests:/app/tests:ro" api python -
 curl -s http://localhost/api/v2/sensors | head -c 300; echo
 ```
 
+Deployed 2026-10-11 (1809635). `measure.sh MODE=v2`: the smoke test passed
+(80 checks, no MAC but account BSSIDs in any response). Warm HTTP p50 at
+30 days: sensors 42 ms, status 36, period 189, events 21, networks 192,
+timeseries 105, heatmap 93, aps 66, spectrum 316 ms, and the utilization
+timeline 13.2 s - quadratic Python, fixed in 10b0509. 7.4's targets were
+not met at 30 days by the period aggregates (cold 1-2 s); decided
+2026-10-11: an in-process response cache keyed by URL + ETag (26bbef5,
+LRU 4 MiB), daily rollups stay planned for longer ranges (11.2).
+Numbers: `docs/performance.md` section 6.
+
 ### Phase 4 – frontend, page by page
 
 4a shell (sidebar, top bar, `useFilters`, data layer, chart primitives,
@@ -1175,6 +1185,38 @@ docker compose build frontend && docker compose up -d frontend   # node build: t
 Claude checks each page against its board (layout, copy, interactions,
 tooltips, keyboard, hatching) and against the API numbers. Write actions are
 visible but locked (`Write locked`).
+
+**4a as built (2026-10-11, commits 0d5cebb .. 1171339).** The new app is the
+same frontend container at the same address: `/` is the new Overview in the
+new shell. During the switch the previous dashboard keeps working inside
+the shell: its code lives in `src/legacy/` (pages, components, the old
+`index.css` scoped under `.legacy`), its routes are `/legacy` (previous
+Overview), `/aps` and `/aps/<device key>` (until 4d), `/detections` (until
+4e); the sidebar links "Previous dashboard". `/events`, `/networks`,
+`/spectrum`, `/sensors`, `/settings` show which phase builds them (Events
+links the previous Detections page). Decisions open to review:
+
+- *Sensor status between imports (Q7):* a sensor whose data ends while
+  collecting reads "data until <time>" (grey) once that poll is older than
+  `sensor_offline_min`; it reads "Offline <duration>" (red) only when its
+  data itself ends in an outage (pi-fri since the 2026-10-06 adapter loss).
+- *Period label:* the end of the window is the viewer's clock, not the
+  api's `period.to` (a 304 or a cached body may be older).
+- *Fonts:* IBM Plex as in the boards, served by the app (IBM's split
+  woff2 files, OFL) instead of Google Fonts.
+- *Tests:* pure logic in `src/**/*.test.js`, run by `node --test` in the
+  image's build stage; JSX is checked only by the Vite build on the box
+  (no Node on the Mac; Claude syntax-checks and render-tests the components
+  against real responses with JavaScriptCore and a stub React).
+
+Deploy 4a (the api first: it brings the response cache and the timeline
+fix; build one image at a time):
+
+```sh
+cd ~/wifi-audit && git pull && cd server
+docker compose build api && docker compose up -d api
+docker compose build frontend && docker compose up -d frontend
+```
 
 ### Phase 5 – Settings, write token, write endpoints, cleanup
 
