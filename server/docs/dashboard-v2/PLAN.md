@@ -1051,10 +1051,26 @@ python3 seed/import_snapshot.py buffer-snapshot-20261010.db --sensor pi-fri \
 ```
 
 No api or frontend rebuild. Later imports of v7 snapshots work as before
-(export on the Pi, scp, import). Done when `check_schema8.sql` shows load rows
+(export on the Pi, scp, import).
+
+**Next import window: 2026-10-18 – 2026-10-23** (decided 2026-10-11). Not
+before: until ~2026-10-17 11:00 the Pi buffer still holds rows with the
+per-poll load columns (last one 2026-10-03 11:00:02), and every import
+re-reads them as load samples (~10 min of no-op work on the e2-micro; the
+importer speed-up was skipped). Not after: the Pi's 14-day retention starts
+dropping the first rows after the adapter recovery (2026-10-10 21:53:47, in
+no snapshot yet) on 2026-10-24 21:53. Done when `check_schema8.sql` shows load rows
 for every capturing hour 09-15 → 10-03 11:00 and from the v7 deploy on.
 
 ### Phase 2 – schema 9, rollups, fixture tests
+
+Step 1 (decided 2026-10-11, runs at schema 8 or 9): restore from the
+2026-10-03 dump the observation rows the schema-7 migration skipped - devices
+that were not APs on 2026-10-03 but are APs now (15 devices, 726 AP-hours
+before 2026-09-26 20:25 with load rows but no RSSI rows) -
+`ops/restore_observations_from_dump.sh`, one transaction (ON CONFLICT DO
+NOTHING, `refresh_ap_baselines()`), then vacuum and `refresh_rollups()` from
+the earliest restored ts; read-only check `tests/sql/check_restore_observations.sql`.
 
 Commits: schema 9 tables/functions/views in `schema.sql`; `security_*()` +
 test; classification + test; `refresh_rollups()` extension + extended test;

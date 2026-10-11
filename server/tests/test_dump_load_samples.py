@@ -68,7 +68,7 @@ class DumpLoadSamples(unittest.TestCase):
             run(HEADER.replace(", util_pct", "") + "\n\\.\n")
 
     def test_truncated_input(self):
-        with self.assertRaisesRegex(ValueError, "end marker"):
+        with self.assertRaisesRegex(ValueError, "truncated"):
             run(RESTORE.split("\\.")[0])
 
 

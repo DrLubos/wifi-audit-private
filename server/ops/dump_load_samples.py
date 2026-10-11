@@ -45,6 +45,10 @@ COMMIT;
 ABORT = ("DO $$ BEGIN RAISE EXCEPTION 'dump_load_samples.py: %s'; END $$;\n")
 
 
+class CopyOpen(ValueError):
+    """Raised after the stage COPY was opened: the caller must close it and roll back."""
+
+
 def convert(lines, out, sensor_id, log):
     """Copy the wanted columns of sensor_id's rows with load values. Returns
     (rows read, samples written); raises ValueError when there is no
@@ -64,6 +68,7 @@ def convert(lines, out, sensor_id, log):
                 idx = [cols.index(c) for c in WANTED]
                 sid_i = cols.index("sensor_id")
                 load_i = cols.index("n_clients")
+                n_cols = len(cols)
                 out.write(PREAMBLE)
             continue
         if line == "\\.":
@@ -71,6 +76,9 @@ def convert(lines, out, sensor_id, log):
             return read, written
         read += 1
         f = line.split("\t")
+        if len(f) != n_cols:
+            raise CopyOpen("observations row %d has %d of %d columns (truncated input?)"
+                             % (read, len(f), n_cols))
         if f[sid_i] != sid or f[load_i] == NULL:
             continue
         out.write("\t".join(f[i] for i in idx))
@@ -80,7 +88,7 @@ def convert(lines, out, sensor_id, log):
             log("  %d samples" % written)
     if idx is None:
         raise ValueError("no COPY block for observations in the input")
-    raise ValueError("the observations COPY block has no end marker (truncated input)")
+    raise CopyOpen("the observations COPY block has no end marker (truncated input)")
 
 
 def main(argv):
@@ -96,7 +104,7 @@ def main(argv):
         read, written = convert(lines, sys.stdout, args.sensor_id, log)
     except ValueError as e:
         # psql must fail (ON_ERROR_STOP) and never commit a partial load
-        sys.stdout.write("\\.\nROLLBACK;\n" if "end marker" in str(e) else "")
+        sys.stdout.write("\\.\nROLLBACK;\n" if isinstance(e, CopyOpen) else "")
         sys.stdout.write(ABORT % str(e).replace("'", "").replace("$", ""))
         sys.stdout.flush()
         log("error: %s" % e)
