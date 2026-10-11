@@ -3,7 +3,9 @@
 Every route lives under /api: Caddy proxies /api/* to this container with the
 path unchanged, everything else is the React app. Milestone 3, step 1: the
 health endpoint plus the read-only dashboard endpoints (routers/); the sensor
-ingest endpoints are added here later.
+ingest endpoints are added here later. Dashboard v2 (/api/v2, v2/): the read
+endpoints of docs/dashboard-v2/PLAN.md section 7.3; the endpoints above stay
+for the current pages until the frontend switch.
 """
 
 import logging
@@ -16,6 +18,7 @@ from psycopg_pool import PoolTimeout
 
 from . import cache, db
 from .routers import alerts, aps, detections, findings, overview
+from .v2 import routes as v2
 
 log = logging.getLogger("api")
 
@@ -36,7 +39,7 @@ async def lifespan(_app):
 
 app = FastAPI(
     title="wifi-audit api",
-    version="0.3.0",
+    version="0.4.0",
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
     redoc_url=None,
@@ -93,3 +96,4 @@ app.include_router(aps.router)
 app.include_router(alerts.router)
 app.include_router(findings.router)
 app.include_router(detections.router)
+app.include_router(v2.router)
