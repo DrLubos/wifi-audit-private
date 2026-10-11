@@ -23,6 +23,13 @@
 # ~12 s, then the whole VM is paused ~85 % of the time in ~220 ms slices
 # (docs/performance.md): warm p95/max include that, p50 mostly not.
 #
+# MODE=v2 measures the dashboard v2 endpoints (/api/v2, PLAN.md 7.4): per
+# statement group of app/v2/sql the EXPLAIN (ANALYZE, BUFFERS) cold and warm
+# (ep_v2.py: the api's own SQL, RANGE=30d by default), HTTP warm timings,
+# then v2_smoke.py in the api container: every endpoint 200 (and its 404 /
+# 422 cases), the ETag 304 round trip, event paging back and forth, and the
+# privacy scan (every MAC in every response a BSSID of the account's APs).
+#
 # MODE=coldstart measures only what the first requests after a cold start
 # cost and why (coldstart_probe.py, on the box): four variants, each after
 # 60 s of idle - db restart only, page-cache drop only, both (requests through
@@ -59,6 +66,38 @@ http() {
   on_box "docker compose exec -T api python -$args" < "$here/http_timing.py"
 }
 endpoint_sql() { cat "$here/common.sql" "$here/ep_$1.sql"; }
+
+if [ "$MODE" = v2 ]; then
+  R="${RANGE:-30d}"
+  echo "# v2 measurement $(date -u +%Y-%m-%dT%H:%M:%SZ), host $HOST, N=$N, range $R, cold runs: $([ -n "${NO_COLD:-}" ] && echo no || echo yes)"
+  on_box 'git log --oneline -1'
+  for g in context sensors overview events networks aps spectrum settings; do
+    echo
+    echo "=================== v2 $g"
+    if [ -z "${NO_COLD:-}" ]; then
+      make_cold
+      echo "-- EXPLAIN cold"
+      python3 "$here/ep_v2.py" --range "$R" "$g" | psql_ro
+    fi
+    python3 "$here/ep_v2.py" --range "$R" "$g" | psql_ro >/dev/null
+    echo "-- EXPLAIN warm"
+    python3 "$here/ep_v2.py" --range "$R" "$g" | psql_ro
+  done
+  sleep 60                        # idle: the CPU burst credit refills before the HTTP runs
+  echo
+  echo "=================== v2 HTTP (warm)"
+  http warm "$N" /api/v2/sensors /api/v2/overview/status "/api/v2/overview/period?range=$R" \
+    "/api/v2/events" "/api/v2/networks?range=$R" "/api/v2/networks/timeseries?range=$R" \
+    "/api/v2/clients/heatmap?range=$R" "/api/v2/aps?range=$R" "/api/v2/spectrum?range=$R" \
+    "/api/v2/spectrum/utilization?range=$R&view=timeline" /api/v2/settings/sensors
+  echo
+  echo "=================== v2 smoke test + privacy scan"
+  BSSIDS=$(echo "SELECT string_agg(upper(bssid::text), ',') FROM aps;" \
+           | on_box 'docker compose exec -T db psql -X -q -At -U claude_ro -d "$POSTGRES_DB"')
+  on_box "docker compose exec -T api python - '$BSSIDS'" < "$here/v2_smoke.py"
+  echo "# done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  exit 0
+fi
 
 if [ "$MODE" = coldstart ]; then
   echo "# cold-start breakdown $(date -u +%Y-%m-%dT%H:%M:%SZ), host $HOST"
