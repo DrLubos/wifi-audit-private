@@ -37,15 +37,19 @@ def connection():
 
 
 def run(conn, group_queries, query, /, **params):
-    """Rows of a named query; positional-only, so any name is free for the SQL parameters."""
-    return conn.execute(group_queries[query], params).fetchall()
+    """Rows of a named query; positional-only, so any name is free for the SQL
+    parameters. Never prepared: psycopg prepares a statement after its 5th
+    run on a connection, and PostgreSQL may then switch to a generic plan that
+    does not see the period arrays and bounds; a custom plan costs 0.3-5 ms
+    of planning here (tests/perf/ep_v2.py measures exactly these plans)."""
+    return conn.execute(group_queries[query], params, prepare=False).fetchall()
 
 
 def get_account():
     """The account, its sensors (id, name, first/last poll, last capture) and
     the versions of its ETags. 503 before the first refresh_rollups()."""
     with connection() as conn:
-        acc = conn.execute(_Q["account"], {"account_id": ACCOUNT_ID}).fetchone()
+        acc = conn.execute(_Q["account"], {"account_id": ACCOUNT_ID}, prepare=False).fetchone()
     if acc is None:
         raise HTTPException(status_code=503, detail="account not seeded (schema 9)")
     if acc["refreshed_at"] is None:

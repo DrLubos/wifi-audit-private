@@ -21,7 +21,7 @@ def account_aps(conn, acc, sql):
         hit = _entries.get(acc["id"])
     if hit is not None and hit[0] == key:
         return hit[1]
-    rows = {r["ap_id"]: r for r in conn.execute(sql, {"account_id": acc["id"]}).fetchall()}
+    rows = {r["ap_id"]: r for r in conn.execute(sql, {"account_id": acc["id"]}, prepare=False).fetchall()}
     with _lock:
         _entries[acc["id"]] = (key, rows)
     return rows
