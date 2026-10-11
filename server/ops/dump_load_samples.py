@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn the schema-6 observations of a pg_dump into ap_load_hourly rows.
 
-Reads, on stdin, the SQL that `pg_restore --data-only --table=observations`
+Reads, on stdin, the SQL that `pg_restore --data-only --table=observations -f -`
 writes for a dump taken before the schema-7 migration (2026-10-03): one
 `COPY public.observations (<columns>) FROM stdin;` block. Writes, on stdout,
 a psql script that stages the per-poll AP load columns of one sensor's rows
@@ -10,7 +10,7 @@ set) as the session temp table stage_load_samples and calls
 load_ap_load_samples() (schema 8) in one transaction. Nothing is restored
 into a table; memory stays bounded (line by line).
 
-  docker compose exec -T db pg_restore --data-only --table=observations < DUMP \\
+  docker compose exec -T db pg_restore --data-only --table=observations -f - < DUMP \\
     | python3 ops/dump_load_samples.py --sensor-id 1 \\
     | docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1
 

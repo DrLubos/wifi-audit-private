@@ -48,7 +48,7 @@ echo "== $(date -u +%FT%TZ) ap_load_hourly before"
 summary
 
 echo "== $(date -u +%FT%TZ) backfill (one transaction)"
-docker compose exec -T db pg_restore --data-only --table=observations < "$dump" \
+docker compose exec -T db pg_restore --data-only --table=observations -f - < "$dump" \
   | python3 ops/dump_load_samples.py --sensor-id "$sid" \
   | psql_db
 
