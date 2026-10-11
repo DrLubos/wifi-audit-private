@@ -166,6 +166,24 @@ Conventions for the stack:
     as successful). Fixture tests: `security_level_test.sql`,
     `classification_test.sql`, `events_test.sql`, the extended
     `refresh_rollups_test.sql`; read-only check `check_schema9.sql`.
+  - **API v2 (`/api/v2`, `api/app/v2/`, PLAN.md section 7):** the SQL lives in
+    `app/v2/sql/<group>.sql` as named statements (`-- name: x`, psycopg
+    `%(param)s`, fragments `{{_x}}`), never inline; `tests/perf/ep_v2.py`
+    runs exactly those under EXPLAIN as claude_ro, `measure.sh MODE=v2` adds
+    HTTP timings and `v2_smoke.py` (status codes, 304, paging, privacy scan).
+    Everything but `deps.py` and `routes/` is stdlib and unit-tested on the
+    Mac (`api/tests`). Rules learned on the e2-micro: JIT is off per request
+    (it cost 1.3 s on a 0.2 s query); per-row SQL functions are slow here
+    (`security_meets()` ~1 ms, `account_aps` ~90 ms for 850 APs) - call them
+    once per distinct input in a MATERIALIZED CTE, and the AP list reads
+    `account_aps` through `app/v2/apcache.py` (keyed by refreshed_at +
+    write_version); bucket numbers via `width_bucket()`, no hour-map joins;
+    back-to-back queries spend the CPU burst credit, so time them after idle.
+    **No MAC but an account AP BSSID in any response**: the detectors'
+    evidence names deauth sources (client MACs), every response with
+    evidence or detector summaries goes through `privacy.redact()` (Kismet
+    device keys hold their MAC byte-reversed). The old `/api/detections/{id}`
+    still returns that evidence unredacted - removed with the old endpoints.
   - **An AP's band comes from its advertised channel** (`ap_band()`:
     `devices.adv_channel`, else the busiest frequency of `device_freq_hist`),
     stored as `ap_baselines.band`. `observations.freq_khz` was never the

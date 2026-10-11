@@ -14,6 +14,7 @@ docker-compose stack.
 | `seed/` | done - `export_snapshot.py` (consistent copy of the Pi buffer) and `import_snapshot.py` (SQL + COPY stream piped into psql, idempotent merge). See `seed/README.md`. |
 | `docker-compose.yml`, `api/`, `frontend/` | done - the stack below |
 | dashboard (read-only) | done - `/api/overview`, `/api/aps`, `/api/aps/{key}` (all three from the schema-6 read tables, never raw observations; ETag from `sensor_summary.refreshed_at`), `/api/aps/{key}/rssi` (hourly from `ap_rssi_hourly`; `bucket=900` with `from`/`to` at most 48 h apart reads raw observations), `/api/alerts`, `/api/findings`, `/api/detections` (filters `severity`, `type`, `acked`; no evidence) and `/api/detections/{id}` (with evidence); React pages Overview, Access points, AP detail with the RSSI timeline vs baseline (uPlot), Detections with a per-row evidence expand. Before/after measurements: `docs/performance.md` |
+| dashboard v2 API (read) | done, phase 3 of `docs/dashboard-v2/PLAN.md` - `/api/v2/...` (sensors, overview status and period, events feed with keyset cursors and event detail, networks + timeseries + clients heatmap, access points list / page / RSSI / load, spectrum + utilization, sensor coverage and outages, settings reads); period buckets in the account's time zone, weak ETag with the bucket epoch, no client MAC in any response (redacted, checked by `tests/perf/v2_smoke.py`). Code in `api/app/v2/`, its SQL in `api/app/v2/sql/*.sql` (run as is by `tests/perf/ep_v2.py`). The `/api/...` endpoints above stay until the frontend switch |
 | `detection/` | prototype - batch detectors run on demand over a time window, writing only `detections`; one detector so far, `deauth-flood` (Kismet DEAUTHFLOOD alerts + burst events of the polled `client_disconnects` counter, per-AP baseline, idempotent re-runs). See `detection/README.md` |
 | live ingest | later; see `CLAUDE.md` for the scope rules |
 
@@ -83,7 +84,10 @@ SQL fixture tests in `tests/sql/` run the deployed definitions (the
 of the tables in a scratch schema, inside a transaction that is rolled back (no
 real row is read or written); each prints `PASS` or raises. Run them after
 applying `schema.sql`, as `$POSTGRES_USER` (they create the scratch schema).
-Unit tests without a database: `python3 -m unittest discover -s api/tests`,
+Unit tests without a database: `python3 -m unittest discover -s api/tests`
+(in the api image, which does not contain them: `docker compose run --rm
+--no-deps -v "$PWD/api/tests:/app/tests:ro" api python -m unittest discover -s
+tests`),
 `-s seed/tests`, `-s detection/tests`, `-s evaluation/tests`, and
 `-s tests -p 'test_*.py'` (schema/migration files) (from `server/`). Read-only
 check of the schema-7 migration on the real data: `tests/sql/check_schema7.sql`

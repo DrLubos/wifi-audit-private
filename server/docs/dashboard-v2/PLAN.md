@@ -1110,6 +1110,57 @@ Claude: `measure.sh` with the v2 scripts, read-only GET smoke tests through
 Caddy on the box, the privacy scan over real responses. Done when every
 endpoint meets 7.4.
 
+**As built (2026-10-11).** Every endpoint of 7.3 exists (commits c7d7d82 ..
+b61241d). Decisions taken while building, open to review:
+
+- *Perf scripts:* not hand-written `ep_v2_*.sql` but `tests/perf/ep_v2.py`,
+  which runs the api's own statements (`api/app/v2/sql/*.sql`) under EXPLAIN
+  with the period arrays of `periods.py`; `measure.sh MODE=v2` = EXPLAIN cold
+  and warm per group, HTTP warm, then `v2_smoke.py` in the api container
+  (200 / 404 / 422 cases, 304 round trip, event paging back and forth, the
+  privacy scan). The api image does not contain `api/tests`: the unit tests
+  run in it with the folder mounted (command below).
+- *Privacy:* the detectors' evidence names the deauth sources - client MACs
+  (`alerts.sources` of `deauth_flood`). v2 replaces every MAC that is not an
+  account AP BSSID in summaries and evidence by `(redacted)`. The old
+  `/api/detections/{id}` still returns it as is until phase 5 removes it.
+- *"Now" of the data:* windows that the boards call "last 7 days" / "24 h"
+  on the Sensors cards (coverage, crashes, APs seen) end at the sensor's last
+  poll, the AP page's RSSI chart at the AP's last observation; compliance and
+  "active now" use the latest collecting poll of the selected sensors (a
+  BSSID counts for compliance when seen in the 24 h before it, classified
+  managed or unknown; active = seen within 5 min of it, Q8). Period endpoints
+  use the wall clock (7.2), so between imports their recent buckets read "no
+  sensor collecting", as SPEC Q7 accepts.
+- *Spectrum:* an AP seen in the period without load rows (2026-10-03 11:00 ..
+  collector v7) is placed on its current advertised channel
+  (`current_channel_aps` counts them), not on `ap_channel_at()` - one lookup
+  per AP was too slow here.
+- *Coverage per day:* "limited" also includes the documented coverage
+  windows (`sensor_annotations`), which the polls before the hop guard cannot
+  show; the outage table adds documented windows no derived period covers.
+- *Cache:* `account_aps` (~90 ms of per-row functions) is cached in the api
+  process per account until `refreshed_at` or `write_version` moves.
+- *ETag caveat:* a period response carries `period.to` = the request time; a
+  304 keeps the label of the earlier request until the bucket changes.
+- Extra fields beyond the table: `/aps` `header` and `hidden_hotspots`,
+  `/networks` `collecting_hours` and `other_page`, `/sensors` `data_until`,
+  `window_7d`, `crashes_24h.unrecovered_since`, `/spectrum`
+  `current_channel_aps`, `/events/{id}` `who_saw_it[].clients`.
+
+Deploy (also re-applies `schema.sql` for the hop-values fix 78f64da):
+
+```sh
+cd ~/wifi-audit && git pull && cd server
+set -a && . ./.env && set +a
+docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < schema.sql
+docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < tests/sql/refresh_rollups_test.sql
+docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c 'SELECT * FROM refresh_rollups(1, now())'
+docker compose build api && docker compose up -d api
+docker compose run --rm --no-deps -v "$PWD/api/tests:/app/tests:ro" api python -m unittest discover -s tests
+curl -s http://localhost/api/v2/sensors | head -c 300; echo
+```
+
 ### Phase 4 – frontend, page by page
 
 4a shell (sidebar, top bar, `useFilters`, data layer, chart primitives,
