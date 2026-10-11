@@ -10,6 +10,7 @@ median >= 4 a day; channel plan = APs on 1/6/11 vs on 5/9/13. DFS =
 5 GHz channels 52-144.
 """
 
+from bisect import bisect_right
 from statistics import median
 from zoneinfo import ZoneInfo
 
@@ -41,7 +42,7 @@ def spectrum(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
              range_: str = Depends(deps.range_query), band: str = Query("2.4", pattern=r"^(2\.4|5)$")):
     sel = deps.select_sensors(acc, sensor)
     p = deps.period_of(acc, range_)
-    tag, cached = deps.etag(request, acc, p.epoch)
+    tag, cached = deps.etag(request, acc, p.epoch, envelope=p.envelope(sel["filter"]))
     if cached:
         return cached
     a = _args(acc, sel, p, band)
@@ -105,7 +106,7 @@ def utilization(request: Request, acc=Depends(deps.get_account), sensor: str = D
     blocks). Cells {start, avg, peak, aps}; null = no report."""
     sel = deps.select_sensors(acc, sensor)
     p = deps.period_of(acc, range_)
-    tag, cached = deps.etag(request, acc, p.epoch)
+    tag, cached = deps.etag(request, acc, p.epoch, envelope=p.envelope(sel["filter"]))
     if cached:
         return cached
     a = _args(acc, sel, p, band)
@@ -128,28 +129,40 @@ def utilization(request: Request, acc=Depends(deps.get_account), sensor: str = D
         while t < p.ends[-1]:
             cols.append((None, t, t + shape.HOUR))
             t += shape.HOUR
+    starts = [s for _, s, _ in cols]
+
+    def col_of(t):
+        """The cell of an instant: its local hour (day view) or the timeline
+        cell that contains it (binary search over the cell starts)."""
+        if view == "day":
+            return t.astimezone(local).hour
+        i = bisect_right(starts, t) - 1
+        return i if i >= 0 and t < cols[i][2] else None
+
+    cap = [False] * len(cols)
+    if view != "day":
+        for h in captured:
+            i = col_of(h)
+            if i is not None:
+                cap[i] = True
     out = []
     for ch in sorted(by_ch, key=int):
         cells = [{"vals": [], "aps": 0} for _ in cols]
         for r in by_ch[ch]:
-            if view == "day":
-                i = r["hour"].astimezone(local).hour
-            else:
-                i = next((k for k, (_, s, e) in enumerate(cols) if s <= r["hour"] < e), None)
-                if i is None:
-                    continue
+            i = col_of(r["hour"])
+            if i is None:
+                continue
             cells[i]["vals"].append(float(r["util"]))
             cells[i]["aps"] = max(cells[i]["aps"], r["aps"])
         row = []
-        for (hr, s, e), c in zip(cols, cells):
+        for k, ((hr, s, e), c) in enumerate(zip(cols, cells)):
             v = c["vals"]
             cell = {"avg": round(sum(v) / len(v), 1) if v else None, "peak": round(max(v), 1) if v else None,
                     "aps": c["aps"] or None}
             if view == "day":
                 cell["hour"] = hr
             else:
-                cell.update({"start": iso(s), "end": iso(e),
-                             "captured": any(s <= h < e for h in captured)})
+                cell.update({"start": iso(s), "end": iso(e), "captured": cap[k]})
             row.append(cell)
         out.append({"channel": ch, "dfs": dfs(ch), "cells": row})
     body = dict(p.envelope(sel["filter"]), account=deps.account_head(acc), band=band, view=view)
