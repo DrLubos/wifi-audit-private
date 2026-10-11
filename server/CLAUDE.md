@@ -135,6 +135,18 @@ Conventions for the stack:
     makes every AP page read ~30k heap pages (7-9 s cold, measured 2026-09-28).
     Add a column to the INCLUDE list rather than read it from the heap; the
     importer vacuums `observations` after each load.
+  - **AP load history (schema 8 / collector buffer v7, `ops/migrate_schema8.sh`):**
+    `ap_load_hourly` = per AP, UTC hour and advertised channel: poll count,
+    max/sum of the client count and, for polls with a BSS Load element,
+    max/sum of the AP-reported station count and utilisation. Source data
+    (like `observations`), never written by `refresh_rollups()`; every writer
+    keeps the row with more polls. Rows come from the v7 buffer (`source
+    'buffer'`) or from the per-poll columns of buffers <= v5 (`'v5_obs'`,
+    `load_ap_load_samples()`: importer and `ops/backfill_ap_load_from_dump.sh`).
+    The channel of a poll is `ap_channel_at()` (the `adv_channel` reading of
+    `ap_config_changes`). There is no load history between buffer v6
+    (2026-10-03 11:00:20 UTC) and v7. Dashboard v2 plan:
+    `docs/dashboard-v2/PLAN.md`.
   - **An AP's band comes from its advertised channel** (`ap_band()`:
     `devices.adv_channel`, else the busiest frequency of `device_freq_hist`),
     stored as `ap_baselines.band`. `observations.freq_khz` was never the

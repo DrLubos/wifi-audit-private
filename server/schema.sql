@@ -5,9 +5,10 @@
 -- It is the complete definition at the current version: a fresh volume is
 -- created from it, and re-applying it to a database at the same version only
 -- replaces functions and views. Upgrades between versions are separate
--- migration scripts (ops/migrate_schema7.sh for 6 -> 7).
+-- migration scripts (ops/migrate_schema7.sh for 6 -> 7, ops/migrate_schema8.sh
+-- for 7 -> 8).
 --
--- Mirrors the sensor's SQLite buffer (wifi-sensor/collector/store.py, schema v6)
+-- Mirrors the sensor's SQLite buffer (wifi-sensor/collector/store.py, schema v7)
 -- with a sensor_id on every row, and adds sensors, ap_baselines and detections.
 -- Differences from the buffer, all intentional:
 --   * unix seconds -> timestamptz, MAC strings -> macaddr, 0/1 -> boolean,
@@ -43,7 +44,10 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 --    INCLUDE (rssi, rssi_floor) + BRIN on ts; devices.cur_* (latest AP load);
 --    client_bssids; ap_baselines.band (from devices.adv_channel) replaces
 --    main_freq_khz; collector buffer v6 (ops/migrate_schema7.sh)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '7')
+-- 8: ap_load_hourly (AP load per hour and advertised channel: collector
+--    buffer v7, and the per-poll load columns of buffers <= v5 as source
+--    'v5_obs'); ap_channel_at(), load_ap_load_samples() (ops/migrate_schema8.sh)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '8')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- sensors ------------------------------------------------------------------
@@ -180,6 +184,40 @@ CREATE INDEX IF NOT EXISTS observations_ts_brin ON observations USING brin (ts);
 -- rssi_valid() / rssi_is_floor().
 COMMENT ON TABLE observations IS
   'One row per AP per poll in which the AP was active: the RSSI/counter time series the detectors and the dashboard read. AP rows only (schema 7).';
+
+-- AP load per UTC hour and advertised channel (schema 8). Source data like
+-- observations, never written by refresh_rollups(): rows come from the
+-- collector's ap_load_hourly (buffer v7, source 'buffer') or are rebuilt from
+-- the per-poll n_clients / qbss_stations / util_pct of buffers <= v5
+-- (load_ap_load_samples(), source 'v5_obs'). Sums and counts, so a partial
+-- hour merges exactly: every writer keeps the row with more polls (ON CONFLICT
+-- ... WHERE EXCLUDED.polls > ap_load_hourly.polls). The channel is in the key
+-- because campus APs change channel many times a day (dynamic channel
+-- selection); '' = unknown. Read time (dashboard v2): clients of an AP-hour =
+-- max(qbss_max) when qbss_polls > 0, else max(clients_max); utilisation =
+-- sum(util_sum) / sum(qbss_polls). Before buffer v7 there is no BSS-Load
+-- presence flag: for 'v5_obs' a poll counts in qbss_polls when its station
+-- count or utilisation is > 0.
+CREATE TABLE IF NOT EXISTS ap_load_hourly (
+  sensor_id     integer NOT NULL,
+  device_key    text NOT NULL,
+  hour          timestamptz NOT NULL,        -- start of the UTC hour
+  channel       text NOT NULL,               -- advertised channel at those polls ('' = unknown)
+  polls         integer NOT NULL,            -- polls with a new observation of the AP on this channel
+  clients_polls integer NOT NULL,            -- polls with a Kismet client count
+  clients_max   integer,                     -- Kismet num_associated_clients
+  clients_sum   integer,
+  qbss_polls    integer NOT NULL,            -- polls whose beacon carried a BSS Load element
+  qbss_max      integer,                     -- AP-reported station count
+  qbss_sum      integer,
+  util_max      real,                        -- AP-reported channel utilisation, %
+  util_sum      real,
+  source        text NOT NULL CHECK (source IN ('buffer', 'v5_obs')),
+  PRIMARY KEY (sensor_id, device_key, hour, channel),
+  FOREIGN KEY (sensor_id, device_key) REFERENCES devices (sensor_id, device_key));
+CREATE INDEX IF NOT EXISTS ap_load_hourly_hour ON ap_load_hourly (sensor_id, hour);
+COMMENT ON TABLE ap_load_hourly IS
+  'AP load per UTC hour and advertised channel: client count, BSS Load station count and channel utilisation as sums and counts (schema 8). Source data, not derived; the row with more polls wins on every load.';
 
 CREATE TABLE IF NOT EXISTS device_freq_hist (
   sensor_id  integer NOT NULL,
@@ -354,6 +392,118 @@ LANGUAGE sql STABLE AS $$
     (SELECT band_of_freq(freq_khz) FROM device_freq_hist
      WHERE sensor_id = p_sensor_id AND device_key = p_device_key AND packets > 0
      ORDER BY packets DESC, freq_khz LIMIT 1))
+$$;
+
+-- The advertised channel of an AP at p_ts: the adv_channel of the earliest
+-- device_config_history row after p_ts that knows it (that row holds the
+-- configuration replaced at its ts, so it was valid at p_ts), else the
+-- current one. Same reading as the adv_channel rows of ap_config_changes
+-- (NULL = unknown, states without a beacon record skipped; fixture test
+-- tests/sql/ap_channel_at_test.sql). NULL when no channel is known.
+CREATE OR REPLACE FUNCTION ap_channel_at(p_sensor_id integer, p_device_key text, p_ts timestamptz)
+RETURNS text
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+  SELECT coalesce(
+    (SELECT h.adv_channel FROM device_config_history h
+     WHERE h.sensor_id = p_sensor_id AND h.device_key = p_device_key AND h.ts > p_ts
+       AND h.adv_channel IS NOT NULL
+     ORDER BY h.ts LIMIT 1),
+    (SELECT d.adv_channel FROM devices d
+     WHERE d.sensor_id = p_sensor_id AND d.device_key = p_device_key))
+$$;
+
+-- Per-poll AP load samples of the session -> ap_load_hourly (schema 8). Reads
+-- the temp table stage_load_samples (ts timestamptz, device_key text,
+-- n_clients integer, qbss_stations integer, util_pct real) that the caller
+-- filled - the importer from a snapshot's rows of buffers <= v5, the dump
+-- backfill from the schema-6 observations - and aggregates it per AP, UTC hour
+-- and advertised channel at the poll (the reading of ap_channel_at(), computed
+-- set-based; tests/sql/ap_load_test.sql checks both agree), source 'v5_obs'.
+-- Samples of devices that are not APs on the server, or unknown, are ignored;
+-- a duplicate (device_key, ts) counts once, as in observations. A stored row
+-- is replaced only by one with more polls, so re-loading the same or a
+-- shorter window changes nothing. Returns the aggregated rows and how many
+-- were inserted / updated.
+CREATE OR REPLACE FUNCTION load_ap_load_samples(p_sensor_id integer)
+RETURNS TABLE (hours integer, inserted integer, updated integer)
+LANGUAGE plpgsql
+SET work_mem = '64MB'      -- the backfill sorts ~2.5M samples
+SET jit = off
+AS $$
+#variable_conflict use_column
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM sensors WHERE id = p_sensor_id) THEN
+    RAISE EXCEPTION 'load_ap_load_samples: unknown sensor_id %', p_sensor_id;
+  END IF;
+  RETURN QUERY
+  WITH s AS (
+    SELECT DISTINCT ON (x.device_key, x.ts)
+           x.device_key, x.ts, x.n_clients, x.qbss_stations, x.util_pct
+    FROM stage_load_samples x
+    JOIN devices d ON d.sensor_id = p_sensor_id AND d.device_key = x.device_key AND d.type = 'ap'
+    ORDER BY x.device_key, x.ts
+  ), u AS (      -- the samples and the APs' known channels from the history, one stream
+    SELECT s.device_key, s.ts, 0 AS kind, NULL::text AS h_channel,
+           s.n_clients, s.qbss_stations, s.util_pct
+    FROM s
+    UNION ALL
+    SELECT h.device_key, h.ts, 1, h.adv_channel, NULL, NULL, NULL
+    FROM device_config_history h
+    WHERE h.sensor_id = p_sensor_id AND h.adv_channel IS NOT NULL
+      AND h.device_key IN (SELECT s.device_key FROM s)
+  ), g AS (      -- grp = known history channels at or after the row; a history row sorts
+                 -- before a sample of the same ts (its configuration ended there)
+    SELECT u.*, count(u.h_channel) OVER (PARTITION BY u.device_key ORDER BY u.ts, u.kind DESC
+                                         ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS grp
+    FROM u
+  ), n AS (      -- the channel of the next history row, as ap_channel_at() reads it (set-based:
+                 -- one lookup per sample costs ~0.3 ms on the e2-micro, measured 2026-10-11)
+    SELECT g.*, max(g.h_channel) OVER (PARTITION BY g.device_key, g.grp) AS next_channel
+    FROM g
+  ), c AS (
+    SELECT n.device_key, date_trunc('hour', n.ts, 'UTC') AS hour,
+           coalesce(n.next_channel, d.adv_channel, '') AS channel,
+           n.n_clients,
+           coalesce(n.qbss_stations > 0 OR n.util_pct > 0, false) AS qbss,
+           n.qbss_stations, n.util_pct
+    FROM n
+    JOIN devices d ON d.sensor_id = p_sensor_id AND d.device_key = n.device_key
+    WHERE n.kind = 0
+  ), a AS (
+    SELECT c.device_key, c.hour, c.channel,
+           count(*)::integer AS polls,
+           count(c.n_clients)::integer AS clients_polls,
+           max(c.n_clients) AS clients_max,
+           sum(c.n_clients)::integer AS clients_sum,
+           (count(*) FILTER (WHERE c.qbss))::integer AS qbss_polls,
+           max(c.qbss_stations) FILTER (WHERE c.qbss) AS qbss_max,
+           (sum(c.qbss_stations) FILTER (WHERE c.qbss))::integer AS qbss_sum,
+           max(c.util_pct) FILTER (WHERE c.qbss) AS util_max,
+           sum(c.util_pct) FILTER (WHERE c.qbss) AS util_sum
+    FROM c
+    GROUP BY 1, 2, 3
+  ), up AS (
+    INSERT INTO ap_load_hourly AS t (sensor_id, device_key, hour, channel, polls, clients_polls,
+                                     clients_max, clients_sum, qbss_polls, qbss_max, qbss_sum,
+                                     util_max, util_sum, source)
+    SELECT p_sensor_id, a.device_key, a.hour, a.channel, a.polls, a.clients_polls,
+           a.clients_max, a.clients_sum, a.qbss_polls, a.qbss_max, a.qbss_sum,
+           a.util_max, a.util_sum, 'v5_obs'
+    FROM a
+    ON CONFLICT (sensor_id, device_key, hour, channel) DO UPDATE SET
+        polls = EXCLUDED.polls, clients_polls = EXCLUDED.clients_polls,
+        clients_max = EXCLUDED.clients_max, clients_sum = EXCLUDED.clients_sum,
+        qbss_polls = EXCLUDED.qbss_polls, qbss_max = EXCLUDED.qbss_max,
+        qbss_sum = EXCLUDED.qbss_sum, util_max = EXCLUDED.util_max,
+        util_sum = EXCLUDED.util_sum, source = EXCLUDED.source
+      WHERE EXCLUDED.polls > t.polls
+    RETURNING (t.xmax = 0) AS is_insert
+  )
+  SELECT (SELECT count(*) FROM a)::integer,
+         (count(*) FILTER (WHERE up.is_insert))::integer,
+         (count(*) FILTER (WHERE NOT up.is_insert))::integer
+  FROM up;
+END
 $$;
 
 -- Recompute the RSSI baselines of one sensor from its observations.
