@@ -343,6 +343,15 @@ Eventbus (push) for alerts later. Fields of interest:
   `device_config_history`. A client's BSSID is in `client_bssids` (deduplicated
   like `associations`). The dropped fields are not requested from Kismet. An
   AP's band comes from `devices.adv_channel` (analysis scripts, server).
+- **AP load history (buffer schema v7; effective time in `docs/findings.md`
+  section 7):** `ap_load_hourly` = one row per AP, UTC hour and advertised
+  channel with poll count, max/sum of the client count and - only for polls
+  whose beacon carried a BSS Load element (`dot11e_qbss`) - max/sum of the
+  AP-reported station count and utilisation. Written with the observation row
+  (new packets only), pruned with it. Without the element the station count and
+  utilisation are NULL (Kismet reports 0), also in `devices.cur_*`. The server
+  loads it into its own `ap_load_hourly` (dashboard v2 clients/utilization
+  charts). Roll back by setting `meta.schema_version` to 6.
 - **Dataset rules (buffer schema v5, deployed 2026-09-27 19:57:29 UTC;
   `docs/findings.md` sections 7 and 11):**
   - **RSSI floors are censored values, not levels.** The RTL8821CU reports

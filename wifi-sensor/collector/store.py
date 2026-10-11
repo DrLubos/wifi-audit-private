@@ -12,6 +12,8 @@ One transaction per poll. The tables are the sensor's time series:
                          poll at which the AP's associated-client map listed it
   probes                 SSIDs a client probed for, with first/last time
   alerts                 Kismet WIDS alerts, deduplicated by hash
+  ap_load_hourly         per AP, UTC hour and advertised channel: client count,
+                         BSS Load station count and channel utilisation (v7)
   meta                   schema version, resume point, server identity
 
 Kismet's associated_client_map carries no per-client times and never drops an
@@ -51,6 +53,20 @@ the devices upsert of every poll - never through merge_config or the
 configuration history. A client's BSSID goes to client_bssids, one row per
 (client, BSSID) pair with first/last poll, as associations does for APs.
 
+Schema v7 records the AP load history again, compactly: ap_load_hourly holds
+one row per AP, UTC hour and advertised channel (the merged
+devices.adv_channel at the poll, '' if unknown; campus APs change channel
+many times a day, so one hour can have two rows) with the number of polls,
+max and sum of Kismet's client count, and - only for polls whose beacon
+carried a BSS Load element (shape.py, dot11e_qbss) - max and sum of the
+AP-reported station count and channel utilisation. Sums and counts, not
+means, so the server can merge partial hours exactly. A row is written in
+the same poll and under the same condition as the observation row (the
+device has new packets), which is also when the v5 per-poll columns were
+written. The table is created by _SCHEMA; the migration only bumps the
+version (roll back by setting meta.schema_version to 6 - the v6 code ignores
+the table). Pruned with the time series.
+
 Device configuration (the AP's advertised channel, HT mode, beacon rate, ...)
 is merged field by field: a NULL from Kismet means "not in this record",
 never "changed to nothing". Only a known value replaced by a different known
@@ -74,7 +90,7 @@ import sqlite3
 
 log = logging.getLogger("collector.store")
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -226,7 +242,52 @@ CREATE TABLE IF NOT EXISTS alerts (
   raw             TEXT NOT NULL,     -- complete Kismet JSON
   sent            INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS alerts_ts ON alerts(ts);
+
+-- v7: AP load per UTC hour and advertised channel. Sums + counts (means are
+-- sum / polls), so partial hours merge exactly on the server.
+CREATE TABLE IF NOT EXISTS ap_load_hourly (
+  key           TEXT NOT NULL,       -- AP device key
+  hour          INTEGER NOT NULL,    -- unix s of the UTC hour start
+  channel       TEXT NOT NULL,       -- merged devices.adv_channel at the poll, '' = unknown
+  polls         INTEGER NOT NULL,    -- polls with a new observation of the AP on this channel
+  clients_polls INTEGER NOT NULL DEFAULT 0,  -- polls with a Kismet client count
+  clients_max   INTEGER,             -- Kismet num_associated_clients
+  clients_sum   INTEGER,
+  qbss_polls    INTEGER NOT NULL DEFAULT 0,  -- polls whose beacon carried a BSS Load element
+  qbss_max      INTEGER,             -- AP-reported station count
+  qbss_sum      INTEGER,
+  util_max      REAL,                -- AP-reported channel utilisation, %
+  util_sum      REAL,
+  first_ts      INTEGER NOT NULL,    -- first / last poll ts in the row
+  last_ts       INTEGER NOT NULL,
+  sent          INTEGER NOT NULL DEFAULT 0,  -- upload step (later): reset on every update
+  PRIMARY KEY (key, hour, channel)) WITHOUT ROWID;
 """
+
+# One poll added to an ap_load_hourly row. SQLite's scalar max(a, b) is NULL
+# when either argument is: max(coalesce(a, b), coalesce(b, a)) keeps the
+# known one. A sum stays NULL until the first known value.
+_LOAD_UPSERT = (
+    "INSERT INTO ap_load_hourly(key, hour, channel, polls, clients_polls, clients_max, "
+    "clients_sum, qbss_polls, qbss_max, qbss_sum, util_max, util_sum, first_ts, last_ts) "
+    "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+    "ON CONFLICT(key, hour, channel) DO UPDATE SET "
+    "polls = polls + 1, "
+    "clients_polls = clients_polls + excluded.clients_polls, "
+    "clients_max = max(coalesce(clients_max, excluded.clients_max), "
+    "coalesce(excluded.clients_max, clients_max)), "
+    "clients_sum = CASE WHEN excluded.clients_sum IS NULL THEN clients_sum "
+    "ELSE coalesce(clients_sum, 0) + excluded.clients_sum END, "
+    "qbss_polls = qbss_polls + excluded.qbss_polls, "
+    "qbss_max = max(coalesce(qbss_max, excluded.qbss_max), coalesce(excluded.qbss_max, qbss_max)), "
+    "qbss_sum = CASE WHEN excluded.qbss_sum IS NULL THEN qbss_sum "
+    "ELSE coalesce(qbss_sum, 0) + excluded.qbss_sum END, "
+    "util_max = max(coalesce(util_max, excluded.util_max), coalesce(excluded.util_max, util_max)), "
+    "util_sum = CASE WHEN excluded.util_sum IS NULL THEN util_sum "
+    "ELSE coalesce(util_sum, 0) + excluded.util_sum END, "
+    "first_ts = min(first_ts, excluded.first_ts), "
+    "last_ts = max(last_ts, excluded.last_ts), "
+    "sent = 0")
 
 _CONFIG_COLS = ("ssid", "cloaked", "crypt", "crypt_bits", "mfp_sup", "mfp_req",
                 "adv_channel", "ht_mode", "beacon_rate", "country")
@@ -271,6 +332,9 @@ class Store:
         if v == "5":
             self._migrate_v5_to_v6()
             v = "6"
+        if v == "6":
+            self._migrate_v6_to_v7()
+            v = "7"
         if v is not None and int(v) != SCHEMA_VERSION:
             raise RuntimeError("database schema version %s, collector expects %d"
                                % (v, SCHEMA_VERSION))
@@ -365,6 +429,19 @@ class Store:
             self.db.execute("ROLLBACK")
             raise
 
+    def _migrate_v6_to_v7(self):
+        """v7 adds the ap_load_hourly table, created by _SCHEMA right after
+        this; nothing existing changes. To roll the code back, set
+        meta.schema_version to 6; the v6 code ignores the table."""
+        log.info("migrating buffer schema v6 -> v7: adding ap_load_hourly")
+        self.db.execute("BEGIN")
+        try:
+            self.set_meta("schema_version", "7")
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+
     def close(self):
         self.db.close()
 
@@ -453,6 +530,7 @@ class Store:
                if ap is not None else None)
 
         first_seen = rec["first"] or rec["last"]
+        channel = new_config[6] if new_config else None   # adv_channel after the merge
         if row is None:
             self.db.execute(
                 "INSERT INTO devices(key, mac, type, manuf, first_seen, last_seen, " +
@@ -483,6 +561,7 @@ class Store:
                 if merged != old_config:
                     sets += ["%s = ?" % c for c in _CONFIG_COLS]
                     args += list(merged)
+                channel = merged[6]
             if cur is not None:
                 sets += ["%s = ?" % c for c in _CUR_COLS]
                 args += list(cur)
@@ -503,6 +582,8 @@ class Store:
              ap["disconnects"] if ap else None,
              ap["disconnects_last"] if ap else None,
              ap["bss_ts"] if ap else None))
+        if ap is not None:
+            self._write_load(key, rec["ts"], channel, ap)
         if cl.get("bssid"):
             self.db.execute(
                 "INSERT INTO client_bssids(client_key, bssid, first_seen, last_seen) "
@@ -539,6 +620,19 @@ class Store:
                 [(key, s, f, l) for s, f, l in cl["probes"]])
         return True
 
+    def _write_load(self, key, ts, channel, ap):
+        """Add this poll's AP load to its ap_load_hourly row (v7). The BSS Load
+        values count only when the beacon carried the element (ap["qbss"])."""
+        clients = ap["n_clients"]
+        stations, util = ap["qbss_stations"], ap["util_pct"]
+        qbss = 1 if ap.get("qbss") and (stations is not None or util is not None) else 0
+        if not qbss:
+            stations = util = None
+        self.db.execute(_LOAD_UPSERT, (
+            key, ts - ts % 3600, channel or "",
+            1 if clients is not None else 0, clients, clients,
+            qbss, stations, stations, util, util, ts, ts))
+
     # --- alerts -----------------------------------------------------------
 
     def _write_alert(self, a):
@@ -554,7 +648,8 @@ class Store:
     # --- housekeeping -----------------------------------------------------
 
     def prune(self, before_ts):
-        """Delete time-series rows older than before_ts. Device identity,
+        """Delete time-series rows older than before_ts: observations, polls
+        and the ap_load_hourly hours that ended by then. Device identity,
         configuration history, associations, client_bssids, probes and alerts
         are kept.
 
@@ -568,6 +663,8 @@ class Store:
             for table in ("observations", "polls"):
                 cur = self.db.execute("DELETE FROM %s WHERE ts < ?" % table, (before_ts,))
                 counts[table] = cur.rowcount
+            cur = self.db.execute("DELETE FROM ap_load_hourly WHERE hour + 3600 <= ?", (before_ts,))
+            counts["ap_load_hourly"] = cur.rowcount
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
@@ -576,6 +673,7 @@ class Store:
 
     def counts(self):
         out = {}
-        for table in ("devices", "observations", "associations", "probes", "alerts", "polls"):
+        for table in ("devices", "observations", "associations", "probes", "alerts", "polls",
+                      "ap_load_hourly"):
             out[table] = self.db.execute("SELECT COUNT(*) FROM %s" % table).fetchone()[0]
         return out

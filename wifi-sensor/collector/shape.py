@@ -77,6 +77,7 @@ DEVICE_FIELDS = [
     [_ADV + "ht_mode", "ht"],
     [_ADV + "beaconrate", "beacon_rate"],
     [_ADV + "dot11d_country", "country"],
+    [_ADV + "dot11e_qbss", "qbss"],
     [_ADV + "dot11e_qbss_stations", "qbss_stations"],
     [_ADV + "dot11e_channel_utilization_perc", "util_pct"],
 ]
@@ -219,6 +220,11 @@ def _shape_ap(raw, dtype):
     if ssid is None and dtype != "ap":
         return None
     clients = raw.get("clients")
+    # BSS Load (QBSS) element (buffer v7): without one Kismet leaves the station
+    # count and utilisation at 0, which reads like "idle"; dot11e_qbss says
+    # whether the AP sends the element (set on the first beacon carrying it,
+    # never cleared - phy_80211.cc), so the values are None for an AP without.
+    qbss = _flag(raw.get("qbss"))
     return {
         "ssid": ssid,
         "cloaked": _flag(raw.get("cloaked")),
@@ -230,8 +236,9 @@ def _shape_ap(raw, dtype):
         "beacon_rate": _positive(raw.get("beacon_rate")),
         "country": _nonempty(raw.get("country")),
         "bss_ts": _positive(raw.get("bss_ts")),
-        "qbss_stations": _counter(raw.get("qbss_stations")),
-        "util_pct": _num(raw.get("util_pct")),
+        "qbss": qbss,
+        "qbss_stations": _counter(raw.get("qbss_stations")) if qbss else None,
+        "util_pct": _num(raw.get("util_pct")) if qbss else None,
         "n_clients": _counter(raw.get("n_clients")),
         "disconnects": _counter(raw.get("disconnects")),
         # unix second of the last deauth/disassoc frame; 0 = none seen yet

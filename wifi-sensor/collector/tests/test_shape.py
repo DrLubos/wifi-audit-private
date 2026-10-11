@@ -42,7 +42,7 @@ AP_RAW = {
     "crypt": "WPA2 WPA2-PSK AES-CCMP", "crypt_bits": 274945016842,
     "mfp_sup": 1, "mfp_req": 0,
     "adv_ch": "8", "ht": "HT20", "beacon_rate": 10, "country": "SK",
-    "ie_sum": 1851240727, "qbss_stations": 1, "util_pct": 2.352941,
+    "ie_sum": 1851240727, "qbss": 1, "qbss_stations": 1, "util_pct": 2.352941,
 }
 
 # A client: every AP-only field is the integer 0, not null.
@@ -82,7 +82,7 @@ CLIENT_RAW = {
     ],
     "ssid": 0, "cloaked": 0, "crypt": 0, "crypt_bits": 0, "mfp_sup": 0, "mfp_req": 0,
     "adv_ch": 0, "ht": 0, "beacon_rate": 0, "country": 0, "ie_sum": 0,
-    "qbss_stations": 0, "util_pct": 0,
+    "qbss": 0, "qbss_stations": 0, "util_pct": 0,
 }
 
 
@@ -107,7 +107,8 @@ class DeviceFieldsTest(unittest.TestCase):
                      "beacon_fingerprint", "ietag_checksum"):
             self.assertFalse([p for p in paths if p.endswith(gone)], gone)
         for kept in ("kismet.device.base.last_time", "num_associated_clients", "last_bssid",
-                     "dot11e_qbss_stations", "dot11e_channel_utilization_perc", "freq_khz_map"):
+                     "dot11e_qbss", "dot11e_qbss_stations", "dot11e_channel_utilization_perc",
+                     "freq_khz_map"):
             self.assertTrue([p for p in paths if p.endswith(kept)], kept)
 
 
@@ -159,6 +160,16 @@ class ShapeApTest(unittest.TestCase):
         self.assertEqual(ap["n_clients"], 0)
         self.assertEqual(ap["qbss_stations"], 0)
         self.assertEqual(ap["clients"], [])
+
+    def test_ap_without_bss_load_element_has_no_qbss_values(self):
+        # v7: Kismet leaves station count and utilisation at 0 without the
+        # element; dot11e_qbss = 0 turns them into unknown, not "idle".
+        ap = shape_device(dict(AP_RAW, qbss=0), TS)["ap"]
+        self.assertEqual(ap["qbss"], 0)
+        self.assertIsNone(ap["qbss_stations"])
+        self.assertIsNone(ap["util_pct"])
+        self.assertEqual(ap["n_clients"], 2)
+        self.assertEqual(self.rec["ap"]["qbss"], 1)
 
     def test_ap_never_deauthed_has_no_last_disconnect(self):
         # A timestamp of 0 means "no deauth/disassoc frame yet", not epoch.

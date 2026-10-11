@@ -63,8 +63,10 @@ points to a shaping regression.
    advance since its last stored observation is skipped, so the overlap window
    never duplicates rows.
 4. Write everything in one transaction: `polls`, `devices` (+ config history),
-   `observations`, `device_freq_hist`, `associations`, `probes`, `alerts`.
-5. Once per hour, delete `observations` and `polls` older than `RETENTION_DAYS`.
+   `observations`, `ap_load_hourly`, `device_freq_hist`, `associations`,
+   `probes`, `alerts`.
+5. Once per hour, delete `observations`, `polls` and the `ap_load_hourly`
+   hours older than `RETENTION_DAYS`.
 
 A failed poll (Kismet restarting, datasource error) is recorded in `polls`
 with `ok = 0` and the loop continues; the service is never taken down by it.
@@ -81,12 +83,31 @@ with `ok = 0` and the loop continues; the service is never taken down by it.
 | `client_bssids` | client × BSSID | (v6) first/last poll at which the client's Kismet `last_bssid` was this BSSID; replaces `observations.bssid` |
 | `associations` | AP × client MAC | first/last poll at which the client MAC was listed in the AP's associated-client map (Kismet gives no per-client times and never drops entries, so `last_seen` is "still listed", not "last frame") |
 | `probes` | client × SSID | first/last time the SSID was probed for (`""` = wildcard) |
+| `ap_load_hourly` | AP × UTC hour × advertised channel | (v7) polls with a new observation, max/sum of Kismet's client count, and for polls whose beacon carried a BSS Load element max/sum of the AP-reported station count and channel utilisation |
 | `alerts` | Kismet alert | header, class, severity, MACs, channel, text, full JSON; deduplicated by Kismet's hash |
 | `meta` | key | schema version, resume point |
 
 Cumulative counters are stored as Kismet reports them; deltas are derived when
 the data is analysed, which keeps the collector free of state and robust to
 missed polls. `sent` columns exist for the later upload step.
+
+Schema v7 records the AP load history again (`docs/findings.md` section 7 for
+the effective time): `ap_load_hourly` has one row per AP, UTC hour and
+advertised channel (the merged `devices.adv_channel` at the poll, `''` when
+unknown - an AP that changes channel within the hour has two rows). Each row
+counts the polls in which the AP had a new observation (the same condition
+under which v5 wrote the per-poll `n_clients`/`qbss_stations`/`util_pct`) and
+keeps max and sum of Kismet's `num_associated_clients`, plus max and sum of
+the BSS Load (QBSS) station count and channel utilisation for the polls whose
+beacon carried that element (`qbss_polls`). Sums and counts rather than means,
+so the server merges a partial hour from one snapshot with the complete hour
+from the next exactly. Kismet keeps station count and utilisation at 0 when an
+AP sends no BSS Load element; v7 requests `dot11.advertisedssid.dot11e_qbss`
+(set on the first beacon with the element, never cleared) and stores NULL
+instead, in `ap_load_hourly` and in `devices.cur_qbss_stations` /
+`cur_util_pct` alike. About 1.9 k rows a day (~70 active APs per hour), pruned
+with the time series. Migration: the table only, metadata; to roll the code
+back set `meta.schema_version` to `6`.
 
 Schema v6 slims the observation row (`docs/findings.md` section 7 for the
 effective time). It keeps what the server's detectors and dashboard read -

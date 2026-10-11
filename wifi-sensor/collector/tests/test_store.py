@@ -76,6 +76,62 @@ class StoreTest(unittest.TestCase):
         self.poll(TS, [CLIENT_RAW])
         self.assertEqual(self.q("SELECT cur_n_clients, cur_qbss_stations, cur_util_pct, cur_at "
                                 "FROM devices"), [(None, None, None, None)])
+        self.assertEqual(self.q("SELECT COUNT(*) FROM ap_load_hourly")[0][0], 0)
+
+    # --- ap_load_hourly (v7) ---------------------------------------------------
+
+    LOAD_COLS = ("hour, channel, polls, clients_polls, clients_max, clients_sum, qbss_polls, "
+                 "qbss_max, qbss_sum, round(util_max, 4), round(util_sum, 4), first_ts, last_ts")
+
+    def later(self, raw, seconds, **changes):
+        out = dict(raw, **changes)
+        out["kismet.device.base.last_time"] = raw["kismet.device.base.last_time"] + seconds
+        return out
+
+    def test_ap_load_hourly_accumulates_within_the_hour(self):
+        hour = TS - TS % 3600
+        self.poll(TS, [AP_RAW])
+        self.poll(TS + 30, [self.later(AP_RAW, 10, n_clients=5, qbss_stations=4, util_pct=40.0)])
+        self.assertEqual(self.q("SELECT " + self.LOAD_COLS + " FROM ap_load_hourly"),
+                         [(hour, "8", 2, 2, 5, 7, 2, 4, 5, 40.0, 42.3529, TS, TS + 30)])
+
+    def test_ap_load_only_with_a_new_observation(self):
+        self.poll(TS, [AP_RAW])
+        self.poll(TS + 30, [dict(AP_RAW, n_clients=9)])     # same last_time: no observation
+        self.assertEqual(self.q("SELECT polls, clients_max FROM ap_load_hourly"), [(1, 2)])
+
+    def test_ap_load_channel_change_splits_the_hour(self):
+        self.poll(TS, [AP_RAW])
+        self.poll(TS + 30, [self.later(AP_RAW, 10, adv_ch="11", n_clients=1)])
+        # an empty beacon record (no channel) stays on the merged channel 11
+        self.poll(TS + 60, [self.later(AP_RAW, 20, adv_ch=0, n_clients=3)])
+        self.assertEqual(self.q("SELECT channel, polls, clients_sum FROM ap_load_hourly "
+                                "ORDER BY channel"),
+                         [("11", 2, 4), ("8", 1, 2)])
+
+    def test_ap_load_without_bss_load_element(self):
+        self.poll(TS, [dict(AP_RAW, qbss=0)])
+        self.poll(TS + 30, [self.later(AP_RAW, 10)])        # now with the element
+        self.assertEqual(self.q("SELECT polls, clients_polls, qbss_polls, qbss_max, qbss_sum, "
+                                "round(util_sum, 4) FROM ap_load_hourly"),
+                         [(2, 2, 1, 1, 1, 2.3529)])
+        self.poll(TS + 60, [self.later(AP_RAW, 20, qbss=0)])
+        self.assertEqual(self.q("SELECT cur_qbss_stations, cur_util_pct FROM devices"),
+                         [(None, None)])
+
+    def test_ap_load_new_hour_new_row(self):
+        hour = TS - TS % 3600
+        self.poll(TS, [AP_RAW])
+        self.poll(hour + 3600, [self.later(AP_RAW, 10)])
+        self.assertEqual(self.q("SELECT hour, polls FROM ap_load_hourly ORDER BY hour"),
+                         [(hour, 1), (hour + 3600, 1)])
+
+    def test_prune_removes_ended_load_hours_only(self):
+        hour = TS - TS % 3600
+        self.poll(TS, [AP_RAW])
+        self.assertEqual(self.store.prune(hour + 3599)["ap_load_hourly"], 0)
+        self.assertEqual(self.store.prune(hour + 3600)["ap_load_hourly"], 1)
+        self.assertIn("ap_load_hourly", self.store.counts())
 
     def test_client_bssids_are_merged(self):
         self.poll(TS, [CLIENT_RAW])
@@ -178,7 +234,7 @@ class StoreTest(unittest.TestCase):
     def test_prune_keeps_identity(self):
         self.poll(TS, [AP_RAW, CLIENT_RAW])
         removed = self.store.prune(TS + 1)
-        self.assertEqual(removed, {"observations": 2, "polls": 1})
+        self.assertEqual(removed, {"observations": 2, "polls": 1, "ap_load_hourly": 0})
         self.assertEqual(self.q("SELECT COUNT(*) FROM devices")[0][0], 2)
         self.assertEqual(self.q("SELECT COUNT(*) FROM associations")[0][0], 2)
         self.assertEqual(self.q("SELECT COUNT(*) FROM probes")[0][0], 2)
@@ -361,7 +417,7 @@ class StoreTest(unittest.TestCase):
         db.close()
         store = Store(path)
         try:
-            self.assertEqual(store.get_meta("schema_version"), "6")
+            self.assertEqual(store.get_meta("schema_version"), str(SCHEMA_VERSION))
             cols = [r[1] for r in store.db.execute("PRAGMA table_info(devices)")]
             for c in ("cur_n_clients", "cur_qbss_stations", "cur_util_pct", "cur_at"):
                 self.assertIn(c, cols)
@@ -372,6 +428,27 @@ class StoreTest(unittest.TestCase):
             self.assertEqual(store.db.execute("SELECT COUNT(*) FROM client_bssids").fetchone()[0], 0)
             store.write_poll(TS, HEALTH, [shape_device(AP_RAW, TS), shape_device(CLIENT_RAW, TS)], [], 1)
             self.assertEqual(store.db.execute("SELECT COUNT(*) FROM client_bssids").fetchone()[0], 1)
+        finally:
+            store.close()
+
+    def test_migrates_v6_to_v7_adds_ap_load_hourly(self):
+        path = os.path.join(self.tmp.name, "v6.db")
+        v6 = Store(path)
+        v6.write_poll(TS, HEALTH, [shape_device(AP_RAW, TS)], [], 1)
+        v6.close()
+        db = sqlite3.connect(path)       # make it a v6 buffer: no ap_load_hourly
+        db.executescript("UPDATE meta SET value = '6' WHERE key = 'schema_version';"
+                         "DROP TABLE ap_load_hourly;")
+        db.close()
+        store = Store(path)
+        try:
+            self.assertEqual(store.get_meta("schema_version"), "7")
+            self.assertEqual(store.db.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 1)
+            self.assertEqual(store.db.execute("SELECT COUNT(*) FROM ap_load_hourly").fetchone()[0], 0)
+            raw = dict(AP_RAW)
+            raw["kismet.device.base.last_time"] += 10
+            store.write_poll(TS + 30, HEALTH, [shape_device(raw, TS + 30)], [], 1)
+            self.assertEqual(store.db.execute("SELECT polls FROM ap_load_hourly").fetchall(), [(1,)])
         finally:
             store.close()
 
