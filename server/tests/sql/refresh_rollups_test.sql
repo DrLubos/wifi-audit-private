@@ -184,6 +184,8 @@ CREATE VIEW pg_temp.got_sensor_periods AS
   SELECT kind, to_char(starts_at AT TIME ZONE 'UTC', 'HH24:MI:SS') AS t0,
          to_char(ends_at AT TIME ZONE 'UTC', 'HH24:MI:SS') AS t1, polls
   FROM sensor_periods;
+CREATE VIEW pg_temp.got_last_capture AS
+  SELECT last_capture_at, last_hop_n, last_hop_visited, last_hop_ok FROM sensor_summary;
 CREATE VIEW pg_temp.got_events AS
   SELECT kind, type, device_key, to_char(ts AT TIME ZONE 'UTC', 'HH24:MI:SS') AS t0,
          to_char(ts_end AT TIME ZONE 'UTC', 'HH24:MI:SS') AS t1, severity, summary
@@ -257,8 +259,9 @@ SELECT pg_temp.check_rows('events, full', 'SELECT * FROM pg_temp.got_events', $$
          ('sensor', 'sensor_outage', NULL, '10:59:30', '12:20:00', 'medium', 'Sensor not collecting') $$);
 
 -- --- 2. a later import, then an incremental refresh ---------------------------------------
-INSERT INTO polls (sensor_id, ts, new_obs, ok, ds_hop_ok, ds_running, devices_active)
-SELECT 1, t, 1, true, true, true, 3
+INSERT INTO polls (sensor_id, ts, new_obs, ok, ds_hop_ok, ds_running, devices_active, ds_hop_n,
+                   ds_hop_visited)
+SELECT 1, t, 1, true, true, true, 3, 13, 13
 FROM generate_series(timestamptz '2026-09-20 13:00:00+00', timestamptz '2026-09-20 13:04:30+00',
                      interval '30 seconds') t;
 INSERT INTO devices (sensor_id, device_key, mac, type, first_seen, last_seen, ssid, cloaked, crypt,
@@ -350,8 +353,23 @@ SELECT pg_temp.check_rows('idempotent: ' || t, format('SELECT * FROM pg_temp.got
 FROM unnest(ARRAY['ap_hourly', 'sensor_hourly', 'ap_summary', 'sensor_summary', 'capture', 'security',
                   'periods', 'aps', 'ap_sensors', 'sensor_periods', 'events']) t;
 
+-- --- 4. the adapter lost (2026-10-06): Kismet still answers, its datasource
+-- reports no channels, then the polls fail. The last capture keeps its hop list.
+SELECT pg_temp.check_rows('last capture, before', 'SELECT * FROM pg_temp.got_last_capture', $$
+  VALUES (timestamptz '2026-09-20 13:04:30+00', 13, 13, true) $$);
+INSERT INTO polls (sensor_id, ts, new_obs, ok, ds_hop_ok, ds_running, devices_active, ds_hop_n,
+                   ds_hop_visited)
+SELECT 1, t, 0, true, false, false, 0, 0, 0
+FROM generate_series(timestamptz '2026-09-20 13:05:00+00', timestamptz '2026-09-20 13:06:30+00',
+                     interval '30 seconds') t
+UNION ALL
+SELECT 1, '2026-09-20 13:07:00+00', 0, false, NULL, NULL, NULL, NULL, NULL;
+SELECT count(*) FROM refresh_rollups(1, '2026-09-20 13:05+00');
+SELECT pg_temp.check_rows('last capture, adapter lost', 'SELECT * FROM pg_temp.got_last_capture', $$
+  VALUES (timestamptz '2026-09-20 13:04:30+00', 13, 13, true) $$);
+
 DO $$ BEGIN
-  RAISE NOTICE 'refresh_rollups: PASS (full run vs hand-computed rows; incremental run = full run after a new AP, 2 re-classifications and a closed gap; idempotent; schema 9: capture polls, security, periods, aps, sensor periods, events)';
+  RAISE NOTICE 'refresh_rollups: PASS (full run vs hand-computed rows; incremental run = full run after a new AP, 2 re-classifications and a closed gap; idempotent; schema 9: capture polls, security, periods, aps, sensor periods, events, the hop list of the last capture)';
 END $$;
 
 ROLLBACK;

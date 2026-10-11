@@ -1264,8 +1264,8 @@ CREATE TABLE IF NOT EXISTS sensor_summary (
   alerts_last_ts   timestamptz,
   baselines        integer NOT NULL,         -- ap_baselines rows with statistics
   refreshed_at     timestamptz NOT NULL,     -- when refresh_rollups() last ran: the api's ETag
-  -- schema 9: the last collecting poll and the hop list as last measured
-  -- (the newest poll with hop values; a poll of a dead datasource has none)
+  -- schema 9: the last collecting poll and its hop list (the hop list of the
+  -- last capture: a lost adapter's datasource reports 0 channels, not ok)
   last_capture_at  timestamptz,
   last_hop_n       integer,
   last_hop_visited integer,
@@ -1898,14 +1898,12 @@ BEGIN
          (SELECT max(ts) FROM alerts WHERE sensor_id = p_sensor_id),
          (SELECT count(*) FROM ap_baselines WHERE sensor_id = p_sensor_id AND rssi_median IS NOT NULL),
          v_now,
-         (SELECT max(ts) FROM polls
-          WHERE sensor_id = p_sensor_id AND ok AND ds_running AND devices_active > 0),
-         lp.ds_hop_n, lp.ds_hop_visited, lp.ds_hop_ok
+         lp.ts, lp.ds_hop_n, lp.ds_hop_visited, lp.ds_hop_ok
   FROM (SELECT min(ts) AS first_poll, max(ts) AS last_poll, count(*) AS polls,
                count(*) FILTER (WHERE ok) AS polls_ok, coalesce(sum(new_obs), 0) AS obs_total
         FROM polls WHERE sensor_id = p_sensor_id) pl
-  LEFT JOIN LATERAL (SELECT ds_hop_n, ds_hop_visited, ds_hop_ok FROM polls
-                     WHERE sensor_id = p_sensor_id AND ds_hop_n IS NOT NULL
+  LEFT JOIN LATERAL (SELECT ts, ds_hop_n, ds_hop_visited, ds_hop_ok FROM polls
+                     WHERE sensor_id = p_sensor_id AND ok AND ds_running AND devices_active > 0
                      ORDER BY ts DESC LIMIT 1) lp ON true
   ON CONFLICT (sensor_id) DO UPDATE SET
       first_poll = EXCLUDED.first_poll, last_poll = EXCLUDED.last_poll,
