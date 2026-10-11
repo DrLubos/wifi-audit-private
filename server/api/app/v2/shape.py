@@ -146,6 +146,9 @@ SECURITY_LEVELS = (("open", "Open"), ("legacy", "Legacy (WEP, WPA1/TKIP)"),
                    ("unknown", "Unknown"))
 
 
+SECURITY_ORDER = {lv: i for i, (lv, _) in enumerate(SECURITY_LEVELS)}     # open first
+
+
 def security_rows(counts):
     """[{level, label, aps, share}] in the fixed order of the security scale."""
     by = {r["level"]: r["n"] for r in counts}

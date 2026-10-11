@@ -45,13 +45,6 @@ def _cursor(token, name):
         raise HTTPException(status_code=422, detail="%s: invalid cursor" % name) from None
 
 
-def _allowed_bssids(conn, acc, values):
-    macs = sorted(privacy.macs_in(values))
-    if not macs:
-        return set()
-    return {r["bssid"] for r in deps.run(conn, _Q, "bssids", account_id=acc["id"], macs=macs)}
-
-
 def _item(r):
     return {
         "id": r["id"], "ts": iso(r["ts"]), "ts_end": iso(r["ts_end"]), "severity": r["severity"],
@@ -89,7 +82,7 @@ def events(request: Request, acc=Depends(deps.get_account), sensor: str = Depend
         counts = deps.run(conn, _Q, "counts", **filters)
         rows = deps.run(conn, _Q, "feed", status=statuses, before_ts=b[0], before_id=b[1],
                         after_ts=a[0], after_id=a[1], oldest_first=bool(after), limit=limit + 1, **filters)
-        allowed = _allowed_bssids(conn, acc, [[r["bssid"], r["summary"]] for r in rows])
+        allowed = deps.allowed_bssids(conn, acc, [[r["bssid"], r["summary"]] for r in rows])
     # one row more than the page: more events in the direction of travel
     more = len(rows) > limit
     if more:
@@ -130,7 +123,7 @@ def event(request: Request, event_id: int = Path(ge=1, le=2 ** 63 - 1), acc=Depe
             # the hours of the event; a point event: its hour
             end = r["ts_end"] or ts
             who = deps.run(conn, _Q, "who_saw_it", ap_id=r["ap_id"], ts=ts, ts_end=end)
-        allowed = _allowed_bssids(conn, acc, [r["bssid"], r["summary"], r["evidence"]])
+        allowed = deps.allowed_bssids(conn, acc, [r["bssid"], r["summary"], r["evidence"]])
     item = _item(r)
     item.update({"status_note": r["status_note"], "created_at": iso(r["created_at"]),
                  "updated_at": iso(r["updated_at"])})

@@ -28,3 +28,8 @@ FROM sensor_hourly h
 WHERE h.sensor_id = ANY (%(sensor_ids)s::int[])
   AND h.hour >= %(from)s::timestamptz AND h.hour < %(to)s::timestamptz
 ORDER BY h.hour, h.sensor_id
+
+-- name: bssids
+-- Which of the given MACs are BSSIDs of the account's APs (the privacy redaction).
+SELECT upper(a.bssid::text) AS bssid FROM aps a
+WHERE a.account_id = %(account_id)s AND a.bssid = ANY (%(macs)s::macaddr[])

@@ -92,8 +92,3 @@ LEFT JOIN ap_rssi_hourly h ON h.sensor_id = x.sensor_id AND h.device_key = x.dev
 WHERE x.ap_id = %(ap_id)s::bigint
 GROUP BY se.id, se.name, su.first_seen, su.last_seen, x.sensor_id, x.device_key
 ORDER BY se.id
-
--- name: bssids
--- Which of the given MACs are BSSIDs of the account's APs (the privacy redaction).
-SELECT upper(a.bssid::text) AS bssid FROM aps a
-WHERE a.account_id = %(account_id)s AND a.bssid = ANY (%(macs)s::macaddr[])

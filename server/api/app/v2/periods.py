@@ -49,7 +49,7 @@ class Period:
 
     def label(self):
         local = ZoneInfo(self.tz)
-        return "%s: %s – %s" % (TITLE[self.range], fmt_local(self.start, local),
+        return "%s: %s – %s" % (TITLE.get(self.range, "last " + self.range), fmt_local(self.start, local),
                                 fmt_local(self.now, local))
 
     def envelope(self, sensor_filter):
@@ -115,3 +115,13 @@ def local_days(tz, now, days):
         d = today - timedelta(days=days - 1 - i)
         out.append((d.date(), _to_utc(d, local), _to_utc(d + timedelta(days=1), local)))
     return out
+
+
+def days_window(tz, now, days):
+    """A period of `days` local calendar days ending today (partial), one
+    bucket per day - the AP page's 4-week clients heatmap."""
+    local = ZoneInfo(tz)
+    now = now.astimezone(UTC)
+    today = now.astimezone(local).replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
+    edges = [_to_utc(today - timedelta(days=days - 1 - i), local) for i in range(days + 1)]
+    return Period("%dd" % days, tz, "1d", tuple(edges[:-1]), tuple(edges[1:]), now)

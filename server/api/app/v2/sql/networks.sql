@@ -103,7 +103,8 @@ WITH cand AS MATERIALIZED (
 SELECT v.ap_id, upper(v.bssid::text) AS bssid, v.network_name AS network, v.kind, v.manuf, v.random_bssid,
        v.adv_channel AS channel, v.band, v.ht_mode, v.security, v.security_label, mfp_state(v.mfp_sup, v.mfp_req) AS mfp,
        v.classification, v.classified_by, vd.reason,
-       coalesce(v.cur_qbss_stations, v.cur_n_clients) AS clients, v.cur_at, v.first_seen, v.last_seen,
+       CASE WHEN coalesce(v.cur_qbss_stations, 0) > 0 OR coalesce(v.cur_util_pct, 0) > 0     -- as aps._clients
+            THEN v.cur_qbss_stations ELSE v.cur_n_clients END AS clients, v.cur_at, v.first_seen, v.last_seen,
        (SELECT json_object_agg(r.sensor, round(r.median::numeric, 1)) FROM rssi r WHERE r.ap_id = v.ap_id) AS rssi,
        (SELECT max(r.last_hour) FROM rssi r WHERE r.ap_id = v.ap_id) AS last_hour,
        (SELECT max(d.id) FROM detections d

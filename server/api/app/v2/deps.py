@@ -17,7 +17,7 @@ from typing import Literal
 from fastapi import HTTPException, Query, Request, Response
 
 from .. import cache, db
-from . import periods, queries, shape
+from . import periods, privacy, queries, shape
 
 ACCOUNT_ID = 1
 
@@ -118,6 +118,15 @@ def _default(v):
 def respond(body, tag):
     return Response(content=json.dumps(body, separators=(",", ":"), ensure_ascii=False, default=_default),
                     media_type="application/json", headers=cache.headers(tag))
+
+
+def allowed_bssids(conn, acc, values):
+    """The MACs in values that are BSSIDs of the account's APs - what
+    privacy.redact() may leave in a response."""
+    macs = sorted(privacy.macs_in(values))
+    if not macs:
+        return set()
+    return {r["bssid"] for r in run(conn, _Q, "bssids", account_id=acc["id"], macs=macs)}
 
 
 def account_head(acc):

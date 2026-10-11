@@ -114,6 +114,14 @@ class Ranges(unittest.TestCase):
         with self.assertRaises(ValueError):                        # half-hour offset
             periods.period("30d", "Asia/Kolkata", utc(2026, 10, 10))
 
+    def test_days_window(self):
+        p = periods.days_window(TZ, utc(2026, 10, 10, 15, 52), 28)
+        self.assertEqual(len(p.starts), 28)
+        self.assertEqual(p.starts[-1], utc(2026, 10, 9, 22))       # today 00:00 local
+        self.assertEqual(p.starts[0], utc(2026, 9, 12, 22))
+        self.check_contiguous(p)
+        self.assertEqual(p.label(), "last 28d: 13 Sep 00:00 – 10 Oct 17:52")
+
     def test_local_days(self):
         days = periods.local_days(TZ, utc(2026, 10, 25, 12), 3)
         self.assertEqual([d for d, _, _ in days], [date(2026, 10, 23), date(2026, 10, 24), date(2026, 10, 25)])
