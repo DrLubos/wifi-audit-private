@@ -63,3 +63,44 @@ LEFT JOIN LATERAL (
   WHERE h.sensor_id = se.id AND h.hour >= ss.last_poll - interval '7 days') ap7 ON true
 WHERE se.account_id = %(account_id)s
 ORDER BY se.id
+
+-- name: sensor
+-- One sensor of the account by name (the per-sensor endpoints).
+SELECT se.id, se.name, ss.first_poll, ss.last_poll, ss.last_capture_at
+FROM sensors se LEFT JOIN sensor_summary ss ON ss.sensor_id = se.id
+WHERE se.account_id = %(account_id)s AND se.name = %(name)s
+
+-- name: outages
+-- Outages and limited periods of a sensor, newest first: the periods
+-- derived from its polls (sensor_periods) with the documented cause of the
+-- overlapping annotations (gap / no frames for an outage, coverage for a
+-- limited period), plus the documented windows no derived period covers
+-- (limited capture before buffer v4 had no hop flag) and restarts.
+SELECT p.kind AS type, p.starts_at, p.ends_at, p.ends_at IS NULL AS ongoing,
+       extract(epoch FROM coalesce(p.ends_at, ss.last_poll) - p.starts_at)::int AS duration_s, p.polls,
+       'polls' AS source,
+       (SELECT string_agg(a.label, '; ' ORDER BY a.starts_at) FROM sensor_annotations a
+        WHERE a.sensor_id = p.sensor_id
+          AND CASE p.kind WHEN 'outage' THEN a.kind IN ('gap', 'no_frames') ELSE a.kind = 'coverage' END
+          AND a.starts_at < coalesce(p.ends_at, 'infinity') AND coalesce(a.ends_at, a.starts_at) > p.starts_at) AS cause
+FROM sensor_periods p
+JOIN sensor_summary ss ON ss.sensor_id = p.sensor_id
+WHERE p.sensor_id = %(sensor_id)s
+UNION ALL
+SELECT CASE a.kind WHEN 'restart' THEN 'restart' WHEN 'coverage' THEN 'limited' ELSE 'outage' END,
+       a.starts_at, a.ends_at, false, extract(epoch FROM a.ends_at - a.starts_at)::int, NULL, 'annotation', a.label
+FROM sensor_annotations a
+WHERE a.sensor_id = %(sensor_id)s AND a.kind IN ('restart', 'gap', 'no_frames', 'coverage')
+  AND (a.kind = 'restart' OR NOT EXISTS (
+        SELECT 1 FROM sensor_periods p
+        WHERE p.sensor_id = a.sensor_id
+          AND CASE p.kind WHEN 'outage' THEN a.kind IN ('gap', 'no_frames') ELSE a.kind = 'coverage' END
+          AND p.starts_at < coalesce(a.ends_at, a.starts_at) AND coalesce(p.ends_at, 'infinity') > a.starts_at))
+ORDER BY 2 DESC
+
+-- name: coverage_notes
+-- Documented windows of limited capture (sensor_annotations, coverage) in
+-- the given time range: the polls before the hop guard cannot show them.
+SELECT a.starts_at, a.ends_at FROM sensor_annotations a
+WHERE a.sensor_id = %(sensor_id)s AND a.kind = 'coverage' AND a.ends_at IS NOT NULL
+  AND a.starts_at < %(to)s::timestamptz AND a.ends_at > %(from)s::timestamptz

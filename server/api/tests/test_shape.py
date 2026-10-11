@@ -183,6 +183,26 @@ class Networks(unittest.TestCase):
         self.assertEqual(peak["label"], "Mon 10:00")
 
 
+class SensorDays(unittest.TestCase):
+    def test_day_shares(self):
+        tz = "UTC"
+        s = {"id": 1, "first_poll": utc(2026, 10, 1, 6), "last_poll": utc(2026, 10, 2, 11, 59, 30)}
+        days = periods.local_days(tz, utc(2026, 10, 3, 12), 3)
+        rows = [hour(utc(2026, 10, 1, h)) for h in range(6, 24)]
+        rows += [hour(utc(2026, 10, 2, h), capture=0 if h == 3 else 120) for h in range(12)]
+        rows[-2] = dict(rows[-2], limited_polls=60)                     # 2 Oct 10:00, half the polls limited
+        out = shape.day_coverage(days, rows, s, utc(2026, 10, 3, 12),
+                                 [(utc(2026, 10, 2, 8), utc(2026, 10, 2, 9))])  # documented: 08:00-09:00 limited
+        d1, d2, d3 = out
+        self.assertEqual((d1["ok"], d1["not_installed"], d1["outage"], d1["no_data"]), (0.75, 0.25, 0.0, 0.0))
+        self.assertEqual(d2["limited"], round((3600 + 1800) / 86400, 3))
+        self.assertEqual(d2["outage"], round(3600 / 86400, 3))           # 03:00 not collecting
+        self.assertEqual(d2["no_data"], 0.5)                              # after 12:00:00 (last poll + 30 s)
+        self.assertAlmostEqual(d2["ok"] + d2["limited"] + d2["outage"] + d2["no_data"], 1.0, places=2)
+        self.assertEqual(d3, {"date": "2026-10-03", "ok": 0.0, "limited": 0.0, "outage": 0.0,
+                              "not_installed": 0.0, "no_data": 1.0})
+
+
 class Spectrum(unittest.TestCase):
     def test_band_dfs_iqr(self):
         self.assertEqual([shape.band_of(c) for c in ("1", "13", "36", "165", "", None, "6e")],

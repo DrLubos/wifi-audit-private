@@ -343,6 +343,57 @@ def iqr(values):
     return [round(q[0], 1), round(q[2], 1)]
 
 
+def _overlap(a, b, c, d):
+    lo, hi = max(a, c), min(b, d)
+    return max(0.0, (hi - lo).total_seconds())
+
+
+def day_coverage(days, hours, sensor, now, limited_windows=(), poll_s=POLL_S):
+    """Coverage per local day of one sensor (Sensors board): the shares of
+    the day (up to now) that were ok (collecting, full hop list), limited
+    (collecting, hop list degraded - by the polls' hop flag or inside a
+    documented coverage window), outage (between the first and the last poll
+    but not collecting), not installed (before the first poll) and no data
+    (after the last imported poll). days: [(date, start, end)] in UTC
+    (periods.local_days); hours: its sensor_hourly rows; limited_windows:
+    [(start, end)] of its coverage annotations."""
+    first, last = sensor["first_poll"], sensor["last_poll"]
+    data_end = last + timedelta(seconds=poll_s) if last else None
+    by_hour = {r["hour"]: r for r in hours if r["sensor_id"] == sensor["id"]}
+    out = []
+    for d, a, b in days:
+        b = min(b, now)
+        total = (b - a).total_seconds()
+        row = {"date": d.isoformat(), "ok": 0.0, "limited": 0.0, "outage": 0.0, "not_installed": 0.0,
+               "no_data": 0.0}
+        if total <= 0:
+            out.append(row)
+            continue
+        if first is None:
+            row["not_installed"] = 1.0
+            out.append(row)
+            continue
+        cap = lim = 0.0
+        h = a
+        while h < b:
+            r = by_hour.get(h)
+            if r is not None and r["capture_polls"]:
+                c = hour_capture_s(r, first, last, poll_s)
+                noted = min(3600.0, sum(_overlap(h, h + HOUR, ws, we) for ws, we in limited_windows)) / 3600
+                cap += c
+                lim += c * max(r["limited_polls"] / r["capture_polls"], noted)
+            h += HOUR
+        window = _overlap(a, b, first, data_end)
+        row.update({
+            "ok": round((cap - lim) / total, 3), "limited": round(lim / total, 3),
+            "outage": round(max(0.0, window - cap) / total, 3),
+            "not_installed": round(_overlap(a, b, a, first) / total, 3),
+            "no_data": round(_overlap(a, b, data_end, b) / total, 3),
+        })
+        out.append(row)
+    return out
+
+
 def sensor_status(last_capture_at, last_poll, now, offline_min):
     """online | offline | no_data and the seconds since the last collecting poll.
 

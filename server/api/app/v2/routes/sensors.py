@@ -10,9 +10,9 @@ sensor's last poll (sql/sensors.sql). ETag epoch: the current minute.
 
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
-from .. import deps, queries, shape
+from .. import deps, periods, queries, shape
 from ..periods import iso
 
 router = APIRouter(tags=["v2 sensors"])
@@ -86,4 +86,49 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
         "write": {"enabled": False},
         "sensors": out,
     }
+    return deps.respond(body, tag)
+
+
+def _sensor(conn, acc, name):
+    found = deps.run(conn, _Q, "sensor", account_id=acc["id"], name=name)
+    if not found:
+        raise HTTPException(status_code=404, detail="unknown sensor")
+    return found[0]
+
+
+@router.get("/sensors/{name}/coverage")
+def coverage(request: Request, name: str = Path(max_length=64), days: int = Query(14, ge=1, le=60),
+             acc=Depends(deps.get_account)):
+    """Shares of each of the last `days` local days (today partial): ok,
+    limited, outage, not installed, no data (after the last import)."""
+    tag, cached = deps.etag(request, acc, deps.minute_epoch())
+    if cached:
+        return cached
+    now = shape.utc_now()
+    window = periods.local_days(acc["tz"], now, days)
+    with deps.connection() as conn:
+        s = _sensor(conn, acc, name)
+        span = {"from": window[0][1], "to": window[-1][2]}
+        hours = deps.run(conn, _QC, "sensor_hours", sensor_ids=[s["id"]], **span)
+        notes = deps.run(conn, _Q, "coverage_notes", sensor_id=s["id"], **span)
+    limited = [(n["starts_at"], n["ends_at"]) for n in notes]
+    body = {"sensor": s["name"], "tz": acc["tz"], "first_poll": iso(s["first_poll"]),
+            "data_until": iso(s["last_poll"]), "days": shape.day_coverage(window, hours, s, now, limited)}
+    return deps.respond(body, tag)
+
+
+@router.get("/sensors/{name}/outages")
+def outages(request: Request, name: str = Path(max_length=64), acc=Depends(deps.get_account)):
+    """Outages and limited periods, newest first: derived from the polls
+    (with the documented cause) and documented windows no poll shows."""
+    tag, cached = deps.etag(request, acc, None)
+    if cached:
+        return cached
+    with deps.connection() as conn:
+        s = _sensor(conn, acc, name)
+        rows = deps.run(conn, _Q, "outages", sensor_id=s["id"])
+    body = {"sensor": s["name"], "items": [
+        {"type": r["type"], "from": iso(r["starts_at"]), "to": iso(r["ends_at"]), "ongoing": r["ongoing"],
+         "duration_s": r["duration_s"], "polls": r["polls"], "source": r["source"], "cause": r["cause"]}
+        for r in rows]}
     return deps.respond(body, tag)

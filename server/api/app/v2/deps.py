@@ -36,8 +36,9 @@ def connection():
         yield conn
 
 
-def run(conn, group_queries, name, **params):
-    return conn.execute(group_queries[name], params).fetchall()
+def run(conn, group_queries, query, /, **params):
+    """Rows of a named query; positional-only, so any name is free for the SQL parameters."""
+    return conn.execute(group_queries[query], params).fetchall()
 
 
 def get_account():
