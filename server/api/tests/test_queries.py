@@ -56,6 +56,14 @@ class SqlFiles(unittest.TestCase):
         with self.assertRaises(ValueError):
             queries.parse("-- name: a\nSELECT 1\n-- name: a\nSELECT 2\n")
 
+    def test_fragments(self):
+        qs = queries.parse("-- name: _f\nWHERE x = %(x)s\n-- name: a\nSELECT 1 FROM t {{_f}}\n"
+                           "-- name: b\nSELECT count(*) FROM t {{_f}} AND y\n")
+        self.assertEqual(qs, {"a": "SELECT 1 FROM t WHERE x = %(x)s",
+                              "b": "SELECT count(*) FROM t WHERE x = %(x)s AND y"})
+        with self.assertRaises(ValueError):
+            queries.parse("-- name: a\nSELECT 1 {{_missing}}\n")
+
 
 if __name__ == "__main__":
     unittest.main()

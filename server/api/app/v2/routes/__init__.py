@@ -2,8 +2,8 @@
 
 from fastapi import APIRouter
 
-from . import overview, sensors
+from . import events, overview, sensors
 
 router = APIRouter(prefix="/api/v2")
-for _module in (sensors, overview):
+for _module in (sensors, overview, events):
     router.include_router(_module.router)
