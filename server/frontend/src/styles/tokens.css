@@ -1,0 +1,62 @@
+/* Dashboard v2 tokens (SPEC section 2, boards/Main.dc.html). Light only, as
+   the boards. Status scale for security levels, fixed categorical order for
+   series, the sequential blue ramp of the heatmaps. */
+:root {
+  --font: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --bg: #f4f5f2;
+  --surface: #ffffff;
+  --text: #1c2024;
+  --muted: #535b63;
+  --faint: #8c939a;
+  --link: #0b5c7a;
+  --link-hover: #07445b;
+  --border: #daddd6;
+  --border-soft: #eceeea;
+  --control: #c9cdc5;
+  --wash: #e6e9e3;
+  --wash-soft: #f1f3ef;
+  --focus: #0b5c7a;
+
+  --side-bg: #1f2a2e;
+  --side-text: #e6eae8;
+  --side-muted: #a9b4b2;
+  --side-faint: #8e9a98;
+  --side-hover: #2a383d;
+  --side-current: #33464c;
+  --side-soft: #c3ccca;
+
+  /* badges: background / text */
+  --ok-bg: #e3f1e8;    --ok-fg: #1d6b43;
+  --warn-bg: #fcebd5;  --warn-fg: #8a4b00;
+  --bad-bg: #fbe3e1;   --bad-fg: #a61b1b;
+  --info-bg: #e2ecf8;  --info-fg: #1f4e8c;
+  --neu-bg: #eceeea;   --neu-fg: #3f474e;
+
+  /* categorical series, fixed order */
+  --c1: #2a78d6;
+  --c2: #eb6834;
+  --c3: #1baf7a;
+  --c4: #eda100;
+
+  /* security levels (status scale) */
+  --lvl-open: #d03b3b;
+  --lvl-legacy: #ec835a;
+  --lvl-psk: #fab219;
+  --lvl-strong: #0ca30c;
+  --lvl-unknown: #c9cdc5;
+
+  /* status dots */
+  --dot-ok: #0ca30c;
+  --dot-bad: #d03b3b;
+  --dot-neu: #8e9a98;
+
+  --hatch: repeating-linear-gradient(45deg, #c9cdc5 0 3px, #ffffff 3px 6px);
+  --spark: #2a78d6;
+  --spark-on: #184f95;
+  --spark-off: #daddd6;
+
+  --ramp-1: #cde2fb; --ramp-2: #9ec5f4; --ramp-3: #6da7ec; --ramp-4: #3987e5;
+  --ramp-5: #256abf; --ramp-6: #184f95; --ramp-7: #0d366b;
+}

@@ -7,6 +7,10 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
+# The pure logic of the dashboard (formatting, filters, query cache, chart
+# geometry: src/**/*.test.js) under Node's own test runner - a failing test
+# stops the build, so a broken image is never deployed.
+RUN node --test
 ENV NODE_OPTIONS=--max-old-space-size=512
 RUN npm run build
 

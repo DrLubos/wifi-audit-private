@@ -1,0 +1,322 @@
+/* The previous dashboard's stylesheet, scoped to its pages (.legacy wraps
+   them inside the new shell during the switch, PLAN.md 8.1; deleted with
+   the legacy pages in phase 5). Generated from the old src/index.css: every
+   selector prefixed with .legacy, :root/body mapped to .legacy itself. */
+/* Tokens (light), dark under the OS setting and under an explicit toggle.
+   Chart hues are the dataviz reference palette: series slot 1 (blue) for the
+   data, a neutral gray for the baseline reference. */
+.legacy {
+  color-scheme: light;
+  --bg: #fcfcfb;
+  --surface: #ffffff;
+  --border: #e6e5e1;
+  --text: #0b0b0b;
+  --text-2: #52514e;
+  --text-3: #8a8983;
+  --grid: #eceae5;
+  --series-1: #2a78d6;
+  --series-1-fill: rgba(42, 120, 214, 0.15);
+  --baseline: #8a8983;
+  --baseline-fill: rgba(138, 137, 131, 0.18);
+  --ok: #1a7f37;
+  --bad: #b3261e;
+  --warn: #9a6700;
+  --changed: #fff3c4;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+.legacy:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #1a1a19;
+    --surface: #222221;
+    --border: #33332f;
+    --text: #ffffff;
+    --text-2: #c3c2b7;
+    --text-3: #8f8e86;
+    --grid: #2c2c29;
+    --series-1: #3987e5;
+    --series-1-fill: rgba(57, 135, 229, 0.22);
+    --baseline: #8f8e86;
+    --baseline-fill: rgba(143, 142, 134, 0.22);
+    --ok: #3fb950;
+    --bad: #f0716b;
+    --warn: #d29922;
+    --changed: #4a3f12;
+  }
+}
+.legacy[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1a1a19;
+  --surface: #222221;
+  --border: #33332f;
+  --text: #ffffff;
+  --text-2: #c3c2b7;
+  --text-3: #8f8e86;
+  --grid: #2c2c29;
+  --series-1: #3987e5;
+  --series-1-fill: rgba(57, 135, 229, 0.22);
+  --baseline: #8f8e86;
+  --baseline-fill: rgba(143, 142, 134, 0.22);
+  --ok: #3fb950;
+  --bad: #f0716b;
+  --warn: #d29922;
+  --changed: #4a3f12;
+}
+.legacy, .legacy * { box-sizing: border-box; }
+.legacy {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.legacy a { color: inherit; }
+/* --- shell --------------------------------------------------------------- */
+.legacy .topbar {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.legacy .brand {
+  font-weight: 600;
+  text-decoration: none;
+  letter-spacing: 0.01em;
+}
+.legacy .topbar nav { display: flex; gap: 1rem; }
+.legacy .topbar nav a {
+  text-decoration: none;
+  color: var(--text-2);
+  padding: 0.2rem 0;
+  border-bottom: 2px solid transparent;
+}
+.legacy .topbar nav a.active { color: var(--text); border-bottom-color: var(--series-1); }
+.legacy .topbar .spacer { flex: 1; }
+.legacy main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.25rem 1rem 3rem;
+}
+.legacy h1 { font-size: 1.35rem; margin: 0 0 0.25rem; }
+.legacy h2 { font-size: 1.05rem; margin: 1.75rem 0 0.6rem; }
+.legacy h1 small,
+.legacy h2 small { font-weight: 400; color: var(--text-3); margin-left: 0.5rem; }
+.legacy .muted { color: var(--text-3); }
+.legacy .sub { color: var(--text-2); margin: 0 0 1rem; }
+.legacy .mono { font-family: var(--mono); font-size: 0.92em; }
+.legacy .error { color: var(--bad); }
+.legacy .num { text-align: right; font-variant-numeric: tabular-nums; }
+.legacy .crumbs { margin-bottom: 0.75rem; }
+.legacy .crumbs a { color: var(--text-2); text-decoration: none; }
+.legacy .crumbs a:hover { text-decoration: underline; }
+/* --- health badge -------------------------------------------------------- */
+.legacy .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-2);
+}
+.legacy .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
+.legacy .badge.ok .dot { background: var(--ok); }
+.legacy .badge.bad .dot { background: var(--bad); }
+/* --- stat tiles ---------------------------------------------------------- */
+.legacy .tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.6rem;
+  margin: 0.75rem 0;
+}
+.legacy .tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  min-width: 0;
+}
+.legacy .tile-label { color: var(--text-2); font-size: 0.82rem; }
+.legacy .tile-value { font-size: 1.45rem; font-weight: 600; margin-top: 0.1rem; white-space: nowrap; }
+.legacy .tile-hint { color: var(--text-3); font-size: 0.8rem; margin-top: 0.1rem; }
+/* --- tables -------------------------------------------------------------- */
+.legacy .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.legacy table { border-collapse: collapse; width: 100%; }
+.legacy th,
+.legacy td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  vertical-align: top;
+}
+.legacy th {
+  font-weight: 600;
+  color: var(--text-2);
+  font-size: 0.82rem;
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+}
+.legacy th.sortable { cursor: pointer; user-select: none; }
+.legacy th.sortable:hover { color: var(--text); }
+.legacy th .arrow { color: var(--text-3); font-size: 0.75em; margin-left: 0.25rem; }
+.legacy tbody tr:last-child td { border-bottom: none; }
+.legacy tbody tr.clickable { cursor: pointer; }
+.legacy tbody tr.clickable:hover { background: var(--bg); }
+.legacy td.changed { background: var(--changed); }
+.legacy td.wrap { white-space: normal; }
+.legacy .small-table th,
+.legacy .small-table td { padding: 0.3rem 0.6rem; }
+.legacy .inline-tables { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; }
+.legacy .inline-tables .table-wrap { flex: 1 1 320px; }
+/* --- filter row ---------------------------------------------------------- */
+.legacy .filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.75rem 0;
+}
+.legacy .filters input[type="search"] {
+  font: inherit;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  min-width: 240px;
+}
+.legacy .chips { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+.legacy .chip,
+.legacy .seg button {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.legacy .chip[aria-pressed="true"],
+.legacy .seg button[aria-pressed="true"] {
+  color: var(--text);
+  border-color: var(--series-1);
+  box-shadow: inset 0 0 0 1px var(--series-1);
+}
+.legacy .seg { display: inline-flex; gap: 0.25rem; }
+.legacy .filters .count { margin-left: auto; color: var(--text-3); }
+/* --- chart --------------------------------------------------------------- */
+.legacy .chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 0.75rem 0.5rem;
+}
+.legacy .chart-head { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 0.4rem; }
+.legacy .chart-head h2 { margin: 0; }
+.legacy .chart-head .seg { margin-left: auto; }
+.legacy .readout {
+  min-height: 1.6em;
+  font-size: 0.9rem;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin-bottom: 0.3rem;
+}
+.legacy .readout b { color: var(--text); font-weight: 600; }
+.legacy .readout .key { display: inline-block; width: 14px; height: 0; border-top: 2px solid var(--series-1); vertical-align: middle; margin-right: 0.35rem; }
+.legacy .readout .key.band { border-top-width: 6px; border-top-color: var(--series-1-fill); }
+.legacy .readout .key.base { border-top-style: dashed; border-top-color: var(--baseline); }
+.legacy .chart { transition: opacity 0.15s; }
+.legacy .chart.loading { opacity: 0.45; }
+.legacy .chart .uplot { font-family: var(--font); }
+.legacy .chart .u-legend { display: none; }
+.legacy details.table-view { margin-top: 0.5rem; }
+.legacy details.table-view summary { cursor: pointer; color: var(--text-2); font-size: 0.85rem; }
+.legacy details.table-view .table-wrap { max-height: 320px; overflow: auto; margin-top: 0.5rem; }
+/* --- header block of the AP page ---------------------------------------- */
+.legacy .ap-head { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; color: var(--text-2); margin-bottom: 0.5rem; }
+.legacy .ap-head .mono { color: var(--text); }
+.legacy .flag {
+  font-size: 0.75rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-2);
+}
+.legacy .flag.warn { color: var(--warn); border-color: currentColor; }
+/* configuration changes: one "label old -> new" chip per changed field */
+.legacy .change { display: inline-block; margin-right: 1rem; white-space: nowrap; }
+.legacy .change .label { color: var(--text-3); margin-right: 0.35rem; }
+.legacy .change.security .label { color: var(--warn); font-weight: 600; }
+.legacy .change .sep { color: var(--text-3); }
+/* --- detections ---------------------------------------------------------- */
+.legacy .sev {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.5;
+  padding: 0 0.5rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.legacy .sev-info { color: var(--text-3); }
+.legacy .sev-low { color: var(--series-1); }
+.legacy .sev-medium { color: var(--warn); }
+.legacy .sev-high { color: var(--bad); }
+.legacy .sev-critical { color: var(--surface); background: var(--bad); border-color: var(--bad); }
+.legacy tbody tr.open td { border-bottom: none; }
+.legacy tbody tr.detail-row td { white-space: normal; background: var(--bg); padding: 0.75rem 0.9rem 0.9rem; }
+.legacy .evidence .inline-tables .table-wrap { flex: 1 1 260px; }
+.legacy .evidence th { position: static; width: 45%; font-weight: 500; }
+.legacy .evidence td { white-space: normal; }
+.legacy .evidence .note { color: var(--text-2); font-size: 0.85rem; margin: 0.6rem 0 0; }
+.legacy .evidence pre {
+  margin: 0.5rem 0 0;
+  max-height: 320px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem;
+}
+@media (max-width: 640px) {
+.legacy .topbar { gap: 0.75rem; }
+.legacy .tile-value { font-size: 1.2rem; }
+}
+/* --- loading skeletons --------------------------------------------------- */
+.legacy .skeleton {
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--border) 25%, var(--bg) 50%, var(--border) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 0 1rem;
+}
+.legacy .skeleton-label { background: var(--surface); padding: 0.25rem 0.6rem; border-radius: 4px; }
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+.legacy .skeleton { animation: none; }
+}
+.legacy .tiles.skeleton-row .skeleton { height: 4.2rem; }

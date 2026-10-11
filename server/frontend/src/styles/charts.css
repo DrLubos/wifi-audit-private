@@ -1,0 +1,62 @@
+/* Chart primitives (PLAN.md 8.4) as boards/Main.dc.html: stacked columns with
+   y axis and x labels, tooltip beside the hovered column, sparklines, the
+   100 % segment bar. Hatched = no sensor collecting. */
+
+.v2 .chart { display: flex; gap: 10px; }
+.v2 .yax {
+  display: flex; flex-direction: column; justify-content: space-between; font-size: 11px; color: var(--muted);
+  text-align: right; width: 30px; padding-bottom: 4px; box-sizing: border-box; flex: 0 0 auto;
+}
+.v2 .plot {
+  position: relative; flex: 1 1 auto; min-width: 0; display: flex; align-items: flex-end; gap: 3px;
+  border-bottom: 1px solid var(--border); box-sizing: border-box; padding-bottom: 4px;
+}
+.v2 .col {
+  flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; gap: 2px;
+  border-radius: 4px 4px 0 0; outline: none; cursor: default;
+}
+.v2 .col.on { background: var(--wash); }
+.v2 .col:focus-visible { box-shadow: 0 0 0 2px var(--focus); }
+.v2 .col .evdot { align-self: center; }
+.v2 .col .gap { height: 100%; background: var(--hatch); border-radius: 4px 4px 0 0; }
+.v2 .col .seg-top { border-radius: 4px 4px 0 0; }
+.v2 .xax { position: relative; height: 18px; font-size: 12px; color: var(--muted); margin-left: 40px; }
+.v2 .xax span { position: absolute; top: 0; white-space: nowrap; }
+.v2 .chart-note { font-size: 13px; padding-top: 6px; border-top: 1px solid var(--border-soft); }
+
+.v2 .tip {
+  position: absolute; top: 0; z-index: 20; min-width: 180px; padding: 9px 11px; background: var(--surface);
+  border: 1px solid var(--control); border-radius: 8px; box-shadow: 0 6px 18px rgba(28, 32, 36, 0.16);
+  font-size: 12px; line-height: 1.4; pointer-events: none; white-space: nowrap; display: flex;
+  flex-direction: column; gap: 3px;
+}
+.v2 .tip .th { color: var(--muted); font-weight: 500; margin-bottom: 2px; }
+.v2 .tip .tr { display: flex; align-items: center; gap: 8px; }
+.v2 .tip .tr i { width: 12px; height: 3px; border-radius: 2px; flex: 0 0 auto; }
+.v2 .tip .tr b { font-weight: 600; font-size: 13px; color: var(--text); min-width: 30px; text-align: right; }
+.v2 .tip .tr span { color: var(--muted); }
+.v2 .tip .tn {
+  color: var(--muted); border-top: 1px solid var(--border-soft); padding-top: 4px; margin-top: 2px;
+  white-space: normal; max-width: 240px;
+}
+.v2 .tip.above { top: auto; bottom: calc(100% + 8px); right: 0; min-width: 0; }
+
+/* sparkline of a tile */
+.v2 .spark {
+  position: relative; display: flex; align-items: flex-end; gap: 2px; height: 40px; width: 132px; flex: 0 0 auto;
+}
+.v2 .spark > span { flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; outline: none; }
+.v2 .spark > span:focus-visible { box-shadow: 0 0 0 2px var(--focus); border-radius: 2px; }
+.v2 .spark > span > i { width: 100%; border-radius: 2px 2px 0 0; display: block; }
+
+/* 100 % segment bar */
+.v2 .segbar { display: flex; gap: 2px; height: 20px; }
+.v2 .segbar > div { outline-offset: 1px; min-width: 2px; }
+.v2 .segbar > div:focus-visible { outline: 2px solid var(--text); }
+.v2 .seglegend { display: flex; flex-wrap: wrap; gap: 6px 28px; font-size: 13px; }
+.v2 .seglegend > span {
+  display: flex; align-items: center; gap: 8px; justify-content: space-between; flex: 1 1 230px;
+  padding: 4px 8px; border-radius: 6px;
+}
+.v2 .seglegend > span.on { background: var(--wash-soft); font-weight: 600; }
+.v2 .seglegend .sw { width: 10px; height: 10px; border-radius: 2px; }

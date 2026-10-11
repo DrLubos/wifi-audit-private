@@ -1,0 +1,128 @@
+/* The shell and the components of the v2 pages, as boards/Main.dc.html.
+   Shell classes (.app .side .main .top ...) are unique; everything a page
+   uses is scoped to .v2, so the legacy pages (.legacy, legacy/legacy.css)
+   inside the same shell keep their own look until they are replaced. */
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* --- shell ------------------------------------------------------------------------------ */
+.app { display: flex; flex-wrap: wrap; min-height: 100vh; }
+.side {
+  flex: 1 1 220px; background: var(--side-bg); color: var(--side-text); padding: 22px 14px;
+  box-sizing: border-box; display: flex; flex-direction: column; gap: 18px;
+}
+@media (min-width: 900px) {
+  .side { flex: 0 0 232px; position: sticky; top: 0; height: 100vh; align-self: flex-start; }
+}
+.side .brand { display: flex; flex-direction: column; gap: 2px; padding: 0 8px; }
+.side .brand b { font-weight: 600; font-size: 16px; color: #ffffff; }
+.side .brand span { font-size: 12px; color: var(--side-muted); }
+.nav { display: flex; flex-wrap: wrap; gap: 2px; }
+.nav a {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px;
+  border-radius: 8px; color: var(--side-text); text-decoration: none; min-height: 24px; flex: 1 1 180px;
+}
+.nav a:hover { background: var(--side-hover); color: #ffffff; }
+.nav a[aria-current="page"] { background: var(--side-current); color: #ffffff; font-weight: 500; }
+.nav a:focus-visible { outline: 2px solid #ffffff; outline-offset: -2px; }
+.nav a .later { font-size: 11px; color: var(--side-faint); font-weight: 400; }
+.sb {
+  padding: 12px 8px 0; border-top: 1px solid var(--side-current); display: flex; flex-direction: column;
+  gap: 7px; font-size: 12px; color: var(--side-soft);
+}
+.sb.first { margin-top: auto; }
+.sbh { font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--side-faint); }
+.sbi { display: flex; align-items: center; gap: 8px; }
+.sbi.indent { padding-left: 16px; }
+.sb a { color: var(--side-soft); }
+.sb a:hover { color: #ffffff; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+.dot.d-ok { background: var(--dot-ok); }
+.dot.d-bad { background: var(--dot-bad); }
+.dot.d-neu { background: var(--dot-neu); }
+
+.main { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; }
+.top {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; justify-content: space-between;
+  padding: 14px 32px; background: var(--surface); border-bottom: 1px solid var(--border); min-height: 44px;
+}
+.top .filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.fl { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.sel {
+  height: 40px; padding: 0 10px; border: 1px solid var(--control); border-radius: 8px; background: var(--surface);
+  font: inherit; font-size: 14px; color: var(--text);
+}
+.sel:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.sync { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 13px; color: var(--muted); }
+
+/* --- page content ------------------------------------------------------------------------- */
+.v2 a { color: var(--link); }
+.v2 a:hover { color: var(--link-hover); }
+.v2 h1, .v2 h2, .v2 h3 { margin: 0; font-weight: 600; }
+.v2 h1 { font-size: 26px; }
+.v2 h2 { font-size: 18px; }
+.v2 h3 { font-size: 16px; }
+.v2 .mono { font-family: var(--mono); font-size: 13px; }
+.v2 .muted { color: var(--muted); }
+.v2 .small { font-size: 13px; }
+.v2 .tiny { font-size: 12px; }
+.content {
+  padding: 28px 32px 40px; display: flex; flex-direction: column; gap: 20px; max-width: 1280px;
+  box-sizing: border-box; width: 100%;
+}
+.v2 .sec {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.v2 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.v2 .card-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: baseline; }
+.v2 .card-title { display: flex; flex-direction: column; gap: 2px; }
+.v2 .row-wrap { display: flex; flex-wrap: wrap; gap: 16px; }
+
+.v2 .b {
+  display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap;
+}
+.v2 .ok { background: var(--ok-bg); color: var(--ok-fg); }
+.v2 .warn { background: var(--warn-bg); color: var(--warn-fg); }
+.v2 .bad { background: var(--bad-bg); color: var(--bad-fg); }
+.v2 .info { background: var(--info-bg); color: var(--info-fg); }
+.v2 .neu { background: var(--neu-bg); color: var(--neu-fg); }
+.v2 .mute { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
+
+.v2 .t { width: 100%; border-collapse: collapse; }
+.v2 .t th {
+  text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 10px 12px;
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.v2 .t td { padding: 10px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
+.v2 .t tbody tr:last-child td { border-bottom: none; }
+.v2 .nw td { white-space: nowrap; }
+.v2 .scroll-x { overflow-x: auto; }
+
+.v2 .lg { display: flex; gap: 6px 16px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+.v2 .lg > span { display: flex; align-items: center; gap: 6px; }
+.v2 .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: 0 0 auto; }
+.v2 .sw.hatch { background: var(--hatch); border: 1px solid var(--control); box-sizing: border-box; }
+.v2 .evdot { width: 8px; height: 8px; border-radius: 50%; background: var(--text); display: inline-block; flex: 0 0 auto; }
+
+.v2 .error-box {
+  padding: 12px 14px; border-radius: 8px; background: var(--bad-bg); color: var(--bad-fg); font-size: 13px;
+}
+.v2 .skeleton {
+  border-radius: 6px; background: linear-gradient(90deg, #eceeea 25%, #f4f5f2 37%, #eceeea 63%);
+  background-size: 400% 100%; animation: v2-shimmer 1.4s ease infinite;
+}
+@keyframes v2-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) { .v2 .skeleton { animation: none; } }
+.v2 .stale { opacity: 0.6; transition: opacity 0.2s; }
+
+.v2 .notice {
+  padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; max-width: 720px;
+}
