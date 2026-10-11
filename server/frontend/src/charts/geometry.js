@@ -47,6 +47,24 @@ export function xLabels(buckets, bucket, tz) {
   return out;
 }
 
+// drop x labels that would sit closer than minGap px to the previous one kept
+// (narrow screens); a label too close to the right edge is aligned to it
+// (alignRight) instead of running past it. width 0 = not measured yet.
+export function thinLabels(labels, width, minGap = 76) {
+  if (!width) return labels;
+  const out = [];
+  let last = -Infinity;
+  for (const x of labels) {
+    const px = (parseFloat(x.left) / 100) * width;
+    const at = Math.min(px, width - minGap);
+    if (at - last >= minGap) {
+      out.push(at < px ? { ...x, alignRight: true } : x);
+      last = at;
+    }
+  }
+  return out;
+}
+
 // a bar's height in % of the plot (0 stays 0)
 export function pct(v, top) {
   return `${((Math.max(0, v || 0) / top) * 100).toFixed(1)}%`;

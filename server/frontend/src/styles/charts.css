@@ -58,5 +58,6 @@
   display: flex; align-items: center; gap: 8px; justify-content: space-between; flex: 1 1 230px;
   padding: 4px 8px; border-radius: 6px;
 }
+.v2 .seglegend > span > span { white-space: nowrap; }      /* the label and its count never break */
 .v2 .seglegend > span.on { background: var(--wash-soft); font-weight: 600; }
 .v2 .seglegend .sw { width: 10px; height: 10px; border-radius: 2px; }

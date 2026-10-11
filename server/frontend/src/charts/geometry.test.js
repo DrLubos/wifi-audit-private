@@ -1,5 +1,5 @@
 import { test, eq, done } from "../testing/tiny.js";
-import { bucketLabel, niceMax, pct, tipStyle, xLabels } from "./geometry.js";
+import { bucketLabel, niceMax, pct, thinLabels, tipStyle, xLabels } from "./geometry.js";
 
 const TZ = "Europe/Bratislava";
 
@@ -45,6 +45,15 @@ test("x labels at day / 6-hour marks", () => {
   eq(lw[0].left, "3.57%");
   const d = hours("2026-09-10T22:00:00Z", 30, 24);                 // 11 Sep .. 10 Oct
   eq(xLabels(d, "1d", TZ).map((x) => x.t), ["Fri 11 Sep", "Mon 14 Sep", "Mon 21 Sep", "Mon 28 Sep", "Mon 5 Oct"]);
+});
+
+test("x labels thinned on narrow plots", () => {
+  const l = [0, 14.29, 28.57, 42.86, 57.14, 71.43, 85.71].map((v, i) => ({ t: `d${i}`, left: `${v}%` }));
+  eq(thinLabels(l, 0).length, 7);                                   // not measured yet
+  eq(thinLabels(l, 1100).length, 7);                                // 157 px apart
+  eq(thinLabels(l, 320).map((x) => x.t), ["d0", "d2", "d4"]);       // 46 px apart; d6 would clip
+  const edge = thinLabels([{ t: "a", left: "0%" }, { t: "z", left: "93%" }], 320);
+  eq(edge.map((x) => [x.t, Boolean(x.alignRight)]), [["a", false], ["z", true]]);
 });
 
 test("bar heights", () => {

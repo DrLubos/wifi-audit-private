@@ -3,11 +3,12 @@
 // the hover / focus target with a light wash, the tooltip sits beside the
 // column (never over it) and lists every series value-first plus the total
 // and the notes; a column with no sensor collecting is hatched (never drawn
-// as zero); an event dot on top; ←/→ move the focus.
+// as zero); an event dot on top; ←/→ move the focus; x labels thinned to
+// the measured plot width (narrow screens).
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fmtInt } from "../format.js";
-import { niceMax, pct, tipStyle } from "./geometry.js";
+import { niceMax, pct, thinLabels, tipStyle } from "./geometry.js";
 import Tooltip from "./Tooltip.jsx";
 import { useRoving } from "./useRoving.js";
 
@@ -17,6 +18,14 @@ export default function StackedColumns({
   const n = labels.length;
   const [active, setActive] = useState(null);
   const roving = useRoving(n);
+  const plot = useRef(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    if (!plot.current || typeof ResizeObserver === "undefined") return undefined;
+    const ro = new ResizeObserver((entries) => setWidth(entries[0].contentRect.width));
+    ro.observe(plot.current);
+    return () => ro.disconnect();
+  }, []);
   const totals = labels.map((_, i) => series.reduce((a, s) => a + (s.values[i] || 0), 0));
   const top = niceMax(Math.max(0, ...totals));
   const topDown = [...series].reverse();
@@ -33,7 +42,7 @@ export default function StackedColumns({
         <div className="yax" aria-hidden="true" style={{ height }}>
           <span>{top}</span><span>{top / 2}</span><span>0</span>
         </div>
-        <div className="plot" role="group" aria-label={ariaLabel} onMouseLeave={() => setActive(null)}
+        <div className="plot" ref={plot} role="group" aria-label={ariaLabel} onMouseLeave={() => setActive(null)}
              style={{ height }}>
           {labels.map((label, i) => {
             const segs = topDown.filter((s) => (s.values[i] || 0) > 0);
@@ -58,7 +67,9 @@ export default function StackedColumns({
         </div>
       </div>
       <div className="xax" aria-hidden="true">
-        {xlabels.map((x) => <span key={x.left} style={{ left: x.left }}>{x.t}</span>)}
+        {thinLabels(xlabels, width).map((x) => (
+          <span key={x.left} style={x.alignRight ? { right: 0 } : { left: x.left }}>{x.t}</span>
+        ))}
       </div>
     </>
   );
