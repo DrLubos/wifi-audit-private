@@ -105,6 +105,10 @@ python3 seed/import_snapshot.py buffer-snapshot.db --sensor pi-fri \
   and turned into hourly rows by `load_ap_load_samples()` (`source
   'v5_obs'`, channel from the configuration history). Apply schema 8
   (`ops/migrate_schema8.sh`) before importing with this importer.
+- **Server schema 9:** every import adds a `sensor_uploads` row (span, buffer
+  version, inserted rows; the buffer's size when the snapshot was made by the
+  current `export_snapshot.py`, which records it in the copy's `meta`). Apply
+  schema 9 (`ops/migrate_schema9.sh`) before importing with this importer.
 - Buffer schema v2 to v7 snapshots are accepted. v3 (collector deployed
   2026-09-22 or later) carries `observations.disconnects_last`, v4 (2026-09-27 or
   later) `polls.ds_hop_n / ds_hop_visited / ds_hop_ok` (hop-list coverage), v5

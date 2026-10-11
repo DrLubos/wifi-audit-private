@@ -28,8 +28,10 @@ What the stream does
      (written by buffers <= v5), stages them as stage_load_samples and calls
      load_ap_load_samples() (schema 8), which turns them into ap_load_hourly
      rows of source 'v5_obs' - the same fuller-wins merge,
-  3. refreshes ap_baselines for the sensor (unless --no-baselines),
-  4. prints per-table row counts for the sensor.
+  3. records the import in sensor_uploads (schema 9: span, buffer version,
+     inserted rows, the buffer size export_snapshot.py stored in the copy),
+  4. refreshes ap_baselines for the sensor (unless --no-baselines),
+  5. prints per-table row counts for the sensor.
 
 Everything runs between BEGIN and COMMIT, so a failure (bad MAC, FK violation,
 lost connection) leaves the database untouched. psql's own "COPY n" / "INSERT 0 n"
@@ -37,10 +39,10 @@ command tags show what was staged and what was actually inserted; for polls,
 observations and alerts the inserted rows and their earliest ts are collected
 in the session's temp table import_from instead (printed after COMMIT). After
 COMMIT the stream
-  5. vacuums observations (outside the transaction), so the new heap pages are
+  6. vacuums observations (outside the transaction), so the new heap pages are
      all-visible and the AP queries stay index-only scans (schema.sql, covering
      primary key observations_pkey, INCLUDE (rssi, rssi_floor)),
-  6. calls refresh_rollups(sensor, earliest inserted ts) (schema 6; unless
+  7. calls refresh_rollups(sensor, earliest inserted ts) (schema 6; unless
      --no-rollups): the dashboard tables from that hour on, the whole history
      on the sensor's first refresh. It runs in its own transaction: if it
      fails, the import stays and `SELECT * FROM refresh_rollups(<id>)` can be
@@ -496,13 +498,27 @@ def emit_stream(out, db, args, log):
         out.write(merge_sql(spec))
         out.write("\n")
 
-    # 3. baselines
+    # 3. the upload record (schema 9): what came in and from which buffer
+    meta = dict(db.execute("SELECT key, value FROM meta"))
+    src_bytes = meta.get("snapshot_source_bytes")
+    out.write("\\echo -- sensor_uploads\n")
+    out.write(
+        "INSERT INTO sensor_uploads (sensor_id, via, buffer_version, polls_from, polls_to, "
+        "buffer_bytes, rows)\n"
+        "SELECT :sid, 'snapshot', %s, %s, %s, %s,\n"
+        "       coalesce((SELECT jsonb_object_agg(tbl, inserted) FROM import_from), '{}'::jsonb);\n"
+        % (sql_literal(str(meta.get("schema_version"))),
+           "to_timestamp(%d)" % lo if lo is not None else "NULL",
+           "to_timestamp(%d)" % hi if hi is not None else "NULL",
+           int(src_bytes) if src_bytes and src_bytes.isdigit() else "NULL"))
+
+    # 4. baselines
     if not args.no_baselines:
         out.write("\\echo -- ap_baselines\n")
         out.write("SELECT refresh_ap_baselines(:sid, %d, %d) AS ap_baselines_upserted;\n"
                   % (args.min_obs, args.min_days))
 
-    # 4. summary
+    # 5. summary
     out.write("\\echo -- row counts for sensor %s\n" % args.sensor)
     parts = ["('%s', (SELECT count(*) FROM %s WHERE sensor_id = :sid))" % (t, t)
              for t in ("polls", "devices", "device_config_history", "observations",
@@ -511,7 +527,7 @@ def emit_stream(out, db, args, log):
     out.write("SELECT * FROM (VALUES\n  %s) AS t (table_name, n_rows);\n" % ",\n  ".join(parts))
     out.write("COMMIT;\n")
 
-    # 5. visibility map: the AP queries are index-only scans on the covering index
+    # 6. visibility map: the AP queries are index-only scans on the covering index
     #    and fetch the heap row for every page not marked all-visible; autovacuum's
     #    insert threshold is ~20 % of the table, i.e. days of imports. VACUUM cannot
     #    run in a transaction block, and ON_ERROR_STOP keeps a failed load from
@@ -521,7 +537,7 @@ def emit_stream(out, db, args, log):
     out.write("\\echo -- inserted rows (polls, observations, alerts)\n")
     out.write("SELECT tbl AS table_name, inserted, min_ts AS earliest_ts FROM import_from;\n")
 
-    # 6. dashboard tables from the earliest inserted ts (nothing new: the
+    # 7. dashboard tables from the earliest inserted ts (nothing new: the
     #    current hour and the per-AP/per-sensor rows; the sensor's first
     #    refresh covers everything). Own transaction, after the vacuum.
     if not args.no_rollups:

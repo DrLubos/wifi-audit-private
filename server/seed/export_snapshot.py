@@ -18,6 +18,9 @@ DB_PATH from /etc/wifi-sensor/collector.conf ($COLLECTOR_CONF), then
 
 VACUUM INTO produces a compact copy (it drops the free pages the v1 -> v2
 migration left behind) in rollback-journal mode, i.e. one self-contained file.
+The copy's meta table then gets snapshot_source_bytes (the buffer's size on
+the sensor, main file + WAL) and snapshot_taken_at (unix s); the importer
+stores them in sensor_uploads (server schema 9, the Sensors page).
 On an SQLite too old for VACUUM INTO (< 3.27) the backup API is used instead,
 followed by a VACUUM of the copy.
 """
@@ -26,6 +29,7 @@ import argparse
 import os
 import sqlite3
 import sys
+import time
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -93,6 +97,21 @@ def snapshot(src_path, out_path):
         src.close()
 
 
+def mark(out_path, src_path, now=None):
+    """Record the source buffer's size and the export time in the copy's meta."""
+    size = os.path.getsize(src_path)
+    if os.path.isfile(src_path + "-wal"):
+        size += os.path.getsize(src_path + "-wal")
+    db = sqlite3.connect(out_path, isolation_level=None)
+    try:
+        for k, v in (("snapshot_source_bytes", size), ("snapshot_taken_at", int(now or time.time()))):
+            db.execute("INSERT INTO meta(key, value) VALUES (?, ?) "
+                       "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (k, str(v)))
+    finally:
+        db.close()
+    return size
+
+
 def describe(path):
     db = sqlite3.connect("file:%s?mode=ro" % quote(os.path.abspath(path)), uri=True)
     try:
@@ -128,6 +147,7 @@ def main(argv):
 
     print("snapshot of %s -> %s" % (src, out))
     how = snapshot(src, out)
+    mark(out, src)
     size = os.path.getsize(out)
     print("  method: %s; size: %.1f MB (source file %.1f MB)"
           % (how, size / 1e6, os.path.getsize(src) / 1e6))

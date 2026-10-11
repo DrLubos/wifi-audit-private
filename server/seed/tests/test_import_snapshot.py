@@ -212,6 +212,29 @@ class Stream(unittest.TestCase):
         self.assertLess(sql.index("INSERT INTO device_config_history"), call)
         self.assertLess(call, sql.index("COMMIT;"))
 
+    def test_upload_is_recorded_in_the_transaction(self):
+        sql = self.stream()
+        rec = sql.split("INSERT INTO sensor_uploads")[1].split(";")[0]
+        self.assertIn("SELECT :sid, 'snapshot', '7', to_timestamp(1758981600), to_timestamp(1758981900), "
+                      "NULL,", rec)                       # no export meta in this fixture
+        self.assertIn("jsonb_object_agg(tbl, inserted) FROM import_from", rec)
+        self.assertLess(sql.index("INSERT INTO sensor_uploads"), sql.index("COMMIT;"))
+        self.assertLess(sql.index("INSERT INTO alerts"), sql.index("INSERT INTO sensor_uploads"))
+
+    def test_buffer_size_from_the_export_meta(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "snap.db")
+            make_buffer(path)
+            db = sqlite3.connect(path)
+            db.execute("INSERT INTO meta VALUES ('snapshot_source_bytes', '574000000')")
+            db.commit()
+            db.close()
+            db = imp.open_snapshot(path)
+            out = io.StringIO()
+            imp.emit_stream(out, db, args(), lambda msg: None)
+            db.close()
+        self.assertIn("to_timestamp(1758981900), 574000000,", out.getvalue())
+
     def test_buffer_version_check(self):
         db = sqlite3.connect(self.path)
         v = db.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
