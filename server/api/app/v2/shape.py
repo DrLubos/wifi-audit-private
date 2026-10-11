@@ -11,6 +11,7 @@ Standard library only (tests/test_shape.py).
 """
 
 from datetime import datetime, timedelta, timezone
+from statistics import quantiles
 from zoneinfo import ZoneInfo
 
 from .periods import iso
@@ -316,6 +317,30 @@ def heatmap(period, tz, clients, load_hours, captured, view):
                 peak = {"value": v, "at": None, "label": "%s %02d:00" % (WEEKDAYS[wd], hr)}
         rows.append({"label": WEEKDAYS[wd], "cells": cells})
     return rows, peak
+
+
+def band_of(ch):
+    """'2.4' / '5' of an advertised channel number (as band_of_channel() in schema.sql)."""
+    try:
+        c = int(ch)
+    except (TypeError, ValueError):
+        return None
+    return "2.4" if 1 <= c <= 14 else "5" if 32 <= c <= 177 else None
+
+
+def dfs(ch):
+    """5 GHz channels 52-144: the AP must leave the channel when it detects radar."""
+    return band_of(ch) == "5" and 52 <= int(ch) <= 144
+
+
+def iqr(values):
+    """[p25, p75] (inclusive method), one decimal; None without values."""
+    if not values:
+        return None
+    if len(values) == 1:
+        return [round(values[0], 1)] * 2
+    q = quantiles(values, n=4, method="inclusive")
+    return [round(q[0], 1), round(q[2], 1)]
 
 
 def sensor_status(last_capture_at, last_poll, now, offline_min):

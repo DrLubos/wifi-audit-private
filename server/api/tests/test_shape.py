@@ -183,5 +183,25 @@ class Networks(unittest.TestCase):
         self.assertEqual(peak["label"], "Mon 10:00")
 
 
+class Spectrum(unittest.TestCase):
+    def test_band_dfs_iqr(self):
+        self.assertEqual([shape.band_of(c) for c in ("1", "13", "36", "165", "", None, "6e")],
+                         ["2.4", "2.4", "5", "5", None, None, None])
+        self.assertEqual([shape.dfs(c) for c in ("6", "48", "52", "144", "149")], [False, False, True, True, False])
+        self.assertEqual(shape.iqr([1, 2, 3, 4, 5]), [2.0, 4.0])
+        self.assertEqual(shape.iqr([7.25]), [7.2, 7.2])
+        self.assertIsNone(shape.iqr([]))
+
+    def test_four_hour_blocks(self):
+        p = periods.period("30d", TZ, utc(2026, 10, 30, 12))
+        blocks = periods.blocks(p, 4)
+        self.assertEqual(len(blocks), 180)
+        self.assertEqual(blocks[0][0], p.starts[0])
+        self.assertEqual(blocks[-1][1], p.ends[-1])
+        self.assertEqual([b[0] for b in blocks[1:]], [b[1] for b in blocks[:-1]])
+        dst = [b for b in blocks if b[0] == utc(2026, 10, 24, 22)][0]      # 25 Oct 00:00-04:00 local
+        self.assertEqual(dst[1] - dst[0], timedelta(hours=5))
+
+
 if __name__ == "__main__":
     unittest.main()

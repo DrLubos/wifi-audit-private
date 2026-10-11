@@ -51,7 +51,7 @@ SELECT coalesce((SELECT id FROM aps WHERE upper(bssid::text) = :'bssid'), 0) AS 
 FIXED = {
     "limit": "51", "q": "", "status": "{}", "kinds": "{}", "managed": "false",
     "before_ts": "infinity", "before_id": str(2 ** 63 - 1), "after_ts": "-infinity", "after_id": "0",
-    "oldest_first": "false",
+    "oldest_first": "false", "band": "2.4",
 }
 
 

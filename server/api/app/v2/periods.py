@@ -125,3 +125,18 @@ def days_window(tz, now, days):
     today = now.astimezone(local).replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
     edges = [_to_utc(today - timedelta(days=days - 1 - i), local) for i in range(days + 1)]
     return Period("%dd" % days, tz, "1d", tuple(edges[:-1]), tuple(edges[1:]), now)
+
+
+def blocks(period, hours):
+    """The period cut into blocks of `hours` local wall-clock hours aligned
+    to local midnight (the 30-day utilization timeline: 4-hour blocks; around
+    a DST change a block is an hour longer or shorter): [(start, end)] in UTC."""
+    local = ZoneInfo(period.tz)
+    out = []
+    for a in period.starts:
+        day = a.astimezone(local).replace(tzinfo=None)
+        b = day
+        while b < day + timedelta(days=1):
+            out.append((_to_utc(b, local), _to_utc(min(b + timedelta(hours=hours), day + timedelta(days=1)), local)))
+            b += timedelta(hours=hours)
+    return [(a, b) for a, b in out if a < b]
