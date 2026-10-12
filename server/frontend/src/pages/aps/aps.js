@@ -309,6 +309,18 @@ export function bandRect(b, top, bottom, h = 220) {
   return { y: Math.max(0, y), height: Math.max(1, ((hi - lo) / (top - bottom)) * h) };
 }
 
+// the band's horizontal span in the 0..1000 viewBox: from the start of the
+// baseline's window (inside one capture-hardware period, schema 11) to the
+// chart's end; the whole width without a start or when it lies before the chart
+export function bandSpan(b, t, bucketS = 3600) {
+  const from = b.from ? Date.parse(b.from) / 1000 : null;
+  if (from == null || !t.length) return { x: 0, width: 1000 };
+  const t0 = t[0];
+  const t1 = t[t.length - 1] + bucketS;
+  const x = Math.round(Math.min(1, Math.max(0, (from - t0) / (t1 - t0))) * 1000);
+  return { x, width: 1000 - x };
+}
+
 // the tooltip of hour i: the reading per sensor, its baseline, outside the band
 export function rssiTip(i, d, colors, tz) {
   const t = d.t[i] * 1000;

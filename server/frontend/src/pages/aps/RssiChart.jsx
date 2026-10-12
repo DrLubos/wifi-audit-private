@@ -10,7 +10,7 @@ import Tooltip from "../../charts/Tooltip.jsx";
 import { useRoving } from "../../charts/useRoving.js";
 import { useWidth } from "../../charts/useWidth.js";
 import { fmtDay, fmtTime } from "../../format.js";
-import { bandRect, rssiLines, rssiScale, rssiTicks, rssiTip } from "./aps.js";
+import { bandRect, bandSpan, rssiLines, rssiScale, rssiTicks, rssiTip } from "./aps.js";
 
 const H = 220;
 const dbm = (v) => String(Math.round(v)).replace("-", "−");
@@ -38,7 +38,9 @@ export default function RssiChart({ d, colors, tz }) {
           <svg aria-hidden="true" viewBox={`0 0 1000 ${H}`} preserveAspectRatio="none">
             {Object.entries(d.baseline ?? {}).map(([s, b]) => {
               const r = bandRect(b, sc.top, sc.bottom, H);
-              return <rect key={s} x="0" width="1000" y={r.y} height={r.height} style={{ fill: colors[s], fillOpacity: 0.16 }} />;
+              const span = bandSpan(b, d.t, d.bucket_s);
+              return <rect key={s} x={span.x} width={span.width} y={r.y} height={r.height}
+                           style={{ fill: colors[s], fillOpacity: 0.16 }} />;
             })}
             {sc.ticks.slice(1, -1).map((t) => {
               const y = ((sc.top - t) / (sc.top - sc.bottom)) * H;

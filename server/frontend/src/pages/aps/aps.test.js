@@ -1,6 +1,6 @@
 import { test, eq, ok, done } from "../../testing/tiny.js";
 import {
-  apName, bandRect, bssidOfKey, changeParts, changesPerDayText, channelDetail, channelLine, chips, classBadge,
+  apName, bandRect, bandSpan, bssidOfKey, changeParts, changesPerDayText, channelDetail, channelLine, chips, classBadge,
   clientsCell, encryptionText, eventBadges, groupLabel, historyRows, isActive, isBssid, lastSeenText, lastSeenTitle,
   latestCapture, loadNote, loadNumbers, mfpText, pagerText,
   policyBadge, ratingBadge, recommendation, rssiLines, rssiScale, rssiTicks, rssiTip, securityCell, seenByChips,
@@ -113,6 +113,11 @@ test("RSSI chart", () => {
   eq(sc, { top: -65, bottom: -95, ticks: [-65, -75, -85, -95] });         // -76 .. -88 widened to 30 dB around it
   eq(rssiScale({}, {}).top, -50);
   eq(rssiLines([-70, -85, null, -100], -70, -100, 220), ["125.0,0.0 375.0,110.0", "875.0,220.0 878,220.0"]);
+  // the band starts with the baseline's window (schema 11: after a hardware change)
+  const hours = [0, 1, 2, 3].map((h) => Date.parse("2026-10-12T00:00:00Z") / 1000 + h * 3600);
+  eq(bandSpan({ from: "2026-10-12T02:00:00Z" }, hours), { x: 500, width: 500 });
+  eq(bandSpan({ from: "2026-09-15T13:53:07Z" }, hours), { x: 0, width: 1000 });
+  eq(bandSpan({}, hours), { x: 0, width: 1000 });
   const br = bandRect({ median: -85, robust_sd: 2.5 }, -70, -100, 220);     // -80 .. -90 dBm
   eq([br.y.toFixed(2), br.height.toFixed(2)], ["73.33", "73.33"]);
   const d = { t: [1760209200], series: { "pi-fri": [-90.5], "pi-lab": [null] }, n_floor: { "pi-lab": [3] },

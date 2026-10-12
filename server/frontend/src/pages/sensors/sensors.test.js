@@ -1,6 +1,6 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
-  apsText, bufferText, configText, coverageColumns, coverageText, crashText, dayNotes, durText, footText, headText,
+  apsText, bufferText, captureLine, configText, coverageColumns, coverageText, crashText, dayNotes, durText, footText, headText,
   hopBadge, lastPollText, legendItems, localDate, outageRows, restartText, sinceText, stateNote, uploadText,
 } from "./sensors.js";
 
@@ -55,6 +55,11 @@ test("the card", () => {
   eq(footText({ ...FRI, pending: { plan: "all_89", n_channels: 89, dwell_s: 0.2, poll_s: 60 } }, TZ).text,
      "Pending change: 89 channels · 0.2 s dwell · poll 60 s - not delivered, the sensor upload is not built yet");
   eq(sinceText(FRI, TZ), "since 15 Sep 2026");
+  eq(captureLine({ since: "2026-09-15T13:53:07Z", adapter: "RTL8821CU USB adapter", antenna: "Dipole", gain_dbi: 5 }, TZ),
+     "RTL8821CU USB adapter · Dipole (5 dBi), since 15 Sep 2026");
+  eq(captureLine({ since: "2026-09-15T13:53:07Z", adapter: "RTL8821CU USB adapter", antenna: null, gain_dbi: null }, TZ),
+     "RTL8821CU USB adapter · its own antenna, since 15 Sep 2026");
+  eq(captureLine(null, TZ), "not recorded (Settings > Sensors)");
   eq(stateNote(FRI, { tone: "neu" }, TZ).text.slice(0, 44), "The data ends at the last import (11 Oct 22:");
   eq(stateNote({ ...FRI, outage_since: "2026-10-06T19:33:15Z" }, { offline: true }, TZ).text.slice(0, 40),
      "Not collecting since 6 Oct 21:33. Check ");
