@@ -105,7 +105,7 @@ strength always belongs to the pair AP + sensor.
 | Network security | the weakest level among its BSSIDs active in the bucket. |
 | Configured network | its SSID is in `networks` (managed or friendly). Mobile network = all its BSSIDs are mobile. Other = the rest. |
 | Compliance (managed network) | every BSSID's actual security meets the network policy (`expected_security`, `require_mfp`); shown as `Compliant` or `Not met n/m`. |
-| Clients of an AP in an hour | AP-reported station count from the BSS Load element (`qbss_stations`) when the AP sends it (Kismet's `dot11e_qbss` flag from buffer v7; before v7 inferred from a value > 0), otherwise Kismet `num_associated_clients`. Hourly value = max over the hour's polls. When several sensors see the AP, take the max across sensors. |
+| Clients of an AP in an hour | AP-reported station count from the BSS Load element (`qbss_stations`) when the AP sends it (Kismet's `dot11e_qbss` flag from buffer v7; before v7 inferred from a value > 0), otherwise Kismet `num_associated_clients` - which is cumulative: every client seen associated since Kismet began tracking the AP (Kismet 2025-09-R1 never prunes `associated_client_map`; checked 2026-10-12), so the fallback overstates and the UI labels it. Hourly value = max over the hour's polls. When several sensors see the AP, take the max across sensors. |
 | Clients on managed APs | sum over managed APs per hour. Tile: peak hourly sum in the period, plus `hourly average` (24h) / `average 6-hour peak` (7d) / `average daily peak` (30d). Not unique people – the UI says so. |
 | Channel utilization | AP-reported BSS Load channel utilization; per channel and hour = average over the APs on that channel that report it. |
 | Open events | events with status `open`. |

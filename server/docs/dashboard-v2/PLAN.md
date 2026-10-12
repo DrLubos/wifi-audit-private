@@ -1362,8 +1362,19 @@ Detections - redirects to the AP's BSSID. As built against the boards:
   ("Show all"); events: 5 shown ("Show all"); the classification control and
   the note are read-only until the write token (phase 5).
 
-Deploy 4d (the api first - Spectrum decisions, siblings, the AP scale - then
-the frontend; no schema change):
+*Decisions after the 4d preview (2026-10-12, commits 6f9de3a, 7798137):*
+"Last seen" on the AP pages counts from the latest capture of the AP's (or
+the selected) sensors, the absolute time in the tooltip; the list's default
+order is suspicious, managed, the rest, strongest signal first
+(`sort=default`); the AP page leads with the stations the AP reports in its
+BSS Load element, the sensor's number second as "Clients seen by the sensor
+(cumulative)" - Kismet's `num_associated_clients` never forgets a client
+(see SPEC section 4) - and the list shows such a fallback count muted
+(`items[].clients_source`); the radio-sibling hint in the list only for
+hidden BSSIDs without a known name, on the AP page always.
+
+Deploy 4d (the api first - Spectrum decisions, siblings, the AP scale, the
+order and the client source - then the frontend; no schema change):
 
 ```sh
 cd ~/wifi-audit && git pull && cd server
