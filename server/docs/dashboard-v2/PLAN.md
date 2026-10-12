@@ -801,14 +801,18 @@ period chips for one page). Large JSON lists are built by PostgreSQL
 
 | Endpoint | Body | Effect |
 |---|---|---|
-| `POST /api/v2/auth/check` | – | 204 / 401 (the Unlock button) |
-| `POST /api/v2/events/{id}/status` | `{status, note?}` | status, `status_at`, `status_note` |
-| `PUT /api/v2/aps/{bssid}/classification` | `{classification \| null}` | manual classification (null = back to the rules) |
-| `PUT /api/v2/aps/{bssid}/note` | `{note}` | |
-| `POST /api/v2/settings/networks`, `PUT …/{id}`, `DELETE …/{id}` | network fields | + `refresh_events()` per sensor of the account |
-| `POST /api/v2/settings/networks/{id}/allowed` | `{bssid \| oui}` | "Add to allowed BSSIDs" |
-| `PUT /api/v2/settings/classification`, `PUT /api/v2/settings/detectors` | the typed columns | + `refresh_events()` per sensor of the account |
-| `POST /api/v2/settings/sensors` | `{sensors: [names], config: {channel_plan, channels, dwell_s, poll_s}}` | one new `sensor_config` version per sensor; the hop-list length is checked with the installer's stride rule (`hop_stride_ok`, ported and tested against 89 ok / 90 bad) |
+| `POST /api/v2/auth/check` | – | 204 / 401 / 403 (the Unlock button) |
+| `POST /api/v2/events/{id}/status`, `POST /api/v2/events/status` (bulk, 5b) | `{status, reason, note?}` (bulk: `+ ids`) | status, `status_reason`, `status_at`, `status_note`; reason required for a label: Confirm `security_relevant` / `expected_benign` / `staged_test`, False positive `rule_defect` / `artefact` (schema 11) |
+| `PUT /api/v2/aps/{bssid}/classification` (5b) | `{classification \| null}` | manual classification (null = back to the rules) |
+| `PUT /api/v2/aps/{bssid}/note` (5b) | `{note}` | |
+| `PUT /api/v2/settings/networks` (5a) | `{networks: [{id?, ssid, kind, expected_security, require_mfp, allowed_bssids, allowed_ouis, note}]}` | the whole list of the Networks tab (id = update, none = new, left out = removed) + `refresh_events()` per sensor |
+| `POST /api/v2/settings/networks` (5a) | network fields | one new network ("Managed" / "Friendly" of an AP, 5b) + `refresh_events()` |
+| `POST /api/v2/settings/networks/{id}/allowed` (5a) | `{bssid \| oui}` | "Add to allowed BSSIDs" + `refresh_events()` |
+| `PUT /api/v2/settings/classification`, `PUT /api/v2/settings/detectors` (5a) | the typed columns | + `refresh_events()` per sensor of the account |
+| `POST /api/v2/settings/sensors` (5a) | `{sensors: [names], config: {channel_plan, channels? (custom), lock_channel? (locked), dwell_s, poll_s}}` | one new `sensor_config` version per sensor, not delivered (Q10); the list length is checked with the installer's stride rule (`writes.hop_stride`, tested 89 ok / 90 bad); plans `all_89`, `ht20_37` (the 38 20 MHz entries without 144), `locked`, `custom` |
+| `PUT /api/v2/settings/sensors/{name}` (5a) | `{location, description}` | the sensor's details |
+| `GET / POST /api/v2/settings/hardware`, `PUT / DELETE …/{id}` (5a) | `{kind, name, gain_dbi, bands, connector, note}` | the capture hardware catalog; an item a sensor had attached is not deleted (409) |
+| `POST /api/v2/settings/sensors/{name}/hardware` (5a) | `{adapter_id, antenna_id?, valid_from?, note?}` | a hardware change of the sensor from `valid_from` (default now; after its last change, not in the future): a data boundary - baselines are learned inside one hardware period |
 
 Every write: one transaction, `accounts.write_version + 1`, an `audit_log`
 row. Token: `WRITE_TOKEN` from `.env` passed to the api container; empty =
@@ -1477,20 +1481,86 @@ docker compose build frontend && docker compose up -d frontend
 
 ### Phase 5 – Settings, write token, write endpoints, cleanup
 
-Commits: write token dependency + `/auth/check`; write endpoints + tests;
-Settings pages (4 tabs + token box); Confirm/False positive, classification,
-note and "Managed/Friendly"/"Add to allowed" actions; optional `api_rw` role;
-then a cleanup commit removing the old endpoints and `legacy/` pages.
+Split into three deployable steps (decided 2026-10-12, with the developer's
+additions: fixed reasons next to Confirm / False positive, the capture
+hardware catalog), each stopped before its deploy:
+
+- **5a** - schema 11 (status reasons, the hardware catalog and hardware
+  periods), the write token and the write layer, the four Settings tabs with
+  their endpoints, the sensor-history corrections and Events grouped per
+  network.
+- **5b** - Confirm / False positive with a reason, single and bulk (and a
+  group row as one bulk) on the Events page, the AP's classification and
+  note, "Managed" / "Friendly" from the Networks list, "Add to allowed" from
+  the rule event and the rogue banner.
+- **5c** - the cleanup: the old endpoints (`/api/overview`, `/api/aps`,
+  `/api/alerts`, `/api/findings`, `/api/detections`) and `src/legacy/`, the
+  `/detections` redirect; the optional `api_rw` role.
+
+**5a as built (2026-10-12).**
+
+- *Schema 11* (`ops/migrate_schema11.sh`): `detections.status_reason` with
+  the constraint that fits it to the status - Confirm = the event's
+  condition was real (`security_relevant`, `expected_benign` - true, but not
+  a security issue -, `staged_test` - the developer's own attack runs),
+  False positive = it was not (`rule_defect` - a rule defect or a
+  misattribution -, `artefact` - a sensor or environment artefact); RQ2
+  counts by (status, reason). `capture_hardware` (the catalog: kind
+  adapter / antenna, name, gain dBi, bands, connector, note; new hardware is
+  a row, never a schema change) and `sensor_hardware` (what a sensor has
+  attached since when). A separate history, not columns of `sensor_config`:
+  hardware is physical - in effect when attached, nothing is delivered -
+  while a capture configuration waits for delivery (Q10); a hardware row
+  next to a pending configuration would otherwise supersede it. Every
+  hardware row is a data boundary: `refresh_ap_baselines()` learns a
+  baseline inside one hardware period (`hardware_period()`,
+  `ap_baselines.hw_from`), so right after a swap every baseline is cleared
+  until the new hardware has 200 readings on 2 days; evil_twin (b) compares a
+  reading only with a baseline of its period (`info.readings_other_hardware`)
+  and `fp-audit` refuses a window with a change. Seed: pi-fri's RTL8821CU
+  adapter and the developer's antenna, attached since the first poll (values
+  given to the migration). An adapter change also changes the RSSI floors
+  (`rssi_valid()` knows the RTL8821CU's only) - the Settings tab says so.
+- *Writes*: `WRITE_TOKEN` from `.env` (compose passes it; empty = 403),
+  `POST /auth/check`, `deps.write_tx()` (one transaction, audit rows,
+  `write_version + 1`); the endpoints of 7.5 marked 5a. The write SQL is in
+  `sql/writes.sql`, outside the perf tool's groups. The frontend keeps the
+  token for the browser tab (sessionStorage), refetches what the page shows
+  after a write and marks every other read stale; a 401 locks again.
+- *Settings* as the boards, with what the data showed: the 20 MHz plan is
+  37 entries - the 38 of the 89 list without 144 (no AP of the account has
+  used it, not an ETSI channel); **the "without empty DFS channels (59)"
+  plan is not offered** - in the load history every DFS channel 52-136
+  carried APs (the Ruckus campus APs move across them), only 140 and 144
+  are empty, so its premise does not hold (decision for the developer);
+  "Send" is "Save for <sensor>" and says the configuration is not delivered;
+  Upload is described as it is (snapshot imports now); the Detectors tab
+  says the batch detectors still take their CLI options.
+- *Corrections* in `ops/seed_sensor_history.sql` (the developer's decisions):
+  27 Sep 12:17:20 - 12:22:55 is a no-frames window, 15 Sep 13:53 - 14:55 "first
+  hour after installation (not investigated)", the 6 Oct note in local time.
+- *Events* grouped per network and local day (per AP: 224 rows of 271
+  events; per network: 159, the largest group 13 episodes on 8 BSSIDs); a
+  group shows the number of its BSSIDs, each member its own.
+
+Deploy 5a (the migration before the api - the new api reads the new
+tables; the antenna of pi-fri goes into the migration):
 
 ```sh
 cd ~/wifi-audit && git pull && cd server
-echo "WRITE_TOKEN=$(openssl rand -base64 32)" >> .env      # keep it in the password manager
-docker compose build api && docker compose up -d api       # compose passes WRITE_TOKEN to the api
+./backup.sh                                            # copy the dump off the box
+ANTENNA_NAME='<name>' ANTENNA_GAIN_DBI=<dBi> ANTENNA_CONNECTOR='<e.g. RP-SMA>' \
+  sh ops/migrate_schema11.sh 2>&1 | tee ~/migrate11-$(date -u +%Y%m%dT%H%MZ).log
+echo "WRITE_TOKEN=$(openssl rand -hex 32)" >> .env     # copy it into the password manager
+docker compose build api && docker compose up -d api
 docker compose build frontend && docker compose up -d frontend
-# optional least privilege:
-docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < ops/create_api_role.sql
-#   then DATABASE_URL in .env with the api_rw role, docker compose up -d api
 ```
+
+`ANTENNA_SINCE` (default: pi-fri's first poll) when the antenna came later;
+`ANTENNA_BANDS` (default `2.4,5`). The migration ends with the fixture tests
+(`hardware_test.sql`, the extended `events_test.sql`). Afterwards (Claude,
+read-only): `tests/sql/check_schema11.sql`, the smoke test (every write
+refuses a missing or wrong token), the live check of /settings.
 
 Out of scope for now (designed in 11, not built): upload after every poll
 with config delivery, ranges beyond 30 days, live updates, login.

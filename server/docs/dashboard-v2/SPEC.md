@@ -157,7 +157,11 @@ Each card states whether it follows the period. "Now" cards ignore it.
   expandable to the events; a bulk label can take the whole row.
 - Expanded row: "Why it fired" (evidence) and "Who saw it" (per-sensor RSSI,
   first/last seen, client count). Actions Confirm / False positive need the
-  write token.
+  write token and a fixed reason (decided 2026-10-12, schema 11), plus an
+  optional note, so RQ2 is counted by reason: Confirm - security-relevant,
+  expected / benign (true, but not a security issue), staged test (the
+  developer's own attack runs); False positive - rule defect or
+  misattribution, sensor or environment artefact.
 - Bulk action (phase 5): select several rows → Confirm / False positive with
   one note for all of them; each row gets its own status change in the audit
   log.
@@ -214,9 +218,15 @@ with tooltip. Outages and limited periods table.
 - Detectors: deauth bursts/window, evil twin (b) k and min dB, guard period
   after channel change, sensor-offline alert minutes.
 - Sensors: table with per-row and "All" selection; one form applies to every
-  selected sensor (channel plan: 89 / 20 MHz 37 / without empty DFS 59 /
-  locked channel / custom list with the coprime-stride check; dwell; poll
-  interval). Mixed current plans → warning. Upload is **not** a setting
+  selected sensor (channel plan: 89 / 20 MHz 37 / locked channel / custom
+  list with the coprime-stride check; dwell; poll interval - the "without
+  empty DFS 59" plan is not offered: every DFS channel 52-136 carried APs,
+  PLAN 5a). A sensor's location and description. Capture hardware
+  (decided 2026-10-12): a catalog of adapters and antennas (name, kind, gain
+  dBi, bands, connector, note) extended by adding rows; each sensor records
+  which adapter and antenna are attached since when; a hardware change is a
+  dated data boundary in the configuration history, and RSSI baselines never
+  span two hardware periods (evil twin (b) would fire after a swap). Mixed current plans → warning. Upload is **not** a setting
   (always after every poll, section 10). Configuration history with "data
   boundary" marking – a channel-plan change splits measurements for analysis.
   Until configuration delivery exists (section 10) "Send" stores the desired

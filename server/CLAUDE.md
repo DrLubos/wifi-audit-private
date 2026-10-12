@@ -179,6 +179,24 @@ Conventions for the stack:
     before were merged once by `ops/merge_duplicate_events.sql` (keeps
     statuses and notes, `audit_log` 'event.merge'). Read-only check:
     `tests/sql/check_schema10.sql`.
+  - **Labels and capture hardware (schema 11, `ops/migrate_schema11.sh`):**
+    a label needs a fixed reason (`detections.status_reason`, a constraint
+    fits it to the status; RQ2 counts by it). `capture_hardware` is the
+    catalog of adapters and antennas, `sensor_hardware` what a sensor has
+    attached since when; every hardware change is a data boundary -
+    `refresh_ap_baselines()` learns a baseline inside one hardware period
+    (`hardware_period()`, `ap_baselines.hw_from`) and evil_twin (b) compares a
+    reading only with a baseline of its period. Never fit or compare an RSSI
+    statistic across a hardware change. Fixture test
+    `tests/sql/hardware_test.sql`; read-only check `check_schema11.sql`.
+  - **Writes (phase 5):** every write endpoint needs `WRITE_TOKEN` (`.env`,
+    passed by compose; empty = writes disabled) and runs in
+    `deps.write_tx()` (audit_log rows, `accounts.write_version + 1`); the
+    bodies are validated in `app/v2/writes.py`, the write SQL is
+    `app/v2/sql/writes.sql` (never in a read group: the perf tool would
+    EXPLAIN ANALYZE it). Claude never sends an authorized write to the box -
+    the token stays with the developer; `v2_smoke.py` sends writes only
+    without or with a wrong token (refused before any handler runs).
   - **API v2 (`/api/v2`, `api/app/v2/`, PLAN.md section 7):** the SQL lives in
     `app/v2/sql/<group>.sql` as named statements (`-- name: x`, psycopg
     `%(param)s`, fragments `{{_x}}`), never inline; `tests/perf/ep_v2.py`
