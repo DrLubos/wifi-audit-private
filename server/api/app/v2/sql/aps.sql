@@ -28,7 +28,15 @@ SELECT v.ap_id, upper(v.bssid::text) AS bssid, v.ssid, v.hidden, v.network_name,
        v.adv_channel AS channel, v.band, v.ht_mode, {{_clients}} AS clients,
        CASE WHEN coalesce(v.cur_qbss_stations, 0) > 0 OR coalesce(v.cur_util_pct, 0) > 0
             THEN v.cur_util_pct END AS util,
-       v.first_seen, v.last_seen
+       v.first_seen, v.last_seen,
+       -- first seen in the warm-up of the sensor that saw it first (its 24 h
+       -- after that sensor's first poll): never a new AP (decided 2026-10-12)
+       coalesce((SELECT coalesce(s.first_obs, s.first_seen) < ss.first_poll + interval '24 hours'
+                 FROM ap_sensors x
+                 JOIN ap_summary s ON s.sensor_id = x.sensor_id AND s.device_key = x.device_key
+                 JOIN sensor_summary ss ON ss.sensor_id = x.sensor_id
+                 WHERE x.ap_id = v.ap_id
+                 ORDER BY coalesce(s.first_obs, s.first_seen) LIMIT 1), false) AS warmup
 FROM v
 LEFT JOIN networks n ON n.id = v.network_id
 LEFT JOIN pol p ON n.kind = 'managed'
@@ -57,7 +65,13 @@ GROUP BY s.ap_id
 -- the latest collecting poll), new in the 24 h before it.
 SELECT count(*)::int AS aps,
        count(*) FILTER (WHERE a.last_seen >= %(latest)s::timestamptz - interval '5 minutes')::int AS active,
-       count(*) FILTER (WHERE a.first_seen >= %(latest)s::timestamptz - interval '24 hours')::int AS new_24h
+       count(*) FILTER (WHERE a.first_seen >= %(latest)s::timestamptz - interval '24 hours'
+                          AND NOT coalesce((SELECT coalesce(s.first_obs, s.first_seen) < ss.first_poll + interval '24 hours'
+                                            FROM ap_sensors x
+                                            JOIN ap_summary s ON s.sensor_id = x.sensor_id AND s.device_key = x.device_key
+                                            JOIN sensor_summary ss ON ss.sensor_id = x.sensor_id
+                                            WHERE x.ap_id = a.id
+                                            ORDER BY coalesce(s.first_obs, s.first_seen) LIMIT 1), false))::int AS new_24h
 FROM aps a
 WHERE a.account_id = %(account_id)s
   AND EXISTS (SELECT 1 FROM ap_sensors x WHERE x.ap_id = a.id AND x.sensor_id = ANY (%(sensor_ids)s::int[]))

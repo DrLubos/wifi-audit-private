@@ -1,8 +1,10 @@
 """GET /api/v2/overview/status and /api/v2/overview/period (Main board).
 
 status (now, sensor filter): open events by severity, managed networks
-compliant m / n with the first problem, "Needs attention" (open events of
-severity medium or higher + compliance findings). period (sensor + range):
+compliant m / n with the first problem, "Needs attention" (compliance
+findings and ongoing sensor problems first, then open events of severity
+medium or higher from the 7 days before the latest capture; older ones as
+a count). period (sensor + range):
 the period envelope with the buckets and their coverage per sensor, the three
 tiles (new APs, open networks nearby, clients on managed APs), APs over time
 (fixed / mobile, events per bucket) and the security of the APs seen.
@@ -31,7 +33,8 @@ def status(request: Request, acc=Depends(deps.get_account), sensor: str = Depend
         return cached
     with deps.connection() as conn:
         st = deps.run(conn, _Q, "status", account_id=acc["id"], sensor_ids=sel["ids"], latest=sel["latest"])[0]
-        events = deps.run(conn, _Q, "attention", sensor_ids=sel["ids"])
+        events = deps.run(conn, _Q, "attention", sensor_ids=sel["ids"], latest=sel["latest"])
+        older = deps.run(conn, _Q, "attention_older", sensor_ids=sel["ids"], latest=sel["latest"])[0]["n"]
     summary, findings = shape.compliance(st["networks"])
     for e in events:
         e["ts"], e["ts_end"] = iso(e["ts"]), iso(e["ts_end"])
@@ -43,6 +46,8 @@ def status(request: Request, acc=Depends(deps.get_account), sensor: str = Depend
         "compliance": dict(summary, networks=st["networks"]),
         "attention": items,
         "attention_total": total,
+        # open events (medium or higher) older than the 7 days before the latest capture
+        "attention_older": older,
     }
     return deps.respond(body, tag)
 
@@ -94,7 +99,9 @@ def period(request: Request, acc=Depends(deps.get_account), sensor: str = Depend
         "tiles": {
             "new_aps": {"total": total_new,
                         "mobile_share": round(sum(new_mobile) / total_new, 3) if total_new else None,
-                        "series": shape.series(new, on)},
+                        "series": shape.series(new, on),
+                        # first seen in a sensor's warm-up (its first 24 h): not counted
+                        "warmup_excluded": pres["new_warmup"]},
             "open_nearby": {"total": pres["open_seen"], "aps_seen": pres["aps_seen"],
                             "share": round(pres["open_seen"] / pres["aps_seen"], 3) if pres["aps_seen"] else None,
                             "series": shape.series(open_, on)},

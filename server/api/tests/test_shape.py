@@ -111,15 +111,17 @@ class StatusAndLists(unittest.TestCase):
                                                     "failing": 1, "bssids": 3})
         self.assertEqual([f["severity"] for f in findings], ["low", "medium", "low"])
         self.assertEqual(findings[2]["title"], "Managed network D: not seen by the selected sensors")
-        ev = lambda i, sev, kind="kismet": {  # noqa: E731
+        ev = lambda i, sev, kind="kismet", ongoing=False: {  # noqa: E731
             "id": i, "severity": sev, "kind": kind, "type": "T", "summary": "s%d" % i, "bssid": None,
-            "ssid": None, "sensor": "pi-fri", "ts": None, "ts_end": None, "total": 3}
-        items, total = shape.attention([ev(9, "high"), ev(7, "medium", "sensor"), ev(5, "medium")], findings)
+            "ssid": None, "sensor": "pi-fri", "ts": None, "ts_end": None, "total": 3, "ongoing": ongoing}
+        # the api's order: the ongoing outage first, then the recent events
+        items, total = shape.attention([ev(7, "medium", "sensor", True), ev(9, "high"), ev(5, "medium")], findings)
         self.assertEqual(total, 6)
+        # compliance findings and the ongoing sensor problem first (by severity), then the events
         self.assertEqual([(x["severity"], x.get("event_id")) for x in items],
-                         [("high", 9), ("medium", 7), ("medium", 5), ("medium", None), ("low", None), ("low", None)])
-        self.assertEqual(items[1]["link"], "/sensors")
-        self.assertEqual(items[0]["link"], "/events?id=9")
+                         [("medium", 7), ("medium", None), ("low", None), ("low", None), ("high", 9), ("medium", 5)])
+        self.assertEqual(items[0]["link"], "/sensors")
+        self.assertEqual(items[4]["link"], "/events?id=9")
         self.assertEqual(len(shape.attention([ev(1, "high")] * 20, [], limit=10)[0]), 10)
 
     def test_severity_counts_and_parse(self):

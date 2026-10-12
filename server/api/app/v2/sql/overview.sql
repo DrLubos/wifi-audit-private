@@ -51,17 +51,32 @@ SELECT (SELECT count(*) FROM ev)::int AS open_total,
         FROM net) AS networks
 
 -- name: attention
--- Open events of severity medium or higher, the most severe and newest
--- first (the page shows a few; total for "and n more").
+-- Needs attention (decided 2026-10-12): ongoing sensor problems (an outage
+-- or limited period of the selected sensors still going) first, then the
+-- open events of severity medium or higher from the 7 days before the
+-- selected sensors' latest capture, the most severe and newest first (the
+-- page shows a few; total for "n more"; older ones: attention_older).
 SELECT d.id, d.ts, d.ts_end, d.kind, d.type, d.severity, d.summary, d.ssid,
        CASE WHEN d.kind <> 'sensor' THEN upper(d.mac::text) END AS bssid, s.name AS sensor,
+       (d.kind = 'sensor' AND d.ts_end IS NULL) AS ongoing,
        count(*) OVER ()::int AS total
 FROM detections d
 JOIN sensors s ON s.id = d.sensor_id
 WHERE d.sensor_id = ANY (%(sensor_ids)s::int[]) AND d.status = 'open'
-  AND d.severity IN ('critical', 'high', 'medium')
-ORDER BY CASE d.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, d.ts DESC, d.id DESC
+  AND ((d.kind = 'sensor' AND d.ts_end IS NULL)
+       OR (d.severity IN ('critical', 'high', 'medium') AND d.ts >= %(latest)s::timestamptz - interval '7 days'))
+ORDER BY (d.kind = 'sensor' AND d.ts_end IS NULL) DESC,
+         CASE d.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, d.ts DESC, d.id DESC
 LIMIT 20
+
+-- name: attention_older
+-- Open events of severity medium or higher older than the 7 days above.
+SELECT count(*)::int AS n
+FROM detections d
+WHERE d.sensor_id = ANY (%(sensor_ids)s::int[]) AND d.status = 'open'
+  AND d.severity IN ('critical', 'high', 'medium')
+  AND d.ts < %(latest)s::timestamptz - interval '7 days'
+  AND NOT (d.kind = 'sensor' AND d.ts_end IS NULL)
 
 -- name: presence
 -- Per bucket: distinct account APs seen by the selected sensors (fixed /
@@ -75,10 +90,16 @@ WITH ap AS MATERIALIZED (
   SELECT a.id,
          ap_is_mobile(a.account_id, bool_or(s.random_bssid), max(s.manuf), a.first_seen, a.last_seen,
                       %(account_latest)s::timestamptz) AS mobile,
-         min(coalesce(s.first_obs, s.first_seen)) FILTER (WHERE s.sensor_id = ANY (%(sensor_ids)s::int[])) AS first_here
+         min(coalesce(s.first_obs, s.first_seen)) FILTER (WHERE s.sensor_id = ANY (%(sensor_ids)s::int[])) AS first_here,
+         -- first seen in its sensor's warm-up (the 24 h after that sensor's
+         -- first poll, decided 2026-10-12): not a new AP
+         (array_agg(coalesce(s.first_obs, s.first_seen) < ss.first_poll + interval '24 hours'
+                    ORDER BY coalesce(s.first_obs, s.first_seen))
+            FILTER (WHERE s.sensor_id = ANY (%(sensor_ids)s::int[])))[1] AS warmup
   FROM aps a
   JOIN ap_sensors x ON x.ap_id = a.id
   JOIN ap_summary s ON s.sensor_id = x.sensor_id AND s.device_key = x.device_key
+  LEFT JOIN sensor_summary ss ON ss.sensor_id = s.sensor_id
   WHERE a.account_id = %(account_id)s
   GROUP BY a.id
 ), seen AS MATERIALIZED (
@@ -123,7 +144,11 @@ SELECT (SELECT coalesce(json_agg(json_build_object('i', t.i, 'fixed', t.fixed, '
                      count(*) FILTER (WHERE ap.mobile)::int AS m
               FROM ap
               WHERE ap.first_here >= %(from)s::timestamptz AND ap.first_here < %(to)s::timestamptz
-              GROUP BY 1) t) AS new_aps
+                AND NOT coalesce(ap.warmup, false)
+              GROUP BY 1) t) AS new_aps,
+       (SELECT count(*) FROM ap
+        WHERE ap.first_here >= %(from)s::timestamptz AND ap.first_here < %(to)s::timestamptz
+          AND ap.warmup)::int AS new_warmup
 
 -- name: clients
 -- Clients on managed APs per UTC hour (SPEC section 4): per AP and hour the

@@ -193,20 +193,20 @@ def compliance(networks):
 
 
 def attention(events, findings, limit=10):
-    """Open events (severity >= medium) and compliance findings, the most
-    severe first, events newest first, findings after the events of their
-    severity."""
+    """Needs attention (decided 2026-10-12): compliance findings and ongoing
+    sensor problems first, then the recent open events (as the api ordered
+    them: most severe, newest first). -> (items, total)"""
     items = [{
         "severity": e["severity"], "kind": e["kind"], "type": e["type"], "title": e["summary"],
         "bssid": e["bssid"], "network": e["ssid"], "sensors": [e["sensor"]], "ts": e["ts"],
-        "ts_end": e["ts_end"], "event_id": e["id"],
+        "ts_end": e["ts_end"], "event_id": e["id"], "ongoing": bool(e.get("ongoing")),
         "link": "/sensors" if e["kind"] == "sensor" else "/events?id=%d" % e["id"],
     } for e in events]
     events_total = events[0]["total"] if events else 0
-    ranked = sorted(enumerate(items + findings),
-                    key=lambda t: (severity_rank(t[1]["severity"]), t[1].get("event_id") is None, t[0]))
-    out = [x for _, x in ranked]
-    return out[:limit], events_total + len(findings)
+    first = [x for x in items if x["ongoing"]] + findings
+    first.sort(key=lambda x: severity_rank(x["severity"]))          # stable: sensor problems before findings
+    rest = [x for x in items if not x["ongoing"]]
+    return (first + rest)[:limit], events_total + len(findings)
 
 
 def presence(net, collecting_hours):

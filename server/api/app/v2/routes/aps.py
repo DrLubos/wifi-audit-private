@@ -56,6 +56,11 @@ def _strongest(a):
     return (a["seen_by"][0]["sensor"] if a["seen_by"] else None), -999.0
 
 
+def _is_new(a, period_start):
+    """First seen in the period, and not in a sensor's warm-up (decided 2026-10-12)."""
+    return a["first_seen"] >= period_start and not a["warmup"]
+
+
 def _ap_item(a, active_after, period_start):
     policy_met = None if not a["has_policy"] else a["policy_reason"] is None
     return {
@@ -70,7 +75,7 @@ def _ap_item(a, active_after, period_start):
                     for s in a["seen_by"]],
         "first_seen": iso(a["first_seen"]), "last_seen": iso(a["last_seen"]),
         "active": active_after is not None and a["last_seen"] >= active_after,
-        "mobile": a["mobile"], "new": a["first_seen"] >= period_start,
+        "mobile": a["mobile"], "new": _is_new(a, period_start),
     }
 
 
@@ -114,7 +119,7 @@ def list_aps(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
     counts.update({"band_2_4": sum(1 for a in base if a["band"] == "2.4"),
                    "band_5": sum(1 for a in base if a["band"] == "5"),
                    "open": sum(1 for a in base if a["security"] == "open"),
-                   "new": sum(1 for a in base if a["first_seen"] >= p.start),
+                   "new": sum(1 for a in base if _is_new(a, p.start)),
                    "hotspots": sum(1 for a in base if a["mobile"])})
     rows = base
     if classes:
@@ -124,7 +129,7 @@ def list_aps(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
     if open_:
         rows = [a for a in rows if a["security"] == "open"]
     if new:
-        rows = [a for a in rows if a["first_seen"] >= p.start]
+        rows = [a for a in rows if _is_new(a, p.start)]
     hidden_hotspots = 0
     if hide_hotspots:
         hidden_hotspots = sum(1 for a in rows if a["mobile"])
