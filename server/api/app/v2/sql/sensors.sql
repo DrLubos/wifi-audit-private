@@ -12,9 +12,10 @@ SELECT se.id, se.name, se.location, se.hardware,
         FROM (SELECT extract(epoch FROM p.ts - lag(p.ts) OVER (ORDER BY p.ts)) AS s
               FROM (SELECT ts FROM polls WHERE sensor_id = se.id ORDER BY ts DESC LIMIT 121) p) d) AS poll_s,
        (SELECT json_build_object('at', u.received_at, 'via', u.via, 'buffer_bytes', u.buffer_bytes,
-                                 'buffer_version', u.buffer_version, 'polls_to', u.polls_to)
+                                 'buffer_version', u.buffer_version, 'polls_from', u.polls_from,
+                                 'polls_to', u.polls_to)
         FROM sensor_uploads u WHERE u.sensor_id = se.id ORDER BY u.received_at DESC LIMIT 1) AS last_upload,
-       cr.crashes, cr.max_recovery_s,
+       cr.crashes, cr.restarts, cr.within_60s, cr.max_recovery_s,
        -- not collecting since (the ongoing outage, e.g. the 2026-10-06 adapter
        -- loss); from sensor_periods - the same fact from the alerts walked back
        -- over 9k SOURCEERROR rows, 2.9 s with a cold cache
@@ -36,10 +37,15 @@ SELECT se.id, se.name, se.location, se.hardware,
 FROM sensors se
 LEFT JOIN sensor_summary ss ON ss.sensor_id = se.id
 -- capture crashes in the 24 h before the last poll: Kismet re-opened the
--- source (SOURCEOPEN); recovery = from the first SOURCEERROR after the
--- previous SOURCEOPEN to this one
+-- source (SOURCEOPEN) after a SOURCEERROR; recovery = from the first
+-- SOURCEERROR after the previous SOURCEOPEN to this one (the end of a long
+-- outage counts too, hence within_60s). A re-open without an error before
+-- it is a restart (Kismet started), not a crash.
 LEFT JOIN LATERAL (
-  SELECT count(*)::int AS crashes, max(extract(epoch FROM o.ts - e.first))::int AS max_recovery_s
+  SELECT count(*) FILTER (WHERE e.first IS NOT NULL)::int AS crashes,
+         count(*) FILTER (WHERE e.first IS NULL)::int AS restarts,
+         count(*) FILTER (WHERE o.ts - e.first <= interval '60 seconds')::int AS within_60s,
+         max(extract(epoch FROM o.ts - e.first))::int AS max_recovery_s
   FROM alerts o
   CROSS JOIN LATERAL (
     SELECT min(e.ts) AS first FROM alerts e
@@ -79,10 +85,13 @@ WHERE se.account_id = %(account_id)s AND se.name = %(name)s
 SELECT p.kind AS type, p.starts_at, p.ends_at, p.ends_at IS NULL AS ongoing,
        extract(epoch FROM coalesce(p.ends_at, ss.last_poll) - p.starts_at)::int AS duration_s, p.polls,
        'polls' AS source,
-       (SELECT string_agg(a.label, '; ' ORDER BY a.starts_at) FROM sensor_annotations a
-        WHERE a.sensor_id = p.sensor_id
-          AND CASE p.kind WHEN 'outage' THEN a.kind IN ('gap', 'no_frames') ELSE a.kind = 'coverage' END
-          AND a.starts_at < coalesce(p.ends_at, 'infinity') AND coalesce(a.ends_at, a.starts_at) > p.starts_at) AS cause
+       -- each documented label once, in the order they start
+       (SELECT string_agg(x.label, '; ' ORDER BY x.first)
+        FROM (SELECT a.label, min(a.starts_at) AS first FROM sensor_annotations a
+              WHERE a.sensor_id = p.sensor_id
+                AND CASE p.kind WHEN 'outage' THEN a.kind IN ('gap', 'no_frames') ELSE a.kind = 'coverage' END
+                AND a.starts_at < coalesce(p.ends_at, 'infinity') AND coalesce(a.ends_at, a.starts_at) > p.starts_at
+              GROUP BY a.label) x) AS cause
 FROM sensor_periods p
 JOIN sensor_summary ss ON ss.sensor_id = p.sensor_id
 WHERE p.sensor_id = %(sensor_id)s

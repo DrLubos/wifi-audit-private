@@ -70,10 +70,12 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
             "poll_s": None if r["poll_s"] is None else round(float(r["poll_s"]), 1),
             "last_upload": (None if r["last_upload"] is None else
                             dict(r["last_upload"], at=_ts(r["last_upload"]["at"]),
+                                 polls_from=_ts(r["last_upload"]["polls_from"]),
                                  polls_to=_ts(r["last_upload"]["polls_to"]))),
             "coverage_7d": coverage, "window_7d": window,
             "outage_since": iso(r["outage_since"]),
-            "crashes_24h": {"count": r["crashes"] or 0, "max_recovery_s": r["max_recovery_s"]},
+            "crashes_24h": {"count": r["crashes"] or 0, "within_60s": r["within_60s"] or 0,
+                            "max_recovery_s": r["max_recovery_s"], "restarts": r["restarts"] or 0},
             "aps_7d": r["aps_7d"] or 0, "aps_only_here_7d": r["aps_only_here_7d"] or 0,
             "config": _config(r["config"]), "pending": _config(r["pending"]),
         })
