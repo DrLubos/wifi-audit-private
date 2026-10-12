@@ -363,3 +363,11 @@ misses the cache (the first one after an import, a write or a new bucket,
 through Caddy) 0.2-0.4 s for the period endpoints and 0.3-0.7 s for the
 utilization timeline. Smoke test: 80 / 80.
 
+
+The sightings of the Networks page (2026-10-12, `networks.sightings`,
+`ep_v2.py --range 30d`, decision 3 of the 4b check): the 447 hotspot BSSIDs
+of 30 days, 117k observation rows. A plain join made the planner estimate
+~15k rows per AP (the table's average; a hotspot has ~260) and seq-scan all
+3.7M observations: 47k pages, 6.3-7.0 s cold. One index-only range scan per
+AP (`LATERAL ... OFFSET 0`) reads 3.5k pages: 1.4 s on the first run after
+the scans, 0.34 s warm - once per import or bucket, then the response cache.

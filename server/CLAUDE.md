@@ -166,6 +166,19 @@ Conventions for the stack:
     as successful). Fixture tests: `security_level_test.sql`,
     `classification_test.sql`, `events_test.sql`, the extended
     `refresh_rollups_test.sql`; read-only check `check_schema9.sql`.
+  - **An AP stays an AP (schema 10, `ops/migrate_schema10.sh`):** Kismet
+    re-types devices (an AP that also sends as a station is reported as a
+    client later; 38 devices on 2026-10-12). Every AP set - `refresh_rollups()`,
+    `ap_inventory`, `refresh_ap_baselines()`, `load_ap_load_samples()`, the
+    detectors, the importer's observation filter - is **`devices.ever_ap`**,
+    set by the trigger `devices_ever_ap()` (typed ap, or an advertised
+    configuration = it beaconed) and never cleared; never filter APs on
+    `devices.type` again. Kismet episodes are attributed to the account AP
+    (`aps`, by the transmitter's BSSID = `detections.mac`) and adopt a row
+    without a subject stored for exactly their window; the duplicates of
+    before were merged once by `ops/merge_duplicate_events.sql` (keeps
+    statuses and notes, `audit_log` 'event.merge'). Read-only check:
+    `tests/sql/check_schema10.sql`.
   - **API v2 (`/api/v2`, `api/app/v2/`, PLAN.md section 7):** the SQL lives in
     `app/v2/sql/<group>.sql` as named statements (`-- name: x`, psycopg
     `%(param)s`, fragments `{{_x}}`), never inline; `tests/perf/ep_v2.py`

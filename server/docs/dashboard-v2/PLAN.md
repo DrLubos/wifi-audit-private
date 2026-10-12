@@ -1258,6 +1258,44 @@ docker compose build api && docker compose up -d api
 docker compose build frontend && docker compose up -d frontend
 ```
 
+**Decisions after the 4b check (2026-10-12), as built.**
+
+1. *Unknown security is not assessed:* a BSSID of a managed network without
+   a beacon record (all 177 hidden BSSIDs without crypt are of that kind) is
+   counted in `compliance.not_assessed` and never fails; `total` counts the
+   assessed ones (IK-WIFI-DOT1X: Compliant, 2 not assessed). The Overview's
+   compliance the same; a network with no assessed BSSID is a low finding.
+2. *The IK-WIFI rogue (F0:6F:CE:41:1F:B0, a hidden Ruckus AP matched by its
+   seen name):* a false positive; the developer adds the OUI with the SQL of
+   the 4c hand-over (settings writes come in phase 5) and labels event 414.
+3. *Hotspot presence:* the median of continuous sightings (observations
+   without a gap over 10 minutes, last - first), for the hotspot row and the
+   transient networks; 30 days: 3 min (the mean first-to-last lifetime said
+   8 d).
+4. *Security changes:* MFP-only changes of mobile APs stay out of the
+   Networks list (30 days: 32 -> 8); they remain events.
+5. *Heatmap scale:* six thresholds from the account's 30-day peak (all
+   sensors; 199 -> 10 30 70 110 160 200+), the same for every period, view
+   and sensor filter; the legend shows them. The evening/night peak is
+   expected - pi-fri is in a dormitory.
+6. *Kismet re-types devices (schema 10):* `devices.ever_ap` keeps an AP in
+   every AP table and detector once it has been one; Kismet episodes are
+   attributed to the account AP by the transmitter's BSSID and adopt the
+   row without a subject of the same window; the three duplicates of before
+   (82/375, 56/367, 368/80) are merged by `ops/merge_duplicate_events.sql`.
+
+Deploy (schema 10 first, then the merge, then the api and frontend):
+
+```sh
+cd ~/wifi-audit && git pull && cd server
+./backup.sh                                                    # and copy the dump off the box
+sh ops/migrate_schema10.sh 2>&1 | tee ~/migrate10-$(date -u +%Y%m%dT%H%MZ).log
+docker compose exec -T db psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -v apply=1 \
+  < ops/merge_duplicate_events.sql
+docker compose build api && docker compose up -d api
+docker compose build frontend && docker compose up -d frontend
+```
+
 ### Phase 5 – Settings, write token, write endpoints, cleanup
 
 Commits: write token dependency + `/auth/check`; write endpoints + tests;
