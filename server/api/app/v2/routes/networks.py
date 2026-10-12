@@ -107,8 +107,12 @@ def networks(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
         if n["kind"] == "managed":
             failing = [b for b in rows if b["reason"]]
             reasons = sorted({b["reason"] for b in failing})
+            # BSSIDs without a beacon record are counted, not mixed into the labels
+            known = [b for b in rows if b["security"] not in (None, "unknown")]
             managed.append(dict(base, policy=_policy(n),
-                                actual={"labels": labels, "mfp": sorted({b["mfp"] or "unknown" for b in rows})},
+                                actual={"labels": sorted({b["security_label"] for b in known}),
+                                        "mfp": sorted({b["mfp"] or "unknown" for b in known}),
+                                        "unknown": len(rows) - len(known)},
                                 compliance={"met": len(rows) > 0 and not failing, "failing": len(failing),
                                             "total": len(rows), "reason": reasons[0] if reasons else None},
                                 clients_now=sum(b["clients"] or 0 for b in rows if _active(b, active_after)),
