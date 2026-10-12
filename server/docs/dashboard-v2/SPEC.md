@@ -148,9 +148,13 @@ Each card states whether it follows the period. "Now" cards ignore it.
     the operator's labels (input for the false-positive analysis, RQ2): they
     keep `status_at` and `status_note` and are never overwritten by a refresh
     or a detector re-run.
-- Filters: status (open / confirmed / false positive), type, managed networks
-  only, BSSID/SSID search. Keyset pagination on `(ts, id)`, 50 per page,
-  "Newer"/"Older"; never OFFSET.
+- Filters: status (open / confirmed / false positive; Open by default - the
+  work queue -, `status=all` for every status), type, "Medium and above",
+  managed networks only, BSSID/SSID search. Keyset pagination on the rows'
+  `(ts, id)`, 50 rows per page, "Newer"/"Older"; never OFFSET.
+- Grouped rows (display only, decided 2026-10-12): repeated info / low events
+  of one AP, type and status on one local day are one row with their number,
+  expandable to the events; a bulk label can take the whole row.
 - Expanded row: "Why it fired" (evidence) and "Who saw it" (per-sensor RSSI,
   first/last seen, client count). Actions Confirm / False positive need the
   write token.

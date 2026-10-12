@@ -758,10 +758,10 @@ rendered hatched with "client counts were not recorded".
 
 | Endpoint | Parameters | Response (main fields) |
 |---|---|---|
-| `GET /api/v2/sensors` | – | `{account, latest_data, write: {enabled}, sensors: [{name, location, hardware, status: online/offline/no_data, last_poll, last_capture_at, offline_s, hop: {n, visited, ok}, poll_s, last_upload: {at, via, buffer_bytes, polls_to}, coverage_7d, crashes_24h: {count, max_recovery_s}, aps_7d, aps_only_here_7d, config: {plan, channels, dwell_s, poll_s, confirmed_at}, pending: {…} \| null}]}` – sidebar, top bar, Sensors cards, Overview sensor cards |
+| `GET /api/v2/sensors` | – | `{account, latest_data, write: {enabled}, sensors: [{name, location, hardware, status: online/offline/no_data, last_poll, last_capture_at, offline_s, hop: {n, visited, ok}, poll_s, last_upload: {at, via, buffer_bytes, polls_from, polls_to}, coverage_7d, crashes_24h: {count, within_60s, max_recovery_s, restarts}, aps_7d, aps_only_here_7d, config: {plan, channels, dwell_s, poll_s, confirmed_at}, pending: {…} \| null}]}` – sidebar, top bar, Sensors cards, Overview sensor cards |
 | `GET /api/v2/overview/status` | `sensor` | `{open_events: {total, by_severity}, compliance: {met, total, first_problem: {network, reason}}, attention: [{severity, kind, title, bssid?, network?, sensors, ts, link}]}` |
 | `GET /api/v2/overview/period` | `sensor, range` | envelope + `tiles: {new_aps: {total, mobile_share, series}, open_nearby: {total, aps_seen, series}, clients_managed: {peak, peak_at, avg_label, avg, series}}`, `aps: {fixed: [], mobile: [], events: [[{severity, title}]]}`, `security: [{level, label, aps, share}]` |
-| `GET /api/v2/events` | `sensor, status (csv), type (detection/kismet/config/sensor, csv), managed (0/1), q, before=<ts>,<id>, after=<ts>,<id>, limit ≤ 100 (50)` | `{counts: {open, confirmed, false_positive, total}, items: [{id, ts, ts_end, severity, kind, type, type_label, summary, ap: {bssid, ssid, network, classification} \| null, sensors: [], status, status_at}], newer, older}` – keyset on `(ts, id)`, never OFFSET; `newer`/`older` are opaque cursors |
+| `GET /api/v2/events` | `sensor, status (csv), type (detection/kismet/config/sensor, csv), severity (the lowest shown), managed (0/1), q, before=<ts>,<id>, after=<ts>,<id>, limit ≤ 100 (50)` | `{counts: {open, confirmed, false_positive, total}, rows: {…the same per feed row}, items: [{id, ts, ts_end, severity, kind, type, type_label, summary, ap: {bssid, ssid, network, classification} \| null, sensors: [], status, status_at, group: {n, day, ts_first, ts_last, members: [{id, ts, ts_end, summary, status_at}]} \| null}], newer, older}` – keyset on the rows' `(ts, id)`, never OFFSET; `newer`/`older` are opaque cursors; a row is one event or repeated info / low events of one AP, type and status on one local day (`events.sql: _row`) |
 | `GET /api/v2/events/{id}` | – | item + `evidence` (per kind, redacted) + `who_saw_it: [{sensor, seen, rssi_median, first_seen, last_seen}]` + `clients` |
 | `GET /api/v2/networks` | `sensor, range` | `{rogue: [{ssid, bssid, security, sensors, since, event_id}], managed: [{id, ssid, bssids, bssids_active, vendors, policy, actual, compliance: {met, failing, total, reason}, sensors: {name: n}, clients_now, bssid_rows: [{bssid, channel, band, ht_mode, security, label, clients, rssi: {sensor: dBm}, last_seen}]}], friendly: [{…, note}], other: {networks, hidden, hotspots: {bssids, avg_presence_s}, rows: [{network, bssids, vendors, security, presence}]}, security_changes: [{ts, kind, network, bssids, from, to}]}` – paged `other.rows` (`other_page`) |
 | `GET /api/v2/networks/timeseries` | `sensor, range` | envelope + `categories: {configured, mobile, other}`, `security: {open, legacy, psk_no_mfp, strong, unknown}` |
@@ -1409,6 +1409,69 @@ change):
 ```sh
 cd ~/wifi-audit && git pull && cd server
 docker compose build api && docker compose up -d api
+docker compose build frontend && docker compose up -d frontend
+```
+
+*Decisions after the 4d + 4e deploy (2026-10-12, commits 01ea913 ..
+ed10872):* the live check of `/events` and the AP pages passed (1440 px and
+390 px, keyboard: Enter opens a row, focus stays on its toggle, the locked
+buttons are skipped). Then:
+
+- *Open by default:* the status filter starts at Open, the work queue as on
+  the board; `status=all` in the URL for every status. The AP page's "All
+  events of this AP" opens `?q=<bssid>&status=all`.
+- *Grouped rows (display only):* repeated info / low events of one sensor,
+  kind, type, AP, status and severity on one local day are one row with
+  their number ("3 episodes on 11 Oct, 02:17 – 17:31") that expands into the
+  events, each with its own detail; a linked member (`?id=`) opens its group.
+  The status is part of the group, so a later bulk label takes the row as
+  shown (the locked "Confirm all" / "All false positive"). The pager counts
+  rows and events. Real data: 271 events → 224 rows (36 groups of 2–5) -
+  NOCLIENTMFP is spread over many IK-WIFI BSSIDs; per network instead of per
+  AP it would be 159 rows (largest 13), a one-line change of `_row`.
+- *"Medium and above":* the api's `severity=medium`; 38 of the 271 open.
+- *NOCLIENTMFP* (Kismet 2025-09-R1's source, `wifi-sensor/docs/findings.md`
+  section 12): the rule checks only the client's association request (no
+  RSN element or no MFPC), never whether the network offers MFP, and names
+  the BSSID the client asked to join as `transmitter_mac`. Of the 164 alerts
+  113 name open APs and none an AP that offered MFP. The rule's label becomes
+  "Association request without MFP" (schema.sql; the live row in the deploy
+  below).
+
+**4f as built (2026-10-12, commits 29f7117 .. 336fd3b).** `/sensors` is the
+new page; the top bar has no filter (every sensor of the account). As built
+against the board, with what the data showed:
+
+- *Cards:* status between imports is "Data until …" (SPEC Q7) with a note
+  that the data ends at the last import; the hop badge is the measured list
+  of the last collecting poll. The api's `crashes_24h` counted every re-open
+  of the capture source; now crashes (a re-open after a SOURCEERROR, with
+  `within_60s` and the longest recovery) and restarts (a re-open without an
+  error) are apart - on 11 Oct: 3 crashes (2 within 7 s, one the end of the
+  4-day adapter loss), 3 restarts. The buffer shows its size and the days it
+  holds at the last import (`last_upload.polls_from`). "Only by this sensor"
+  is left out with one sensor (it is every AP). "Configuration in effect
+  since" instead of "confirmed by the sensor": the configuration rows are
+  seeded, nothing confirms them before config delivery (11.1); a pending
+  change says it is not delivered (Q10).
+- *Coverage per day:* 14 local days stacked to 100 % with the board's
+  states plus "no data yet" (after the last import, flat grey; "not
+  installed yet" hatched); the tooltip lists the shares and the documented
+  causes of the day; ←/→ move; on a phone the labels shrink to day numbers.
+- *Outages and limited periods:* newest first with duration, type and cause;
+  windows known only from the documented history are marked "documented";
+  each cause label once (the 17 Sep outage repeated one).
+
+Deploy the 4e follow-up and 4f (the api, the NOCLIENTMFP label with a
+refresh of the events - it rewrites the summaries of the 152 episodes and
+keeps their statuses - then the frontend; no schema change):
+
+```sh
+cd ~/wifi-audit && git pull && cd server
+docker compose build api && docker compose up -d api
+docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 \
+  -c "UPDATE kismet_alert_rules SET label = 'Association request without MFP' WHERE header = 'NOCLIENTMFP'" \
+  -c 'SELECT * FROM refresh_events(1)'
 docker compose build frontend && docker compose up -d frontend
 ```
 
