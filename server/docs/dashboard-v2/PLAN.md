@@ -1218,6 +1218,46 @@ docker compose build api && docker compose up -d api
 docker compose build frontend && docker compose up -d frontend
 ```
 
+**4b as built (2026-10-12, commits 2192875 .. d2d0fb5).** First the three
+Overview decisions from the 4a check: "Needs attention" lists compliance
+findings and ongoing sensor problems first, then open events of the last
+7 days before the latest data, older open events as one line
+(`attention_older`); event dots on the period charts only for medium and
+above (low ones stay in the tooltip); the first 24 h of every sensor are a
+warm-up, nothing first seen there is new (`warmup` in `account_aps`,
+`tiles.new_aps.warmup_excluded`, said in the New APs tooltip). Then
+`/networks` is the new page; the rest of the transition routes stay as in
+4a. As built against the board:
+
+- *Shared x axis:* the two time charts share the y maximum and the hovered
+  bucket (`StackedColumns` takes `active`/`onActive`/`top`); the tooltip
+  shows only in the chart under the pointer. The security chart adds an
+  "unknown" series (grey) when the period has one - the board has none, the
+  data has ~25 per window (hidden BSSIDs without a beacon record).
+- *Security changes:* the newest 8, the rest behind "Show all N changes"
+  (30 days: 32, mostly hotspots toggling MFP capable/no).
+- *Managed "Actual":* labels and MFP of the BSSIDs with a known security,
+  the others counted (`actual.unknown`, "WPA2-Enterprise, no MFP · 2
+  unknown"); no MFP part for open networks. The sub-table's badge shows the
+  configuration label (WPA2-PSK, WPA1/WPA2 mixed) in the level's color where
+  the board shows the level text; BSSIDs are not linked until the new AP
+  detail (4d).
+- *Clients heatmap:* hatched also where the client counts were not recorded
+  (`load_missing`: no load history between buffer v6 and v7, 2026-10-03
+  11:00 - 10-11 10:00 UTC) - the hint says which; the board's fixed ramp
+  (25 .. 450+) is kept.
+- *Other networks:* a hidden BSSID without a known name gets no
+  Managed/Friendly action (a network is configured by its SSID); a
+  transient lifetime under a minute reads "under 1 min".
+
+Deploy 4b (the api first: the decisions and `actual.unknown`):
+
+```sh
+cd ~/wifi-audit && git pull && cd server
+docker compose build api && docker compose up -d api
+docker compose build frontend && docker compose up -d frontend
+```
+
 ### Phase 5 – Settings, write token, write endpoints, cleanup
 
 Commits: write token dependency + `/auth/check`; write endpoints + tests;
