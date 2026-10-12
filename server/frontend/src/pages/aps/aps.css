@@ -1,19 +1,7 @@
 /* The Access points list and the AP page (boards/Aps.dc.html, ApDetail.dc.html). */
 .v2 .filters-card { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
 .v2 .filter-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
-.v2 .in {
-  height: 44px; width: 100%; padding: 0 10px; border: 1px solid var(--control); border-radius: 8px;
-  background: var(--surface); font: inherit; font-size: 14px; color: var(--text); box-sizing: border-box;
-}
-.v2 .in:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .v2 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.v2 .chip {
-  height: 36px; padding: 0 12px; border: 1px solid var(--control); border-radius: 999px; background: var(--surface);
-  font: inherit; font-size: 13px; color: var(--text); cursor: pointer;
-}
-.v2 .chip[aria-pressed="true"] { background: var(--info-bg); border-color: #9db6d8; color: var(--info-fg); }
-.v2 .chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.v2 .chip-sep { width: 1px; height: 24px; background: var(--border); margin: 0 6px; }
 .v2 .ap-table th, .v2 .ap-table td { padding-left: 8px; padding-right: 8px; }   /* 11 columns fit 1440 px */
 .v2 .ap-table th.wrap { white-space: normal; }
 .v2 .ap-table .ap-name { font-weight: 500; }
@@ -22,7 +10,6 @@
 .v2 .ap-table .ap-name.hidden { font-style: italic; }
 .v2 .ap-table tr.suspicious { background: #fff7f6; }
 .v2 .ap-table tr.group-row td { background: var(--bg); font-weight: 500; font-size: 13px; padding-top: 8px; padding-bottom: 8px; }
-.v2 .em { color: var(--text); font-weight: 500; }
 
 /* the AP page */
 .v2 .ap-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 16px; }
@@ -32,9 +19,6 @@
 .v2 .seg button[aria-disabled="true"] { cursor: not-allowed; }
 .v2 .seg button[aria-disabled="true"][aria-pressed="true"] { color: #ffffff; }
 .v2.ap-page .panel h2 { font-size: 16px; }                 /* the AP page's cards (board) */
-.v2 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 0; font-size: 14px; }
-.v2 .kv dt { color: var(--muted); }
-.v2 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .v2 .advice { padding: 10px 12px; border-radius: 8px; background: #fdf8f1; font-size: 13px; color: #5e3a08; }
 .v2 .bigs { display: flex; flex-wrap: wrap; gap: 20px; }
 .v2 .big { display: flex; flex-direction: column; gap: 2px; }

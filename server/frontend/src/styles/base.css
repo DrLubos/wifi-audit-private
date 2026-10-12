@@ -104,7 +104,7 @@ body {
 .v2 .t td { padding: 10px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
 .v2 .t tbody tr:last-child td { border-bottom: none; }
 .v2 .nw td { white-space: nowrap; }
-.v2 .scroll-x { overflow-x: auto; }
+.v2 .scroll-x { overflow-x: auto; position: relative; }   /* keeps absolute children (sr-only) inside */
 
 .v2 .lg { display: flex; gap: 6px 16px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
 .v2 .lg > span { display: flex; align-items: center; gap: 6px; }
@@ -138,6 +138,19 @@ body {
 .v2 .seg button[aria-disabled="true"] { color: var(--faint); cursor: not-allowed; }
 .v2 .seg button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .v2 .seg-lg button { height: 44px; }
+.v2 .in {
+  height: 44px; width: 100%; padding: 0 10px; border: 1px solid var(--control); border-radius: 8px;
+  background: var(--surface); font: inherit; font-size: 14px; color: var(--text); box-sizing: border-box;
+}
+.v2 .in:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.v2 .chip {
+  height: 36px; padding: 0 12px; border: 1px solid var(--control); border-radius: 999px; background: var(--surface);
+  font: inherit; font-size: 13px; color: var(--text); cursor: pointer;
+}
+.v2 .chip[aria-pressed="true"] { background: var(--info-bg); border-color: #9db6d8; color: var(--info-fg); }
+.v2 .chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.v2 .chip-sep { width: 1px; height: 24px; background: var(--border); margin: 0 6px; }
+.v2 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .v2 .btn {
   height: 44px; padding: 0 18px; border: 0; border-radius: 8px; background: var(--link); color: #ffffff; font: inherit;
   font-weight: 500; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center;
@@ -154,3 +167,14 @@ body {
   font-size: 12px; white-space: nowrap; margin: 1px 4px 1px 0;
 }
 .v2 .pager { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 18px; font-size: 13px; }
+
+/* shared by several pages: key-value lists, emphasis, a row's expand toggle */
+.v2 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 0; font-size: 14px; }
+.v2 .kv dt { color: var(--muted); }
+.v2 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.v2 .em { color: var(--text); font-weight: 500; }
+.v2 .row-toggle {
+  border: 0; background: none; padding: 0; font: inherit; font-weight: 500; color: var(--text); cursor: pointer;
+  text-align: left;
+}
+.v2 .row-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
