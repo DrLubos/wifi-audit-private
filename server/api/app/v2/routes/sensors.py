@@ -78,6 +78,7 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
                             "max_recovery_s": r["max_recovery_s"], "restarts": r["restarts"] or 0},
             "aps_7d": r["aps_7d"] or 0, "aps_only_here_7d": r["aps_only_here_7d"] or 0,
             "config": _config(r["config"]), "pending": _config(r["pending"]),
+            "capture": None if r["capture"] is None else dict(r["capture"], since=_ts(r["capture"]["since"])),
         })
     last_polls = [s["last_poll"] for s in acc["sensors"] if s["last_poll"]]
     body = {

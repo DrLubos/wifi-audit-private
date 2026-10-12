@@ -22,6 +22,13 @@ SELECT se.id, se.name, se.location, se.hardware,
        (SELECT p.starts_at FROM sensor_periods p
         WHERE p.sensor_id = se.id AND p.kind = 'outage' AND p.ends_at IS NULL) AS outage_since,
        ap7.aps_7d, ap7.aps_only_here_7d,
+       -- the capture hardware attached now (schema 11, sensor_hardware)
+       (SELECT json_build_object('since', x.valid_from, 'adapter', a.name, 'antenna', n.name,
+                                 'gain_dbi', n.gain_dbi)
+        FROM sensor_hardware x
+        JOIN capture_hardware a ON a.id = x.adapter_id
+        LEFT JOIN capture_hardware n ON n.id = x.antenna_id
+        WHERE x.sensor_id = se.id ORDER BY x.valid_from DESC LIMIT 1) AS capture,
        (SELECT json_build_object('version', c.version, 'plan', c.channel_plan, 'channels', c.channels,
                                  'n_channels', c.n_channels, 'dwell_s', c.dwell_s, 'poll_s', c.poll_s,
                                  'confirmed_at', c.confirmed_at)

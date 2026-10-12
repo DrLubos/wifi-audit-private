@@ -267,7 +267,10 @@ def ap_rssi(request: Request, bssid: str = Path(pattern=BSSID_RE), days: int = Q
         "series": series,
         # floor readings (-106/-120 dBm) are censored, not levels: counted apart
         "n_floor": floors,
-        "baseline": {s["sensor"]: {"median": s["rssi_median"], "robust_sd": s["rssi_robust_sd"]}
+        # from: the start of the baseline's window - inside one capture-hardware
+        # period (schema 11), so the band is not drawn over readings of other hardware
+        "baseline": {s["sensor"]: {"median": s["rssi_median"], "robust_sd": s["rssi_robust_sd"],
+                                   "from": iso(s["baseline_window_start"])}
                      for s in sensors if s["has_baseline"] and s["rssi_median"] is not None},
     }
     return deps.respond(body, tag)
