@@ -92,7 +92,7 @@ WITH s AS (
          (o.pk_total - o.pk_data) - lag(o.pk_total - o.pk_data) OVER w   AS mgmt_delta
   FROM observations o
   JOIN devices d ON d.sensor_id = o.sensor_id AND d.device_key = o.device_key
-  WHERE o.sensor_id = %(sid)s AND d.type = 'ap'
+  WHERE o.sensor_id = %(sid)s AND d.ever_ap
     AND o.ts >= %(scan_from)s AND o.ts < %(scan_to)s{key_filter}
   WINDOW w AS (PARTITION BY o.device_key ORDER BY o.ts)
 )"""
@@ -132,7 +132,7 @@ SELECT a.id, a.ts, a.header,
 FROM alerts a
 LEFT JOIN LATERAL (
   SELECT device_key, ssid FROM devices d
-  WHERE d.sensor_id = a.sensor_id AND d.mac = a.transmitter_mac AND d.type = 'ap'
+  WHERE d.sensor_id = a.sensor_id AND d.mac = a.transmitter_mac AND d.ever_ap
   ORDER BY last_seen DESC LIMIT 1) d ON true
 WHERE a.sensor_id = %(sid)s AND a.header = ANY(%(headers)s)
   AND a.ts IS NOT NULL AND a.transmitter_mac IS NOT NULL

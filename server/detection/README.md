@@ -8,6 +8,13 @@ scheduled or wired to ingest: the purpose is to develop and eyeball an algorithm
 against real data - the seeded window now, a window with a staged attack later.
 The Pi collector stays dumb.
 
+The AP set of every detector is `devices.ever_ap` (schema 10): a device that
+has ever been an AP - Kismet re-types some (an AP that also sends as a station
+is reported as a client later), and a re-typed AP keeps its baseline, its
+readings and its deauth attribution. Results computed before schema 10 used
+`devices.type = 'ap'` (2026-10-12: 849 devices; ever_ap adds 37 typed client
+and 1 ad-hoc).
+
 ```
 docker compose run --rm detect deauth-flood --from 2026-09-15 --to 2026-09-21 --dry-run --verbose
 docker compose run --rm detect deauth-flood --from 2026-09-15 --to 2026-09-21            # writes

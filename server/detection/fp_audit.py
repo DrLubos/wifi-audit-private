@@ -52,7 +52,7 @@ WITH obs AS (
          (o.ts AT TIME ZONE %(tz)s)::date AS obs_day
   FROM observations o
   JOIN devices d ON d.sensor_id = o.sensor_id AND d.device_key = o.device_key
-  WHERE o.sensor_id = %(sid)s AND d.type = 'ap' AND (o.rssi IS NOT NULL OR o.rssi_floor)
+  WHERE o.sensor_id = %(sid)s AND d.ever_ap AND (o.rssi IS NOT NULL OR o.rssi_floor)
     AND o.ts >= %(p_from)s AND o.ts < %(p_until)s
 ), stats AS (
   SELECT device_key, count(rssi)::integer AS n_obs,
@@ -77,14 +77,14 @@ SELECT o.device_key, rssi_valid(o.rssi) AS rssi, rssi_is_floor(o.rssi, o.rssi_fl
        (o.ts AT TIME ZONE %(tz)s)::date AS obs_day
 FROM observations o
 JOIN devices d ON d.sensor_id = o.sensor_id AND d.device_key = o.device_key
-WHERE o.sensor_id = %(sid)s AND d.type = 'ap' AND (o.rssi IS NOT NULL OR o.rssi_floor)
+WHERE o.sensor_id = %(sid)s AND d.ever_ap AND (o.rssi IS NOT NULL OR o.rssi_floor)
   AND o.ts >= %(from_)s AND o.ts < %(to)s
 ORDER BY o.device_key"""
 
 AP_KIND_SQL = """
 SELECT device_key, trunc(mac)::text AS oui,
        (mac & macaddr '02:00:00:00:00:00') <> macaddr '00:00:00:00:00:00' AS random_bssid
-FROM devices WHERE sensor_id = %(sid)s AND type = 'ap'"""
+FROM devices WHERE sensor_id = %(sid)s AND ever_ap"""
 
 
 # --- pure helpers (unit-tested) -------------------------------------------------------

@@ -90,7 +90,7 @@ SELECT d.device_key,
        trunc(d.mac)::text AS oui,
        (d.mac & macaddr '02:00:00:00:00:00') <> macaddr '00:00:00:00:00:00' AS random_bssid,
        EXISTS (SELECT 1 FROM devices g
-               WHERE g.sensor_id = d.sensor_id AND g.type = 'ap'
+               WHERE g.sensor_id = d.sensor_id AND g.ever_ap
                  AND (g.mac & macaddr '02:00:00:00:00:00') = macaddr '00:00:00:00:00:00'
                  AND substr(g.mac::text, 10) = substr(d.mac::text, 10)) AS global_sibling,
        b.rssi_median, b.rssi_robust_sd, b.n_obs AS base_n_obs, b.n_days AS base_n_days,
@@ -99,7 +99,7 @@ SELECT d.device_key,
        coalesce(b.trusted, false) AS trusted
 FROM devices d
 JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.device_key
-WHERE d.sensor_id = %(sid)s AND d.type = 'ap'
+WHERE d.sensor_id = %(sid)s AND d.ever_ap
   AND b.rssi_median IS NOT NULL AND b.rssi_robust_sd IS NOT NULL"""
 
 # Signal (b), part 2: the RSSI readings of those APs, ordered by (device_key, ts)
@@ -112,7 +112,7 @@ SELECT o.device_key, o.ts, rssi_valid(o.rssi) AS rssi
 FROM observations o
 JOIN devices d      ON d.sensor_id = o.sensor_id AND d.device_key = o.device_key
 JOIN ap_baselines b ON b.sensor_id = o.sensor_id AND b.device_key = o.device_key
-WHERE o.sensor_id = %(sid)s AND d.type = 'ap' AND rssi_valid(o.rssi) IS NOT NULL
+WHERE o.sensor_id = %(sid)s AND d.ever_ap AND rssi_valid(o.rssi) IS NOT NULL
   AND b.rssi_median IS NOT NULL AND b.rssi_robust_sd IS NOT NULL
   AND o.ts >= %(scan_from)s AND o.ts < %(scan_to)s
 ORDER BY o.device_key, o.ts"""
@@ -144,7 +144,7 @@ LEFT JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.devic
 -- this gives the same rows while reading a fraction of the history.
 LEFT JOIN observations o ON o.sensor_id = d.sensor_id AND o.device_key = d.device_key
                         AND o.ts >= %(scan_from)s AND o.ts < %(scan_to)s
-WHERE d.sensor_id = %(sid)s AND d.type = 'ap' AND d.ssid IS NOT NULL AND d.ssid <> ''
+WHERE d.sensor_id = %(sid)s AND d.ever_ap AND d.ssid IS NOT NULL AND d.ssid <> ''
 GROUP BY d.device_key, d.mac, d.manuf, d.ssid, d.crypt, b.trusted, d.first_seen, d.last_seen"""
 
 # SSIDs each AP advertised in the past (so a twin that has since changed its SSID
