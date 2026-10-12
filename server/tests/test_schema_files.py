@@ -1,4 +1,4 @@
-"""Static checks of schema.sql and the schema-7/8/9/10 migrations (standard
+"""Static checks of schema.sql and the schema-7/8/9/10/11 migrations (standard
 library, no database):
 
   cd server && python3 -m unittest discover -s tests -p 'test_*.py'
@@ -7,7 +7,8 @@ library, no database):
   defines (schema 7: the band functions; schema 8: ap_load_hourly,
   ap_channel_at(), load_ap_load_samples(); schema 9: the new tables;
   schema 10: devices.ever_ap, its index and trigger, nothing reads the
-  device type for the AP set any more);
+  device type for the AP set any more; schema 11: the status reason and its
+  constraint, the capture hardware tables, hardware-bounded baselines);
 - schema.sql is the complete definition, without upgrade-only statements
   (ADD COLUMN IF NOT EXISTS, DROP INDEX IF EXISTS, view-to-matview DO block);
 - the newest migration sets the version schema.sql declares.
@@ -23,6 +24,7 @@ MIGRATION = open(os.path.join(HERE, "..", "ops", "migrate_schema7.sql"), encodin
 MIGRATION8 = open(os.path.join(HERE, "..", "ops", "migrate_schema8.sql"), encoding="utf-8").read()
 MIGRATION9 = open(os.path.join(HERE, "..", "ops", "migrate_schema9.sql"), encoding="utf-8").read()
 MIGRATION10 = open(os.path.join(HERE, "..", "ops", "migrate_schema10.sql"), encoding="utf-8").read()
+MIGRATION11 = open(os.path.join(HERE, "..", "ops", "migrate_schema11.sql"), encoding="utf-8").read()
 SCHEMA9_TABLES = ("accounts", "account_settings", "networks", "aps", "ap_sensors", "sensor_annotations",
                   "sensor_config", "sensor_uploads", "kismet_alert_rules", "audit_log",
                   "ap_security_periods", "sensor_periods")
@@ -87,8 +89,30 @@ class SchemaFiles(unittest.TestCase):
     def test_version(self):
         def version(sql):
             return re.search(r"VALUES \('schema_version', '(\d+)'\)", sql).group(1)
-        self.assertEqual((version(SCHEMA), version(MIGRATION10), version(MIGRATION9), version(MIGRATION8),
-                          version(MIGRATION)), ("10", "10", "9", "8", "7"))
+        self.assertEqual((version(SCHEMA), version(MIGRATION11), version(MIGRATION10), version(MIGRATION9),
+                          version(MIGRATION8), version(MIGRATION)), ("11", "11", "10", "9", "8", "7"))
+
+    def test_schema11_reasons_and_hardware(self):
+        body = re.sub(r"--[^\n]*", "", table_body(SCHEMA, "detections"))
+        self.assertRegex(body, r"\n\s+status_reason\s+text,")
+        constraint = re.search(r"CONSTRAINT detections_status_reason CHECK \((.*?)\)\)\)\);", SCHEMA, re.S)
+        self.assertIsNotNone(constraint)
+        # the migration adds the same constraint as the fresh definition
+        norm = lambda t: re.sub(r"\s+", " ", t).strip()
+        migrated = re.search(r"ADD CONSTRAINT detections_status_reason CHECK \((.*?)\)\)\);", MIGRATION11, re.S)
+        self.assertEqual(norm(migrated.group(1)), norm(constraint.group(1)))
+        for reason in ("security_relevant", "expected_benign", "staged_test", "rule_defect", "artefact"):
+            self.assertIn(reason, constraint.group(1))
+        self.assertIn("ADD COLUMN status_reason text;", MIGRATION11)
+        self.assertRegex(table_body(SCHEMA, "ap_baselines"), r"\n\s+hw_from\s+timestamptz,")
+        self.assertIn("ALTER TABLE ap_baselines ADD COLUMN hw_from timestamptz;", MIGRATION11)
+        for t in ("capture_hardware", "sensor_hardware"):
+            self.assertIsNotNone(table_body(SCHEMA, t), t)
+        self.assertIn("CREATE TRIGGER sensor_hardware_kinds", SCHEMA)
+        # a baseline is learned inside one hardware period; the merge keeps the reason
+        rab = function(SCHEMA, "refresh_ap_baselines")
+        self.assertIn("o.ts >= lower(v_hw) AND o.ts < upper(v_hw)", rab)
+        self.assertIn("status_reason = v_reason", function(SCHEMA, "merge_duplicate_kismet_events"))
 
     def test_schema10_ever_ap(self):
         body = re.sub(r"--[^\n]*", "", table_body(SCHEMA, "devices"))

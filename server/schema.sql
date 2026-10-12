@@ -59,7 +59,13 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 --    attributed to the account AP (aps) of the transmitter, and adopt the
 --    unattributed row of the same window; merge_duplicate_kismet_events()
 --    (ops/migrate_schema10.sh)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '10')
+-- 11: dashboard v2 phase 5 - detections.status_reason (the operator's fixed
+--    reason next to Confirm / False positive, counted for RQ2); the capture
+--    hardware catalog (capture_hardware) and what each sensor has attached
+--    since when (sensor_hardware) - a hardware change is a data boundary, and
+--    refresh_ap_baselines() learns a baseline inside one hardware period only
+--    (ap_baselines.hw_from, hardware_period()) (ops/migrate_schema11.sh)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '11')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- accounts and sensors ------------------------------------------------------------
@@ -364,6 +370,7 @@ CREATE TABLE IF NOT EXISTS ap_baselines (
   n_days         integer,                    -- distinct days (in sensors.tz) with a reading
   window_start   timestamptz,
   window_end     timestamptz,
+  hw_from        timestamptz,                -- start of the capture-hardware period it was learned in (schema 11)
   computed_at    timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (sensor_id, device_key),
   FOREIGN KEY (sensor_id, device_key) REFERENCES devices (sensor_id, device_key));
@@ -398,8 +405,18 @@ CREATE TABLE IF NOT EXISTS detections (
   status      text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'confirmed', 'false_positive')),
   status_at   timestamptz,
   status_note text,
+  -- the operator's fixed reason (schema 11; RQ2 counts by it): Confirm =
+  -- the event's condition was real - security_relevant, expected_benign
+  -- (true, but not a security issue) or staged_test (the developer's own
+  -- attack runs). False positive = it was not - rule_defect (a rule defect or
+  -- misattribution) or artefact (a sensor or environment artefact)
+  status_reason text,
   created_at  timestamptz NOT NULL DEFAULT now(),
-  updated_at  timestamptz NOT NULL DEFAULT now());   -- last change by a detector or refresh_events() (ETags)
+  updated_at  timestamptz NOT NULL DEFAULT now(),   -- last change by a detector or refresh_events() (ETags)
+  CONSTRAINT detections_status_reason CHECK (
+    (status = 'open' AND status_reason IS NULL)
+    OR (status = 'confirmed' AND status_reason IN ('security_relevant', 'expected_benign', 'staged_test'))
+    OR (status = 'false_positive' AND status_reason IN ('rule_defect', 'artefact'))));
 CREATE INDEX IF NOT EXISTS detections_ts   ON detections (sensor_id, ts);
 CREATE INDEX IF NOT EXISTS detections_open ON detections (sensor_id, severity) WHERE status = 'open';
 CREATE INDEX IF NOT EXISTS detections_feed ON detections (ts DESC, id DESC);   -- keyset paging of the feed
@@ -510,6 +527,58 @@ CREATE TABLE IF NOT EXISTS sensor_config (
   confirmed_at timestamptz,
   note         text,
   PRIMARY KEY (sensor_id, version));
+
+-- The capture hardware catalog (schema 11): adapters and antennas the
+-- account's sensors can carry. Extended by adding rows (Settings > Sensors or
+-- an INSERT), never by a schema change. bands: '2.4', '5', '6'.
+CREATE TABLE IF NOT EXISTS capture_hardware (
+  id         serial PRIMARY KEY,
+  account_id integer NOT NULL DEFAULT 1 REFERENCES accounts(id),
+  kind       text NOT NULL CHECK (kind IN ('adapter', 'antenna')),
+  name       text NOT NULL CHECK (name <> ''),
+  gain_dbi   real,                             -- an antenna's gain; NULL for an adapter or when unknown
+  bands      text[] NOT NULL DEFAULT '{}' CHECK (bands <@ ARRAY['2.4', '5', '6']),
+  connector  text,                             -- e.g. 'RP-SMA', 'USB 2.0'
+  note       text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (account_id, kind, name));
+
+-- What a sensor has attached since when (schema 11). Every row is a data
+-- boundary: an antenna's gain and pattern shift every RSSI the sensor
+-- measures, so an RSSI baseline never spans two rows (hardware_period(),
+-- refresh_ap_baselines()). Hardware is physical - it is in effect from
+-- valid_from, nothing is delivered to the sensor (unlike sensor_config).
+-- antenna_id NULL = the adapter's own antenna / none recorded.
+CREATE TABLE IF NOT EXISTS sensor_hardware (
+  sensor_id  integer NOT NULL REFERENCES sensors(id),
+  valid_from timestamptz NOT NULL,
+  adapter_id integer NOT NULL REFERENCES capture_hardware(id),
+  antenna_id integer REFERENCES capture_hardware(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  created_by text NOT NULL DEFAULT 'operator',     -- 'seed' for the rows of the migration
+  note       text,
+  PRIMARY KEY (sensor_id, valid_from));
+
+-- adapter_id must name an adapter, antenna_id an antenna, both of the
+-- sensor's account
+CREATE OR REPLACE FUNCTION sensor_hardware_kinds() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM capture_hardware h JOIN sensors s ON s.account_id = h.account_id
+                 WHERE h.id = NEW.adapter_id AND h.kind = 'adapter' AND s.id = NEW.sensor_id) THEN
+    RAISE EXCEPTION 'sensor_hardware: % is not an adapter of the sensor''s account', NEW.adapter_id;
+  END IF;
+  IF NEW.antenna_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM capture_hardware h JOIN sensors s ON s.account_id = h.account_id
+      WHERE h.id = NEW.antenna_id AND h.kind = 'antenna' AND s.id = NEW.sensor_id) THEN
+    RAISE EXCEPTION 'sensor_hardware: % is not an antenna of the sensor''s account', NEW.antenna_id;
+  END IF;
+  RETURN NEW;
+END
+$$;
+DROP TRIGGER IF EXISTS sensor_hardware_kinds ON sensor_hardware;
+CREATE TRIGGER sensor_hardware_kinds BEFORE INSERT OR UPDATE ON sensor_hardware
+  FOR EACH ROW EXECUTE FUNCTION sensor_hardware_kinds();
 
 -- One row per snapshot import (and, later, per ingest batch).
 CREATE TABLE IF NOT EXISTS sensor_uploads (
@@ -943,12 +1012,33 @@ LANGUAGE sql STABLE AS $$
       OR coalesce(p_last - p_first < interval '2 hours' AND p_last < p_latest - interval '1 hour', false)
 $$;
 
+-- The capture-hardware period of a sensor that contains p_ts (schema 11):
+-- [the newest sensor_hardware.valid_from <= p_ts, the next one), '-infinity'
+-- before the first record and 'infinity' after the last. With no record at
+-- all the whole time line is one period.
+CREATE OR REPLACE FUNCTION hardware_period(p_sensor_id integer, p_ts timestamptz)
+RETURNS tstzrange
+LANGUAGE sql STABLE AS $$
+  SELECT tstzrange(
+    coalesce((SELECT max(h.valid_from) FROM sensor_hardware h
+              WHERE h.sensor_id = p_sensor_id AND h.valid_from <= p_ts), '-infinity'),
+    coalesce((SELECT min(h.valid_from) FROM sensor_hardware h
+              WHERE h.sensor_id = p_sensor_id AND h.valid_from > p_ts), 'infinity'),
+    '[)')
+$$;
+
 -- Recompute the RSSI baselines of one sensor from its observations.
 -- Defaults match analysis/rssi_stability.py: an AP qualifies with >= 200
 -- valid readings on >= 2 distinct days. Floor readings are excluded from every
 -- statistic and counted in n_floor (floor share = n_floor / (n_obs + n_floor));
 -- baselines of APs that no longer qualify are cleared (statistics NULL). p_from / p_until restrict the readings used
 -- (NULL = unbounded) so a baseline can be fitted on an earlier window.
+-- Schema 11: never across a capture-hardware change - the readings are cut
+-- to the hardware period of the window's end (hardware_period() of p_until,
+-- or of the newest record without p_until), whose start is stored as
+-- hw_from (NULL: before any record - psycopg cannot load an infinite time).
+-- Right after a swap no AP qualifies, so every baseline is cleared
+-- until the new hardware has enough readings (evil_twin (b) waits too).
 -- A trusted row keeps its ssid/crypt (the operator-approved identity); only
 -- the statistics are refreshed. Returns the number of rows upserted.
 CREATE OR REPLACE FUNCTION refresh_ap_baselines(
@@ -962,11 +1052,14 @@ LANGUAGE plpgsql AS $$
 DECLARE
   v_tz text;
   v_n  integer;
+  v_hw tstzrange;
 BEGIN
   SELECT tz INTO v_tz FROM sensors WHERE id = p_sensor_id;
   IF v_tz IS NULL THEN
     RAISE EXCEPTION 'refresh_ap_baselines: unknown sensor_id %', p_sensor_id;
   END IF;
+  -- the hardware period of the window's end (p_until is exclusive)
+  v_hw := hardware_period(p_sensor_id, coalesce(p_until - interval '1 microsecond', 'infinity'));
 
   WITH obs AS (
     SELECT o.device_key, o.ts, rssi_valid(o.rssi) AS rssi,
@@ -979,6 +1072,7 @@ BEGIN
       AND (o.rssi IS NOT NULL OR o.rssi_floor)
       AND (p_from  IS NULL OR o.ts >= p_from)
       AND (p_until IS NULL OR o.ts <  p_until)
+      AND o.ts >= lower(v_hw) AND o.ts < upper(v_hw)
   ), stats AS (
     -- statistics over valid readings only; floors are counted, never averaged
     SELECT device_key,
@@ -1007,11 +1101,12 @@ BEGIN
   INSERT INTO ap_baselines (
       sensor_id, device_key, bssid, ssid, crypt,
       rssi_median, rssi_mean, rssi_sd, rssi_robust_sd, rssi_p5, rssi_p95,
-      band, n_obs, n_floor, n_days, window_start, window_end, computed_at)
+      band, n_obs, n_floor, n_days, window_start, window_end, hw_from, computed_at)
   SELECT p_sensor_id, s.device_key, d.mac, d.ssid, d.crypt,
          s.med, s.mean, s.sd, 1.4826 * m.mad,
          round(s.p5)::smallint, round(s.p95)::smallint,
-         ap_band(p_sensor_id, s.device_key), s.n_obs, s.n_floor, s.n_days, s.w_start, s.w_end, now()
+         ap_band(p_sensor_id, s.device_key), s.n_obs, s.n_floor, s.n_days, s.w_start, s.w_end,
+         nullif(lower(v_hw), '-infinity'), now()
   FROM stats s
   JOIN mad m ON m.device_key = s.device_key
   JOIN devices d ON d.sensor_id = p_sensor_id AND d.device_key = s.device_key
@@ -1031,6 +1126,7 @@ BEGIN
       n_days         = EXCLUDED.n_days,
       window_start   = EXCLUDED.window_start,
       window_end     = EXCLUDED.window_end,
+      hw_from        = EXCLUDED.hw_from,
       computed_at    = EXCLUDED.computed_at;
   GET DIAGNOSTICS v_n = ROW_COUNT;
 
@@ -1041,7 +1137,7 @@ BEGIN
   UPDATE ap_baselines SET
       rssi_median = NULL, rssi_mean = NULL, rssi_sd = NULL, rssi_robust_sd = NULL,
       rssi_p5 = NULL, rssi_p95 = NULL, band = NULL,
-      n_obs = NULL, n_floor = NULL, n_days = NULL, window_start = NULL, window_end = NULL,
+      n_obs = NULL, n_floor = NULL, n_days = NULL, window_start = NULL, window_end = NULL, hw_from = NULL,
       computed_at = now()
   WHERE sensor_id = p_sensor_id AND computed_at < now();
 
@@ -1694,6 +1790,7 @@ DECLARE
   v_account   integer;
   v_status    text;
   v_status_at timestamptz;
+  v_reason    text;
   v_note      text;
   m           record;
 BEGIN
@@ -1703,6 +1800,7 @@ BEGIN
   END IF;
   FOR m IN
     SELECT k.id AS k_id, k.status AS k_status, k.status_at AS k_at, k.status_note AS k_note,
+           k.status_reason AS k_reason, u.status_reason AS u_reason,
            u.id AS u_id, u.status AS u_status, u.status_at AS u_at, u.status_note AS u_note, u.type AS header
     FROM detections u
     JOIN detections k ON k.sensor_id = u.sensor_id AND k.kind = 'kismet' AND k.type = u.type
@@ -1718,24 +1816,29 @@ BEGIN
     IF m.k_status = 'open' OR (m.u_status <> 'open' AND m.u_at > coalesce(m.k_at, '-infinity')) THEN
       v_status := m.u_status;
       v_status_at := m.u_at;
+      v_reason := m.u_reason;
     ELSE
       v_status := m.k_status;
       v_status_at := m.k_at;
+      v_reason := m.k_reason;
     END IF;
     v_note := CASE WHEN m.u_note IS NULL OR m.u_note = m.k_note THEN m.k_note
                    WHEN m.k_note IS NULL THEN m.u_note
                    ELSE m.k_note || E'\n' || m.u_note END;
-    UPDATE detections d SET status = v_status, status_at = v_status_at, status_note = v_note
+    UPDATE detections d SET status = v_status, status_at = v_status_at, status_reason = v_reason,
+                            status_note = v_note
     WHERE d.id = m.k_id
-      AND (d.status, d.status_at, d.status_note) IS DISTINCT FROM (v_status, v_status_at, v_note);
+      AND (d.status, d.status_at, d.status_reason, d.status_note)
+          IS DISTINCT FROM (v_status, v_status_at, v_reason, v_note);
     INSERT INTO audit_log (account_id, action, target, old, new)
     VALUES (v_account, 'event.merge', 'event:' || m.k_id,
             jsonb_build_object(
               'kept', jsonb_build_object('id', m.k_id, 'status', m.k_status, 'status_at', m.k_at,
-                                         'status_note', m.k_note),
+                                         'status_reason', m.k_reason, 'status_note', m.k_note),
               'merged', jsonb_build_object('id', m.u_id, 'status', m.u_status, 'status_at', m.u_at,
-                                           'status_note', m.u_note)),
-            jsonb_build_object('id', m.k_id, 'status', v_status, 'status_at', v_status_at, 'status_note', v_note));
+                                           'status_reason', m.u_reason, 'status_note', m.u_note)),
+            jsonb_build_object('id', m.k_id, 'status', v_status, 'status_at', v_status_at,
+                               'status_reason', v_reason, 'status_note', v_note));
     DELETE FROM detections d WHERE d.id = m.u_id;
     kept_id := m.k_id;
     merged_id := m.u_id;

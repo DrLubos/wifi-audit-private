@@ -32,7 +32,9 @@
 --      as a client keeps ever_ap and its attribution; the merge of the
 --      duplicates stored before schema 10 keeps the labels and notes (an
 --      operator's label wins over open, the later of two labels), logs each
---      merge, leaves an ambiguous row alone and finds nothing the second time.
+--      merge, leaves an ambiguous row alone and finds nothing the second time;
+--   6. schema 11: a label needs a reason that fits it (the constraint), and
+--      the merge carries the winning label's reason.
 
 \set ON_ERROR_STOP on
 BEGIN;
@@ -234,10 +236,27 @@ BEGIN
   END IF;
 END $$;
 
-UPDATE detections SET status = 'false_positive', status_at = '2026-09-21 09:00+00', status_note = 'lab test'
+UPDATE detections SET status = 'false_positive', status_at = '2026-09-21 09:00+00', status_reason = 'rule_defect',
+                      status_note = 'lab test'
 WHERE type = 'NOCLIENTMFP' AND ts = '2026-09-20 10:05+00';
-UPDATE detections SET status = 'confirmed', status_at = '2026-09-21 09:00+00', status_note = 'known outage'
+UPDATE detections SET status = 'confirmed', status_at = '2026-09-21 09:00+00', status_reason = 'expected_benign',
+                      status_note = 'known outage'
 WHERE type = 'sensor_outage' AND ts = '2026-09-20 11:10:30+00';
+-- schema 11: a label needs a reason that fits it
+DO $$
+DECLARE bad text[][] := ARRAY[['confirmed', NULL], ['confirmed', 'rule_defect'], ['false_positive', 'staged_test'],
+                              ['open', 'artefact']];
+  i int;
+BEGIN
+  FOR i IN 1 .. array_length(bad, 1) LOOP
+    BEGIN
+      UPDATE detections SET status = bad[i][1], status_reason = bad[i][2], status_at = now()
+      WHERE type = 'NOCLIENTMFP' AND ts = '2026-09-20 10:05+00';
+      RAISE EXCEPTION 'events: FAIL (status % with reason % accepted)', bad[i][1], bad[i][2];
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+  END LOOP;
+END $$;
 CREATE TEMP TABLE ids AS SELECT id, type, ts FROM detections;
 
 -- the first NOCLIENTMFP episode grows; the ongoing outage ends at 11:31
@@ -290,7 +309,8 @@ BEGIN
     RAISE EXCEPTION 'events: FAIL (the client''s alert returned %)', r;
   END IF;
 END $$;
-UPDATE detections SET status = 'confirmed', status_at = '2026-09-21 10:00+00', status_note = 'seen as a client'
+UPDATE detections SET status = 'confirmed', status_at = '2026-09-21 10:00+00', status_reason = 'expected_benign',
+                      status_note = 'seen as a client'
 WHERE type = 'NOCLIENTMFP' AND ts = '2026-09-20 13:10+00' AND mac IS NULL AND device_key IS NULL;
 CREATE TEMP TABLE c2_row AS SELECT id FROM detections WHERE type = 'NOCLIENTMFP' AND ts = '2026-09-20 13:10+00';
 
@@ -337,34 +357,34 @@ END $$;
 -- duplicates as refresh_events() stored them before schema 10: an attributed
 -- row and a twin without a subject for the same window
 INSERT INTO detections (id, sensor_id, kind, ts, ts_end, type, severity, device_key, mac, summary, evidence,
-                        status, status_at, status_note)
+                        status, status_at, status_reason, status_note)
 VALUES
-  -- both labelled: the later label (the twin's) wins, both notes kept
+  -- both labelled: the later label (the twin's, with its reason) wins, both notes kept
   (2000, 1, 'kismet', '2026-09-20 14:00+00', '2026-09-20 14:00+00', 'DISCONCODEINVALID', 'low', 'A1',
-   'A8:00:00:00:00:01', 'x', '{}', 'confirmed', '2026-09-21 10:00+00', 'kept note'),
+   'A8:00:00:00:00:01', 'x', '{}', 'confirmed', '2026-09-21 10:00+00', 'security_relevant', 'kept note'),
   (2001, 1, 'kismet', '2026-09-20 14:00+00', '2026-09-20 14:00+00', 'DISCONCODEINVALID', 'low', NULL, NULL,
-   'x', '{}', 'false_positive', '2026-09-22 10:00+00', 'twin note'),
+   'x', '{}', 'false_positive', '2026-09-22 10:00+00', 'artefact', 'twin note'),
   -- the kept row is open: it takes the twin's label and note
   (2002, 1, 'kismet', '2026-09-20 15:00+00', '2026-09-20 15:05+00', 'DEAUTHFLOOD', 'medium', 'A1',
-   'A8:00:00:00:00:01', 'x', '{}', 'open', NULL, NULL),
+   'A8:00:00:00:00:01', 'x', '{}', 'open', NULL, NULL, NULL),
   (2003, 1, 'kismet', '2026-09-20 15:00+00', '2026-09-20 15:05+00', 'DEAUTHFLOOD', 'medium', NULL, NULL,
-   'x', '{}', 'false_positive', '2026-09-21 11:00+00', 'lab'),
+   'x', '{}', 'false_positive', '2026-09-21 11:00+00', 'rule_defect', 'lab'),
   -- two APs with the same window: the twin is ambiguous and stays
   (2004, 1, 'kismet', '2026-09-20 16:00+00', '2026-09-20 16:00+00', 'BSSTIMESTAMP', 'low', 'A1',
-   'A8:00:00:00:00:01', 'x', '{}', 'open', NULL, NULL),
+   'A8:00:00:00:00:01', 'x', '{}', 'open', NULL, NULL, NULL),
   (2005, 1, 'kismet', '2026-09-20 16:00+00', '2026-09-20 16:00+00', 'BSSTIMESTAMP', 'low', 'A2',
-   'A8:00:00:00:00:02', 'x', '{}', 'open', NULL, NULL),
+   'A8:00:00:00:00:02', 'x', '{}', 'open', NULL, NULL, NULL),
   (2006, 1, 'kismet', '2026-09-20 16:00+00', '2026-09-20 16:00+00', 'BSSTIMESTAMP', 'low', NULL, NULL,
-   'x', '{}', 'open', NULL, NULL);
+   'x', '{}', 'open', NULL, NULL, NULL);
 CREATE TEMP TABLE merges AS SELECT * FROM merge_duplicate_kismet_events(1);   -- once: it writes
 SELECT pg_temp.check_rows('merge: the merges', 'SELECT * FROM merges', $$
   VALUES (2000::bigint, 2001::bigint, 'DISCONCODEINVALID', 'false_positive', E'kept note\ntwin note'),
          (2002, 2003, 'DEAUTHFLOOD', 'false_positive', 'lab') $$);
 SELECT pg_temp.check_rows('merge: the rows left', $$
-  SELECT id, status, status_at, status_note FROM detections WHERE id >= 2000$$, $$
-  VALUES (2000::bigint, 'false_positive', timestamptz '2026-09-22 10:00+00', E'kept note\ntwin note'),
-         (2002, 'false_positive', '2026-09-21 11:00+00', 'lab'),
-         (2004, 'open', NULL, NULL), (2005, 'open', NULL, NULL), (2006, 'open', NULL, NULL) $$);
+  SELECT id, status, status_at, status_reason, status_note FROM detections WHERE id >= 2000$$, $$
+  VALUES (2000::bigint, 'false_positive', timestamptz '2026-09-22 10:00+00', 'artefact', E'kept note\ntwin note'),
+         (2002, 'false_positive', '2026-09-21 11:00+00', 'rule_defect', 'lab'),
+         (2004, 'open', NULL, NULL, NULL), (2005, 'open', NULL, NULL, NULL), (2006, 'open', NULL, NULL, NULL) $$);
 SELECT pg_temp.check_rows('merge: audit_log', $$
   SELECT action, target, old->'merged'->>'id', old->'merged'->>'status_note', new->>'status' FROM audit_log$$, $$
   VALUES ('event.merge', 'event:2000', '2001', 'twin note', 'false_positive'),
@@ -373,7 +393,7 @@ DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM merge_duplicate_kismet_events(1)) THEN
     RAISE EXCEPTION 'events: FAIL (a second merge found more)';
   END IF;
-  RAISE NOTICE 'events: PASS (security and sensor periods; Kismet, config, sensor and rule events; no client MAC; idempotent; labels survive; schema 10: re-typed devices, adoption, the merge of old duplicates)';
+  RAISE NOTICE 'events: PASS (security and sensor periods; Kismet, config, sensor and rule events; no client MAC; idempotent; labels survive; schema 10: re-typed devices, adoption, the merge of old duplicates; schema 11: reasons fit their status and survive a merge)';
 END $$;
 
 ROLLBACK;
