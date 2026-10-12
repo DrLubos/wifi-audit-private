@@ -1382,6 +1382,36 @@ docker compose build api && docker compose up -d api
 docker compose build frontend && docker compose up -d frontend
 ```
 
+**4e as built (2026-10-12, commits 372750c .. 3f624b1).** `/events` is the new
+page (the API of phase 3, unchanged); the previous Detections page stays at
+`/detections` under "Previous dashboard" until phase 5. As built against the
+board:
+
+- *Filters:* status chips with their counts (none pressed = every status;
+  the board shows Open pressed), type chips, "Managed networks only", the
+  search; all in the URL with the keyset cursor (`before` / `after`) and the
+  page number (`p`, for "51–100 of 271").
+- *The expanded row* (one at a time, `?id=`): "Why it fired" reads the
+  evidence per kind - the rule event shows the allowed BSSIDs / OUIs *at the
+  time* and today's classification when the rules have changed since (event
+  414: IK-WIFI's OUIs then EC:58:EA, 3C:46:A1; the AP is managed now); "Who
+  saw it" is the RSSI and the clients in the event's hours per sensor. An
+  `?id=` that is not on the page shown opens on its own card above the list
+  (the Overview's and the Networks banner's links).
+- *Actions:* Confirm / False positive for an open detection or Kismet
+  episode, Confirm only for an open configuration change or sensor event
+  (board), "Add to allowed BSSIDs" on the rule event - visible, locked until
+  the write token.
+
+Deploy 4d and 4e together (the api for 4d, the frontend for both; no schema
+change):
+
+```sh
+cd ~/wifi-audit && git pull && cd server
+docker compose build api && docker compose up -d api
+docker compose build frontend && docker compose up -d frontend
+```
+
 ### Phase 5 – Settings, write token, write endpoints, cleanup
 
 Commits: write token dependency + `/auth/check`; write endpoints + tests;
