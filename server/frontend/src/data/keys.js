@@ -20,4 +20,8 @@ export const ep = {
     `/api/v2/networks/timeseries${qs({ sensor, range })}`],
   clientsHeatmap: (sensor, range, view) => [["clients.heatmap", sensor, range, view],
     `/api/v2/clients/heatmap${qs({ sensor, range, view })}`],
+  spectrum: (sensor, range, band) => [["spectrum", sensor, range, band],
+    `/api/v2/spectrum${qs({ sensor, range, band })}`],
+  spectrumUtilization: (sensor, range, band, view) => [["spectrum.utilization", sensor, range, band, view],
+    `/api/v2/spectrum/utilization${qs({ sensor, range, band, view })}`],
 };
