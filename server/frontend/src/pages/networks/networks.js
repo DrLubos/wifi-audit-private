@@ -23,26 +23,36 @@ export function vendorList(manufs) {
 
 const MFP_TEXT = { no: "no MFP", capable: "MFP only capable", required: "MFP required", unknown: "MFP unknown" };
 
-// the managed table's "Actual": "WPA2-Enterprise, MFP only capable · 2 unknown"
-// (labels and MFP of the BSSIDs with a beacon record, the others counted);
-// no MFP part for open/WEP networks, they have nothing it could protect
+// the managed table's "Actual": "WPA2-Enterprise, MFP only capable" - labels
+// and MFP of the BSSIDs with a beacon record (the others are counted as "not
+// assessed" under the compliance badge); no MFP part for open/WEP networks,
+// they have nothing it could protect
 export function actualText(actual) {
   const labels = actual?.labels ?? [];
-  const unknown = actual?.unknown ? `${fmtInt(actual.unknown)} unknown` : null;
-  if (!labels.length) return unknown ? "Unknown" : "–";
+  if (!labels.length) return actual?.unknown ? "Unknown" : "–";
   const mfp = actual.mfp ?? [];
   const m = labels.every((l) => l === "Open" || l === "WEP") ? null
     : mfp.length === 1 ? MFP_TEXT[mfp[0]] ?? mfp[0] : mfp.length > 1 ? "MFP mixed" : null;
-  const text = m ? `${labels.join(" / ")}, ${m}` : labels.join(" / ");
-  return unknown ? `${text} · ${unknown}` : text;
+  return m ? `${labels.join(" / ")}, ${m}` : labels.join(" / ");
 }
 
-// "Compliant" / "Not met 2/28" / "Not seen"
+const NOT_ASSESSED = "security unknown (no beacon record): not compared with the policy";
+
+// "Compliant" / "Not met 2/28" / "Not seen" / "Not assessed"; a BSSID of
+// unknown security is not assessed - counted beside the badge, never failing
+// (decided 2026-10-12)
 export function complianceBadge(n) {
   const c = n.compliance;
+  if (!c.total && c.not_assessed) return { cls: "neu", text: "Not assessed", title: NOT_ASSESSED };
   if (!c.total) return { cls: "neu", text: "Not seen", title: "no BSSID of this network was seen in the period" };
-  if (c.met) return { cls: "ok", text: "Compliant", title: "every BSSID meets the policy" };
+  if (c.met) return { cls: "ok", text: "Compliant", title: "every assessed BSSID meets the policy" };
   return { cls: "warn", text: `Not met ${c.failing}/${c.total}`, title: c.reason };
+}
+
+// "2 not assessed" under the badge (only with assessed BSSIDs too)
+export function notAssessedText(n) {
+  const c = n.compliance;
+  return c.total && c.not_assessed ? { text: `${fmtInt(c.not_assessed)} not assessed`, title: NOT_ASSESSED } : null;
 }
 
 // "31 (29 active)"
@@ -70,10 +80,16 @@ export function lifetimeText(s) {
   return s != null && s < 60 ? "under 1 min" : fmtDuration(s);
 }
 
-// presence (SPEC Q9): permanent / daytime only / transient, 35 min on average / intermittent
+// "transient, median sighting 3 min": a sighting is a run of observations
+// without a gap over 10 minutes (decided 2026-10-12)
+export function transientText(medianS) {
+  return medianS == null ? "transient" : `transient, median sighting ${lifetimeText(medianS)}`;
+}
+
+// presence (SPEC Q9): permanent / daytime only / transient, median sighting 3 min / intermittent
 export function presenceText(row) {
   if (row.presence === "daytime") return "daytime only";
-  if (row.presence === "transient") return `transient, ${lifetimeText(row.lifetime_s)} on average`;
+  if (row.presence === "transient") return transientText(row.median_sighting_s);
   return row.presence;
 }
 
@@ -106,11 +122,16 @@ export function changeSummary(changes) {
   return `${changes.length} ${changes.length === 1 ? "change" : "changes"}, ${downs} ${downs === 1 ? "downgrade" : "downgrades"}`;
 }
 
-// heatmap: the ramp step of a value (thresholds from the api: 25 75 150 250 350 450)
+// heatmap: the ramp step of a value (the api's six thresholds, e.g. 10 30 70 110 160 200)
 export function rampIndex(v, ramp) {
   let i = 0;
   while (i < ramp.length && v >= ramp[i]) i += 1;
   return i;              // 0 .. ramp.length (7 colors)
+}
+
+// the legend: the lower bound of each color, the last one open ("0 10 30 ... 200+")
+export function rampLabels(ramp) {
+  return [0, ...ramp].map((t, i) => (i === ramp.length ? `${fmtInt(t)}+` : fmtInt(t)));
 }
 
 const WEEKDAY_PLURAL = { Mon: "Mondays", Tue: "Tuesdays", Wed: "Wednesdays", Thu: "Thursdays", Fri: "Fridays",

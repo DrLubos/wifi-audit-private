@@ -2,7 +2,9 @@
 // day (rows = local days of the period, 24 hourly cells) or the average week
 // (rows Mon-Sun, each cell the mean of the period's matching weekday-hours;
 // not for 24h). Hatched = outside the period, no sensor collecting, or the
-// client counts were not recorded.
+// client counts were not recorded. One color scale for every period, view
+// and sensor filter: thresholds from the account's 30-day peak (the api's
+// ramp), shown in the legend.
 
 import Heatmap from "../../charts/Heatmap.jsx";
 import ErrorBox from "../../components/ErrorBox.jsx";
@@ -10,7 +12,7 @@ import Skeleton from "../../components/Skeleton.jsx";
 import { ep } from "../../data/keys.js";
 import { useQuery } from "../../data/query.js";
 import { fmtInt } from "../../format.js";
-import { cellText, rampIndex } from "./networks.js";
+import { cellText, rampIndex, rampLabels } from "./networks.js";
 
 const RAMP = ["var(--ramp-1)", "var(--ramp-2)", "var(--ramp-3)", "var(--ramp-4)", "var(--ramp-5)", "var(--ramp-6)",
               "var(--ramp-7)"];
@@ -62,10 +64,15 @@ export default function ClientsHeatmap({ sensor, range, view, setView }) {
           Clients = stations the AP reports in its BSS Load element; for APs without it, clients seen by the sensor.
           Not unique people: one person often carries several devices. Hatched = outside the period, no sensor
           collecting or the client counts were not recorded.
+          {d?.scale?.peak_30d != null && ` Colors: one scale for every period, up to the busiest hour of the last 30 days (${fmtInt(d.scale.peak_30d)} clients).`}
         </span>
-        <span className="ramp" aria-hidden="true">
-          <span>0</span>{RAMP.map((c) => <i key={c} style={{ background: c }} />)}<span>{d ? `${d.ramp[d.ramp.length - 1]}+` : "450+"}</span>
-        </span>
+        {d && (
+          <span className="ramp" aria-label={`Color scale, clients per hour: ${rampLabels(d.ramp).join(", ")}`}>
+            {rampLabels(d.ramp).map((t, i) => (
+              <span className="step" key={t}><span>{t}</span><i style={{ background: RAMP[i] }} /></span>
+            ))}
+          </span>
+        )}
       </div>
     </section>
   );

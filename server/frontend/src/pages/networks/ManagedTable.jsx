@@ -1,4 +1,5 @@
-// Managed networks (Networks board): policy vs actual security, compliance,
+// Managed networks (Networks board): policy vs actual security, compliance
+// (BSSIDs of unknown security are not assessed, counted under the badge),
 // BSSIDs (active now), vendors, sensors, clients now; a row expands to its
 // BSSIDs (channel, security, clients, RSSI by sensor, last seen).
 
@@ -6,7 +7,7 @@ import { Fragment, useState } from "react";
 import { Link } from "react-router-dom";
 import { LEVELS } from "../../app/status.js";
 import { fmtAgo, fmtDateTime, fmtDbm, fmtInt, toDate } from "../../format.js";
-import { actualText, bssidCount, complianceBadge, levelBadge, vendorList } from "./networks.js";
+import { actualText, bssidCount, complianceBadge, levelBadge, notAssessedText, vendorList } from "./networks.js";
 
 function channelText(b) {
   if (!b.channel) return "–";
@@ -39,7 +40,8 @@ function BssidRows({ rows, now, tz }) {
             <td className="mono">{b.bssid}</td>
             <td>{channelText(b)}</td>
             <td><span className={`b ${levelBadge(b.security)}`} title={LEVELS[b.security]?.label}>{b.label}</span>
-              {b.reason && <span className="muted tiny"> {b.reason}</span>}</td>
+              {b.assessed === false ? <span className="muted tiny"> not assessed</span>
+                : b.reason && <span className="muted tiny"> {b.reason}</span>}</td>
             <td>{b.clients == null ? "–" : fmtInt(b.clients)}</td>
             <td><SensorChips fmt={fmtDbm} entries={Object.entries(b.rssi).sort((x, y) => (y[1] ?? -999) - (x[1] ?? -999))} /></td>
             <td>{seen(b.last_seen, now, tz)}</td>
@@ -76,6 +78,7 @@ export default function ManagedTable({ managed, now, tz }) {
             {managed.map((n) => {
               const isOpen = open.has(n.id);
               const badge = complianceBadge(n);
+              const na = notAssessedText(n);
               return (
                 <Fragment key={n.id}>
                   <tr className={isOpen ? "expanded" : undefined}>
@@ -89,7 +92,10 @@ export default function ManagedTable({ managed, now, tz }) {
                     <td>{vendorList(n.vendors)}</td>
                     <td>{n.policy.label}</td>
                     <td>{actualText(n.actual)}</td>
-                    <td><span className={`b ${badge.cls}`} title={badge.title}>{badge.text}</span></td>
+                    <td>
+                      <span className={`b ${badge.cls}`} title={badge.title}>{badge.text}</span>
+                      {na && <span className="na muted tiny" title={na.title}>{na.text}</span>}
+                    </td>
                     <td><SensorChips entries={Object.entries(n.sensors)} /></td>
                     <td>{fmtInt(n.clients_now)}</td>
                   </tr>

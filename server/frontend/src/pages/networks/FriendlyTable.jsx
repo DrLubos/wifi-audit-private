@@ -10,19 +10,17 @@ export default function FriendlyTable({ friendly }) {
   return (
     <section className="card table-card" aria-labelledby="fr-h">
       <div className="table-head"><h2 id="fr-h">Friendly networks</h2></div>
-      <div className="scroll-x">
+      {friendly.length === 0 && (
+        <p className="empty muted">
+          No friendly network is configured. They are set in <Link to="/settings/networks">Settings</Link>.
+        </p>
+      )}
+      {friendly.length > 0 && <div className="scroll-x">
         <table className="t nw">
           <thead>
             <tr><th>Network (SSID)</th><th>BSSIDs</th><th>Vendors</th><th>Security</th><th>Sensors</th><th>Note</th></tr>
           </thead>
           <tbody>
-            {friendly.length === 0 && (
-              <tr>
-                <td colSpan={6} className="muted" style={{ whiteSpace: "normal" }}>
-                  No friendly network is configured. They are set in <Link to="/settings/networks">Settings</Link>.
-                </td>
-              </tr>
-            )}
             {friendly.map((n) => {
               const sec = securityBadge(n.security);
               return (
@@ -39,7 +37,7 @@ export default function FriendlyTable({ friendly }) {
             })}
           </tbody>
         </table>
-      </div>
+      </div>}
     </section>
   );
 }

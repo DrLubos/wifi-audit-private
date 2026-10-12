@@ -1,10 +1,11 @@
 // Other networks nearby (Networks board): every network that is not
 // configured, phone hotspots (randomized BSSIDs) as one summary row, the
-// rest by BSSID count with presence (SPEC Q9), paged by the api; the
-// "Managed" / "Friendly" actions need the write token (phase 5).
+// rest by BSSID count with presence (SPEC Q9; transient ones with their
+// median sighting), paged by the api; the "Managed" / "Friendly" actions
+// need the write token (phase 5).
 
 import { fmtInt } from "../../format.js";
-import { hiddenBssid, lifetimeText, presenceText, securityBadge, vendorList } from "./networks.js";
+import { hiddenBssid, presenceText, securityBadge, transientText, vendorList } from "./networks.js";
 
 const LOCKED = "Write actions need the write token (dashboard phase 5)";
 // a network is configured by its SSID; a hidden BSSID without a known name has none
@@ -34,7 +35,7 @@ export default function OtherTable({ other, page, setPage }) {
                 <td>{fmtInt(hs.bssids)}</td>
                 <td>–</td>
                 <td><span className="b neu">various</span></td>
-                <td>{hs.avg_presence_s == null ? "transient" : `transient, ${lifetimeText(hs.avg_presence_s)} on average`}</td>
+                <td title="a sighting: observations without a gap over 10 minutes">{transientText(hs.median_sighting_s)}</td>
                 <td>{hs.ignored ? <span className="b mute">Ignored automatically</span> : "–"}</td>
               </tr>
             )}
@@ -51,7 +52,9 @@ export default function OtherTable({ other, page, setPage }) {
                   <td>{fmtInt(r.bssids)}</td>
                   <td>{vendorList(r.vendors)}</td>
                   <td><span className={`b ${sec.cls}`}>{sec.text}</span></td>
-                  <td>{presenceText(r)}</td>
+                  <td title={r.presence === "transient" ? "a sighting: observations without a gap over 10 minutes" : undefined}>
+                    {presenceText(r)}
+                  </td>
                   <td>
                     {r.hidden && !r.network ? <span className="muted" title={NO_NAME}>–</span> : (
                       <div style={{ display: "flex", gap: 6 }}>

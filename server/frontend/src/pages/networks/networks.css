@@ -34,3 +34,6 @@
 .v2 .sub-table { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 8px; }
 .v2 .name { font-weight: 500; }
 .v2 .heat-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: center; }
+.v2 .empty { margin: 0; padding: 4px 18px 14px; font-size: 14px; }
+.v2 .ramp .step { display: inline-flex; align-items: center; gap: 4px; }
+.v2 .na { display: block; margin-top: 2px; }

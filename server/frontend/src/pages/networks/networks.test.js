@@ -1,7 +1,7 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
   actualText, bssidCount, cellText, changeRows, changeSummary, complianceBadge, lifetimeText, networkName,
-  presenceText, rampIndex, securityBadge, shortVendor, vendorList,
+  notAssessedText, presenceText, rampIndex, rampLabels, securityBadge, shortVendor, vendorList,
 } from "./networks.js";
 
 const TZ = "Europe/Bratislava";
@@ -18,8 +18,8 @@ test("vendors as the boards name them", () => {
 
 test("managed table texts", () => {
   eq(actualText({ labels: ["WPA2-Enterprise"], mfp: ["capable"], unknown: 0 }), "WPA2-Enterprise, MFP only capable");
-  eq(actualText({ labels: ["WPA2-Enterprise"], mfp: ["no"], unknown: 2 }), "WPA2-Enterprise, no MFP · 2 unknown");
-  eq(actualText({ labels: ["Open"], mfp: ["no"], unknown: 3 }), "Open · 3 unknown");
+  eq(actualText({ labels: ["WPA2-Enterprise"], mfp: ["no"], unknown: 2 }), "WPA2-Enterprise, no MFP");
+  eq(actualText({ labels: ["Open"], mfp: ["no"], unknown: 3 }), "Open");
   eq(actualText({ labels: ["Open", "WPA2-PSK"], mfp: ["no"], unknown: 0 }), "Open / WPA2-PSK, no MFP");
   eq(actualText({ labels: [], mfp: [], unknown: 1 }), "Unknown");
   eq(actualText({ labels: [], mfp: [], unknown: 0 }), "–");
@@ -28,6 +28,14 @@ test("managed table texts", () => {
      { cls: "warn", text: "Not met 2/28", title: "security unknown" });
   eq(complianceBadge({ compliance: { met: true, failing: 0, total: 27 } }).text, "Compliant");
   eq(complianceBadge({ compliance: { met: false, failing: 0, total: 0 } }).text, "Not seen");
+  // unknown security: not assessed, beside the badge (decided 2026-10-12)
+  const dot1x = { compliance: { met: true, failing: 0, total: 26, not_assessed: 2, reason: null } };
+  eq(complianceBadge(dot1x).text, "Compliant");
+  eq(notAssessedText(dot1x).text, "2 not assessed");
+  eq(notAssessedText({ compliance: { met: true, failing: 0, total: 26, not_assessed: 0 } }), null);
+  const none = { compliance: { met: false, failing: 0, total: 0, not_assessed: 3 } };
+  eq(complianceBadge(none).text, "Not assessed");
+  eq(notAssessedText(none), null);
   eq(bssidCount({ bssids: 31, bssids_active: 29 }), "31 (29 active)");
 });
 
@@ -39,8 +47,9 @@ test("security badge by the weakest level", () => {
 
 test("presence and names", () => {
   eq(presenceText({ presence: "daytime" }), "daytime only");
-  eq(presenceText({ presence: "transient", lifetime_s: 2100 }), "transient, 35 min on average");
-  eq(presenceText({ presence: "transient", lifetime_s: 0 }), "transient, under 1 min on average");
+  eq(presenceText({ presence: "transient", median_sighting_s: 210 }), "transient, median sighting 3 min");
+  eq(presenceText({ presence: "transient", median_sighting_s: 0 }), "transient, median sighting under 1 min");
+  eq(presenceText({ presence: "transient", median_sighting_s: null }), "transient");
   eq(lifetimeText(59), "under 1 min");
   eq(lifetimeText(60), "1 min");
   eq(lifetimeText(null), "–");
@@ -67,6 +76,9 @@ test("security changes", () => {
 test("heatmap ramp and hint", () => {
   const ramp = [25, 75, 150, 250, 350, 450];
   eq([0, 24, 25, 149, 450, 900].map((v) => rampIndex(v, ramp)), [0, 0, 1, 2, 6, 6]);
+  const own = [10, 30, 70, 110, 160, 200];                 // from a 30-day peak of 199
+  eq([0, 9, 10, 112, 199, 200].map((v) => rampIndex(v, own)), [0, 0, 1, 4, 5, 6]);
+  eq(rampLabels(own), ["0", "10", "30", "70", "110", "160", "200+"]);
   const row = { label: "Sat 10 Oct" };
   eq(cellText("days", row, 9, { state: "ok", value: 68, by_network: { "IK-WIFI": 53, "IK-WIFI-DOT1X": 15, FRI_wifi: 0 } }),
      "Sat 10 Oct, 09:00–10:00 · 68 clients (IK-WIFI 53, IK-WIFI-DOT1X 15, FRI_wifi 0)");
