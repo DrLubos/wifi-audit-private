@@ -120,7 +120,7 @@ function ApPage({ bssid }) {
 
       <div className="row-wrap">
         <History d={d} tz={tz} />
-        <Events events={d.events} tz={tz} />
+        <Events events={d.events} bssid={bssid} tz={tz} />
       </div>
 
       <section className="card panel" aria-labelledby="note-h" style={{ gap: 10 }}>
@@ -349,7 +349,7 @@ function History({ d, tz }) {
   );
 }
 
-function Events({ events, tz }) {
+function Events({ events, bssid, tz }) {
   const [all, setAll] = useState(false);
   const shown = all ? events : events.slice(0, EVENTS_SHOWN);
   return (
@@ -378,7 +378,7 @@ function Events({ events, tz }) {
             {all ? "Show fewer" : `Show all ${fmtInt(events.length)}`}
           </button>
         )}
-        <Link to="/events" className="small">All events</Link>
+        <Link to={`/events?q=${encodeURIComponent(bssid)}&status=all`} className="small">All events of this AP</Link>
       </div>
     </section>
   );

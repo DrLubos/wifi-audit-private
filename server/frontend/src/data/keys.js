@@ -32,11 +32,13 @@ export const ep = {
     return [["aps", sensor, range, f.q, f.cls, f.band, f.open, f.new, f.hotspots, f.group, f.page], `/api/v2/aps${qs(p)}`];
   },
   ap: (bssid) => [["ap", bssid], `/api/v2/aps/${bssid}`],
-  // the feed: f = the page's filters (status, type, managed, q, before / after)
+  // the feed: f = the page's filters (status, type, severity, managed, q, before / after)
   events: (sensor, f, limit = 50) => {
     const p = { sensor, status: f.status.join(",") || null, type: f.type.join(",") || null,
-                managed: f.managed ? "true" : null, q: f.q || null, before: f.before, after: f.after, limit };
-    return [["events", sensor, p.status, p.type, f.managed, f.q, f.before, f.after, limit], `/api/v2/events${qs(p)}`];
+                severity: f.severity || null, managed: f.managed ? "true" : null, q: f.q || null,
+                before: f.before, after: f.after, limit };
+    return [["events", sensor, p.status, p.type, p.severity, f.managed, f.q, f.before, f.after, limit],
+            `/api/v2/events${qs(p)}`];
   },
   event: (id) => [["event", id], `/api/v2/events/${id}`],
   apRssi: (bssid, days = 7) => [["ap.rssi", bssid, days], `/api/v2/aps/${bssid}/rssi${qs({ days })}`],

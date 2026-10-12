@@ -1,7 +1,7 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
-  actionsFor, apCell, headText, pagerText, severityBadge, statusBadge, statusChips, timeTitle, typeText, whoRows,
-  whyRows,
+  actionsFor, apCell, groupActions, groupText, headText, pagerText, parseStatus, rowOf, selected, severityBadge,
+  statusBadge, statusChips, statusParam, timeTitle, typeText, whoRows, whyRows,
 } from "./events.js";
 
 const TZ = "Europe/Bratislava";
@@ -22,11 +22,46 @@ test("feed cells", () => {
   eq(headText({ open: 271, total: 271 }), "271 open · 271 in total · newest first");
   eq(statusChips({ open: 3, confirmed: 241, false_positive: 68 }).map((c) => c.label),
      ["Open 3", "Confirmed 241", "False positive 68"]);
-  eq(pagerText(2, 50, 50, { total: 271 }), "51–100 of 271 · only the newest are loaded, older ones on request");
-  eq(pagerText(1, 50, 0, { total: 0 }), "no event matches the filters");
+  eq(pagerText(2, 50, 50, 38, 38), "51–100 of 38 · only the newest are loaded, older ones on request");
+  eq(pagerText(1, 50, 50, 224, 271), "1–50 of 224 rows · 271 events, repeated low ones grouped per AP and day");
+  eq(pagerText(1, 50, 0, 0, 0), "no event matches the filters");
   eq(actionsFor({ status: "open", kind: "kismet" }), ["Confirm", "False positive"]);
   eq(actionsFor({ status: "open", kind: "sensor" }), ["Confirm"]);
   eq(actionsFor({ status: "confirmed", kind: "detection" }), []);
+  eq(groupActions({ status: "open", kind: "kismet" }), ["Confirm all", "All false positive"]);
+  eq(groupActions({ status: "open", kind: "config" }), ["Confirm all"]);
+});
+
+test("status filter: Open by default, all, a list", () => {
+  eq(parseStatus(null), ["open"]);
+  eq(parseStatus(""), ["open"]);
+  eq(parseStatus("all"), []);
+  eq(parseStatus("confirmed,false_positive"), ["confirmed", "false_positive"]);
+  eq(parseStatus("closed"), ["open"]);
+  eq(statusParam(["open"]), null);                     // the default stays out of the URL
+  eq(statusParam([]), "all");
+  eq(statusParam(["open", "confirmed"]), "open,confirmed");
+  const counts = { open: 271, confirmed: 2, false_positive: 3, total: 276 };
+  eq(selected(counts, ["open"]), 271);
+  eq(selected(counts, ["confirmed", "false_positive"]), 5);
+  eq(selected(counts, []), 276);
+  eq(selected(undefined, []), 0);
+});
+
+test("grouped rows", () => {
+  const g = { id: 372, kind: "kismet", ts: "2026-10-11T15:31:15Z",
+              group: { n: 3, day: "2026-10-11", ts_first: "2026-10-11T00:17:31Z", ts_last: "2026-10-11T15:31:15Z",
+                       members: [{ id: 372 }, { id: 371 }, { id: 370 }] } };
+  eq(groupText(g, TZ), "3 episodes on 11 Oct, 02:17 – 17:31");
+  // an episode that runs past midnight ends on the next day
+  eq(groupText({ ...g, kind: "config", group: { ...g.group, ts_last: "2026-10-11T22:30:00Z" } }, TZ),
+     "3 changes on 11 Oct, 02:17 – 12 Oct 00:30");
+  const items = [{ id: 400 }, g, { id: 360 }];
+  eq(rowOf(items, 371), g);
+  eq(rowOf(items, 372), g);
+  eq(rowOf(items, 360), items[2]);
+  eq(rowOf(items, 1), null);
+  eq(rowOf(items, null), null);
 });
 
 test("why it fired", () => {

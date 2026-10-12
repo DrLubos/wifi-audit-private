@@ -1,5 +1,7 @@
 // The texts of the Events page (boards/Events.dc.html) from the api's rows -
-// pure, tested in events.test.js. The expanded row: "Why it fired" from the
+// pure, tested in events.test.js. A feed row is one event or a group
+// (item.group: repeated info / low events of one AP, type and status on one
+// local day; display only). The expanded row: "Why it fired" from the
 // event's evidence (one reading per kind: detector, Kismet alert episode,
 // security change, sensor outage) and "Who saw it" from who_saw_it.
 
@@ -9,6 +11,20 @@ import { fmtDate, fmtDateTime, fmtDuration, fmtInt, fmtTime, partsOf } from "../
 export const STATUSES = ["open", "confirmed", "false_positive"];
 export const KINDS = [["detection", "Detection"], ["kismet", "Kismet alert"], ["config", "Configuration change"],
                       ["sensor", "Sensor"]];
+// the "Medium and above" chip: the api's lowest severity
+export const SEVERITY_MIN = "medium";
+
+// the status filter of the URL: none = the work queue (Open, decided
+// 2026-10-12), "all" = every status, else the listed ones
+export function parseStatus(raw) {
+  if (raw === "all") return [];
+  const list = (raw ?? "").split(",").filter((s) => STATUSES.includes(s));
+  return list.length ? list : ["open"];
+}
+export function statusParam(list) {
+  if (!list.length) return "all";
+  return list.length === 1 && list[0] === "open" ? null : list.join(",");
+}
 
 export function severityBadge(s) {
   const v = SEVERITY[s] ?? SEVERITY.info;
@@ -45,6 +61,22 @@ export function timeTitle(e, tz) {
   return `${fmtDateTime(e.ts, tz)} – ${same ? fmtTime(e.ts_end, tz) : fmtDateTime(e.ts_end, tz)}`;
 }
 
+// a group's line under its summary: "3 episodes on 11 Oct, 02:17 – 17:31"
+const NOUNS = { kismet: "episodes", config: "changes", detection: "detections" };
+export function groupText(e, tz) {
+  const g = e.group;
+  const end = g.ts_last ?? e.ts;
+  const same = partsOf(g.ts_first, tz).day === partsOf(end, tz).day;
+  return `${fmtInt(g.n)} ${NOUNS[e.kind] ?? "events"} on ${fmtDate(g.ts_first, tz)}, ${fmtTime(g.ts_first, tz)} – `
+    + `${same ? fmtTime(end, tz) : fmtDateTime(end, tz)}`;
+}
+
+// the feed row that holds an event: its own or the group it is in (null: not on the page)
+export function rowOf(items, id) {
+  if (id == null) return null;
+  return items.find((e) => e.id === id || e.group?.members.some((m) => m.id === id)) ?? null;
+}
+
 // "271 open · 271 in total · newest first"
 export function headText(counts) {
   return `${fmtInt(counts.open)} open · ${fmtInt(counts.total)} in total · newest first`;
@@ -54,12 +86,19 @@ export function statusChips(counts) {
   return STATUSES.map((s) => ({ key: s, label: `${STATUS[s].label} ${fmtInt(counts?.[s] ?? 0)}` }));
 }
 
-// "1–50 of 271 · only the newest are loaded, older ones on request"
-export function pagerText(page, limit, shown, counts, filtered) {
+// the events and feed rows of the selected statuses (none: all)
+export function selected(counts, status) {
+  return status.length ? status.reduce((a, s) => a + (counts?.[s] ?? 0), 0) : (counts?.total ?? 0);
+}
+
+// "1–50 of 271 · only the newest are loaded, older ones on request"; with
+// groups "1–50 of 224 rows · 271 events, repeated low ones grouped per AP and day"
+export function pagerText(page, limit, shown, rows, events) {
   if (!shown) return "no event matches the filters";
   const first = (page - 1) * limit + 1;
-  const total = filtered ?? counts.total;
-  return `${fmtInt(first)}–${fmtInt(first + shown - 1)} of ${fmtInt(total)} · only the newest are loaded, older ones on request`;
+  const range = `${fmtInt(first)}–${fmtInt(first + shown - 1)}`;
+  if (rows === events) return `${range} of ${fmtInt(events)} · only the newest are loaded, older ones on request`;
+  return `${range} of ${fmtInt(rows)} rows · ${fmtInt(events)} events, repeated low ones grouped per AP and day`;
 }
 
 // the actions an event offers (locked until the write token, phase 5): an open
@@ -68,6 +107,10 @@ export function pagerText(page, limit, shown, counts, filtered) {
 export function actionsFor(e) {
   if (e.status !== "open") return [];
   return e.kind === "detection" || e.kind === "kismet" ? ["Confirm", "False positive"] : ["Confirm"];
+}
+// a group's row: the same, for every event in it (a later bulk label)
+export function groupActions(e) {
+  return actionsFor(e).map((a) => (a === "Confirm" ? "Confirm all" : "All false positive"));
 }
 
 const pct = (v) => `${Math.round(v * 10) / 10}`;

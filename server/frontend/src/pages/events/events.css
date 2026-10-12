@@ -20,3 +20,7 @@
 .v2 .ev-actions .btn, .v2 .ev-actions .btn2 { height: 40px; padding: 0 14px; }
 .v2 .linked-event { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
 .v2 .linked-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; }
+.v2 .events-table .ev-count { margin-left: 4px; vertical-align: 1px; }
+.v2 .events-table .ev-span { display: block; padding: 2px 0 0 14px; }
+.v2 .events-table tr.ev-member { background: #FAFAF8; }               /* an open one: its severity's, inline */
+.v2 .events-table tr.ev-member td:first-child { padding-left: 24px; box-shadow: inset 3px 0 0 var(--border); }

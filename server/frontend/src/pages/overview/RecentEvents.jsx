@@ -1,5 +1,6 @@
-// Recent events: always the 5 newest of the selected sensors, independent of
-// the period (Main board).
+// Recent events: always the 5 newest rows of the events feed for the selected
+// sensors, independent of the period (Main board); a row of repeated low
+// events (api: item.group) shows their number.
 
 import { Link } from "react-router-dom";
 import { SeverityBadge, StatusBadge } from "../../components/Badge.jsx";
@@ -7,7 +8,7 @@ import ErrorBox from "../../components/ErrorBox.jsx";
 import Skeleton from "../../components/Skeleton.jsx";
 import { ep } from "../../data/keys.js";
 import { useQuery } from "../../data/query.js";
-import { fmtDateTime } from "../../format.js";
+import { fmtDateTime, fmtInt } from "../../format.js";
 
 export default function RecentEvents({ sensor, account }) {
   const [key, url] = ep.recentEvents(sensor);
@@ -34,7 +35,7 @@ export default function RecentEvents({ sensor, account }) {
                 <tr key={e.id}>
                   <td>{fmtDateTime(e.ts, account.tz)}</td>
                   <td><SeverityBadge severity={e.severity} /></td>
-                  <td>{e.summary}</td>
+                  <td>{e.summary}{e.group && <span className="muted"> · {fmtInt(e.group.n)}× that day</span>}</td>
                   <td>{e.ap ? (e.ap.network ?? e.ap.ssid ?? <span className="mono">{e.ap.bssid}</span>) : "–"}</td>
                   <td>{e.sensors.join(", ")}</td>
                   <td><StatusBadge status={e.status} /></td>

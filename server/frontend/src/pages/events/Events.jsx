@@ -1,13 +1,16 @@
 // Events (/events, boards/Events.dc.html): the account's events newest first
 // - detector results, Kismet alert episodes, security changes, sensor
-// outages - with status chips (counts), type chips, "Managed networks only",
-// BSSID / SSID search, keyset pages (← Newer / Older →), and a row that
-// expands into "Why it fired" and "Who saw it". Confirm / False positive and
-// "Add to allowed BSSIDs" stay visible but locked until the write token
-// (phase 5). Filter: sensor; page-local in the URL: status, type, managed, q,
-// the cursor (before / after + p, the page number), id (the open event - the
-// links of the Overview and Networks; shown on its own card when it is not
-// on the page).
+// outages - with status chips (counts; Open by default, the work queue),
+// type chips, "Medium and above", "Managed networks only", BSSID / SSID
+// search, keyset pages (← Newer / Older →), and a row that expands into "Why
+// it fired" and "Who saw it". Repeated low events of one AP, type and status
+// on one local day are one row with a count that expands into its events
+// (display only, decided 2026-10-12). Confirm / False positive (on a group:
+// for all of it) and "Add to allowed BSSIDs" stay visible but locked until the
+// write token (phase 5). Filter: sensor; page-local in the URL: status (none
+// = Open, "all"), type, severity, managed, q, the cursor (before / after + p,
+// the page number), id (the open event - the links of the Overview and
+// Networks; shown on its own card when it is not on the page).
 
 import { Fragment, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
@@ -20,8 +23,8 @@ import { useAccount } from "../../hooks/useAccount.js";
 import { useFilters } from "../../hooks/useFilters.js";
 import { fmtDateTime } from "../../format.js";
 import {
-  actionsFor, apCell, headText, KINDS, pagerText, severityBadge, statusBadge, statusChips, STATUSES, timeText,
-  timeTitle, typeText, whoRows, whyRows,
+  actionsFor, apCell, groupActions, groupText, headText, KINDS, pagerText, parseStatus, rowOf, selected,
+  SEVERITY_MIN, severityBadge, statusBadge, statusChips, statusParam, timeText, timeTitle, typeText, whoRows, whyRows,
 } from "./events.js";
 import "./events.css";
 
@@ -36,8 +39,9 @@ export default function Events() {
   const tz = account.tz;
   const [params, setParams] = useSearchParams();
   const f = {
-    status: csv(params.get("status"), STATUSES),
+    status: parseStatus(params.get("status")),
     type: csv(params.get("type"), KINDS.map(([k]) => k)),
+    severity: params.get("severity") === SEVERITY_MIN ? SEVERITY_MIN : null,
     managed: params.get("managed") === "1",
     q: params.get("q") ?? "",
     before: params.get("before"),
@@ -65,11 +69,22 @@ export default function Events() {
     return () => clearTimeout(t);
   }, [text]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // the groups opened by hand (by their leading event); the group of the open event is open too
+  const [opened, setOpened] = useState(() => new Set());
+
   const [key, url] = ep.events(sensor, f, LIMIT);
   const q = useQuery(key, url);
   const d = q.data;
-  const filtered = d && f.status.length ? f.status.reduce((a, s) => a + (d.counts[s] ?? 0), 0) : d?.counts.total;
-  const onPage = d?.items.some((e) => e.id === f.id);
+  const holder = d ? rowOf(d.items, f.id) : null;
+  const toggleEvent = (id) => set({ id: id === f.id ? null : id }, true);
+  const toggleGroup = (e, expanded) => {
+    const next = new Set(opened);
+    if (expanded) {
+      next.delete(e.id);
+      if (holder === e) set({ id: null }, true);
+    } else next.add(e.id);
+    setOpened(next);
+  };
   return (
     <main className="content v2" style={{ gap: 18 }}>
       <div className="events-head">
@@ -81,7 +96,7 @@ export default function Events() {
         <span className="muted tiny">Status</span>
         {statusChips(d?.counts).map((c) => (
           <button key={c.key} type="button" className="chip" aria-pressed={f.status.includes(c.key)}
-                  onClick={() => set({ status: toggleIn(f.status, c.key) })}>{c.label}</button>
+                  onClick={() => set({ status: statusParam(toggleIn(f.status, c.key)) })}>{c.label}</button>
         ))}
         <span className="chip-sep" aria-hidden="true" />
         <span className="muted tiny">Type</span>
@@ -90,6 +105,8 @@ export default function Events() {
                   onClick={() => set({ type: toggleIn(f.type, k) })}>{label}</button>
         ))}
         <span className="chip-sep" aria-hidden="true" />
+        <button type="button" className="chip" aria-pressed={!!f.severity}
+                onClick={() => set({ severity: f.severity ? null : SEVERITY_MIN })}>Medium and above</button>
         <button type="button" className="chip" aria-pressed={f.managed}
                 onClick={() => set({ managed: f.managed ? null : "1" })}>Managed networks only</button>
         <label className="muted tiny events-search">BSSID or SSID
@@ -98,7 +115,7 @@ export default function Events() {
         </label>
       </section>
 
-      {f.id && d && !onPage && <LinkedEvent id={f.id} tz={tz} onClose={() => set({ id: null }, true)} />}
+      {f.id && d && !holder && <LinkedEvent id={f.id} tz={tz} onClose={() => set({ id: null }, true)} />}
 
       {q.error && <ErrorBox error={q.error} />}
       <section className="card table-card" aria-label="Event list" style={{ padding: "4px 0 0" }}>
@@ -115,38 +132,17 @@ export default function Events() {
                   <tr><td colSpan={9} className="muted">No event matches the filters.</td></tr>
                 )}
                 {d.items.map((e) => {
-                  const open = e.id === f.id;
-                  const sev = severityBadge(e.severity);
-                  const st = statusBadge(e.status);
-                  const ap = apCell(e);
-                  const bg = open ? { background: ATTENTION_BG[e.severity] } : undefined;
+                  if (!e.group) {
+                    return <EventRow key={e.id} e={e} tz={tz} open={e.id === f.id} onToggle={toggleEvent} />;
+                  }
+                  const expanded = opened.has(e.id) || holder === e;
                   return (
                     <Fragment key={e.id}>
-                      <tr style={bg}>
-                        <td className="nowrap" title={timeTitle(e, tz)}>{timeText(e, tz)}</td>
-                        <td><span className={`b ${sev.cls}`}>{sev.text}</span></td>
-                        <td className="type">{typeText(e)}</td>
-                        <td className="ev">
-                          <button type="button" className="row-toggle ev-toggle" aria-expanded={open}
-                                  onClick={() => set({ id: open ? null : e.id }, true)}>
-                            <span aria-hidden="true">{open ? "▾ " : "▸ "}</span>{e.summary}
-                          </button>
-                        </td>
-                        <td className={ap.hidden ? "net hidden-net" : "net"}>{ap.text}</td>
-                        <td className="mono nowrap">{e.ap?.bssid ?? "–"}</td>
-                        <td>{e.sensors.join(", ")}</td>
-                        <td><span className={`b ${st.cls}`} title={e.status_at ? `set ${fmtDateTime(e.status_at, tz)}` : undefined}>{st.text}</span></td>
-                        <td className="nowrap">
-                          {actionsFor(e).map((a) => (
-                            <button key={a} type="button" className="btn2 act" disabled title={LOCKED}>{a}</button>
-                          ))}
-                        </td>
-                      </tr>
-                      {open && (
-                        <tr style={bg}>
-                          <td colSpan={9} className="ev-detail-cell"><EventDetail id={e.id} tz={tz} /></td>
-                        </tr>
-                      )}
+                      <EventRow e={e} tz={tz} group expanded={expanded} onToggle={() => toggleGroup(e, expanded)} />
+                      {expanded && e.group.members.map((m) => (
+                        <EventRow key={m.id} e={{ ...e, ...m, group: null }} tz={tz} member open={m.id === f.id}
+                                  onToggle={toggleEvent} />
+                      ))}
                     </Fragment>
                   );
                 })}
@@ -156,7 +152,8 @@ export default function Events() {
         )}
         {d && (
           <div className="pager muted">
-            <span>{pagerText(f.page, LIMIT, d.items.length, d.counts, filtered)}</span>
+            <span>{pagerText(f.page, LIMIT, d.items.length, selected(d.rows ?? d.counts, f.status),
+                             selected(d.counts, f.status))}</span>
             <div style={{ display: "flex", gap: 8 }}>
               <button type="button" className="btn2" disabled={!d.newer || f.page <= 1}
                       onClick={() => (f.page - 1 <= 1 ? set({}) : set({ after: d.newer, before: null, p: f.page - 1 }, true))}>
@@ -169,6 +166,54 @@ export default function Events() {
         )}
       </section>
     </main>
+  );
+}
+
+// One row of the feed: an event (its toggle opens the detail below it), a
+// group (its toggle opens its events, the cells it shares are on it) or an
+// event of an open group (member: only its time, summary and actions).
+function EventRow({ e, tz, open = false, group = false, expanded = false, member = false, onToggle }) {
+  const sev = severityBadge(e.severity);
+  const st = statusBadge(e.status);
+  const ap = apCell(e);
+  const bg = open ? { background: ATTENTION_BG[e.severity] } : undefined;
+  const actions = group ? groupActions(e) : actionsFor(e);
+  const lock = group ? `${LOCKED}; it will label all ${e.group.n} events of the row` : LOCKED;
+  const pressed = group ? expanded : open;
+  return (
+    <>
+      <tr className={group ? "ev-group" : member ? "ev-member" : undefined} style={bg}>
+        <td className="nowrap" title={group ? groupText(e, tz) : timeTitle(e, tz)}>{timeText(e, tz)}</td>
+        <td>{!member && <span className={`b ${sev.cls}`}>{sev.text}</span>}</td>
+        <td className="type">{!member && typeText(e)}</td>
+        <td className="ev">
+          <button type="button" className="row-toggle ev-toggle" aria-expanded={pressed}
+                  onClick={() => onToggle(e.id)}>
+            <span aria-hidden="true">{pressed ? "▾ " : "▸ "}</span>{e.summary}
+            {group && <>{" "}<span className="b neu ev-count">{e.group.n}×</span></>}
+          </button>
+          {group && <span className="muted tiny ev-span">{groupText(e, tz)}</span>}
+        </td>
+        <td className={ap.hidden ? "net hidden-net" : "net"}>{!member && ap.text}</td>
+        <td className="mono nowrap">{!member && (e.ap?.bssid ?? "–")}</td>
+        <td>{!member && e.sensors.join(", ")}</td>
+        <td>
+          {!member && (
+            <span className={`b ${st.cls}`} title={!group && e.status_at ? `set ${fmtDateTime(e.status_at, tz)}` : undefined}>
+              {st.text}
+            </span>
+          )}
+        </td>
+        <td className="nowrap">
+          {actions.map((a) => <button key={a} type="button" className="btn2 act" disabled title={lock}>{a}</button>)}
+        </td>
+      </tr>
+      {open && (
+        <tr style={bg}>
+          <td colSpan={9} className="ev-detail-cell"><EventDetail id={e.id} tz={tz} /></td>
+        </tr>
+      )}
+    </>
   );
 }
 
