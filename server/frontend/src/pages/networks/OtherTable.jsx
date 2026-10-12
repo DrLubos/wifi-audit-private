@@ -5,7 +5,7 @@
 // need the write token (phase 5).
 
 import { fmtInt } from "../../format.js";
-import { hiddenBssid, presenceText, securityBadge, transientText, vendorList } from "./networks.js";
+import { hiddenBssid, presenceText, securityBadge, siblingText, transientText, vendorList } from "./networks.js";
 
 const LOCKED = "Write actions need the write token (dashboard phase 5)";
 // a network is configured by its SSID; a hidden BSSID without a known name has none
@@ -48,6 +48,7 @@ export default function OtherTable({ other, page, setPage }) {
                     {r.hidden
                       ? <><i style={{ fontWeight: 400 }}>hidden network</i>{bssid && <span className="mono muted"> {bssid}</span>}</>
                       : r.network}
+                    {r.sibling && <span className="sib muted tiny">{siblingText(r.sibling)}</span>}
                   </td>
                   <td>{fmtInt(r.bssids)}</td>
                   <td>{vendorList(r.vendors)}</td>

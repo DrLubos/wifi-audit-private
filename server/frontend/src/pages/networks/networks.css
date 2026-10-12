@@ -36,3 +36,4 @@
 .v2 .heat-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: center; }
 .v2 .empty { margin: 0; padding: 4px 18px 14px; font-size: 14px; }
 .v2 .na { display: block; margin-top: 2px; }
+.v2 .sib { display: block; font-weight: 400; white-space: normal; max-width: 230px; }   /* wraps in a nowrap table */

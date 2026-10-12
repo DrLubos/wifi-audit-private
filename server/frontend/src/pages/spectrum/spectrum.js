@@ -24,6 +24,18 @@ export function rangeOf(iqr) {
   return a === b ? String(a) : `${a}–${b}`;
 }
 
+// utilization but no AP on it as its main channel: the APs that used it for a
+// while (dynamic channel selection) - "N APs passing through" (decided 2026-10-12)
+export function passingThrough(c) {
+  return c.aps === 0 && c.util_avg != null && c.passing > 0;
+}
+
+// the busiest hours of the average day: "21:00–01:00" (to may pass 24)
+export function hoursText(bh) {
+  const end = bh.to === 24 ? "24:00" : `${String(bh.to % 24).padStart(2, "0")}:00`;
+  return `${String(bh.from).padStart(2, "0")}:00–${end}`;
+}
+
 // a "good" channel: 2.4 GHz 1 / 6 / 11 (no overlap), 5 GHz outside DFS
 export function goodChannel(c, band) {
   return band === "5" ? !c.dfs : !c.overlaps;
@@ -44,9 +56,11 @@ export function occupancy(channels, band) {
       fill,
       h: c.aps ? `${Math.max(2, Math.round((c.aps / max) * 82))}%` : "0%",
       aria: `Channel ${c.channel}: ${fmtInt(c.aps)} APs`
+        + (passingThrough(c) ? `, ${fmtInt(c.passing)} passing through` : "")
         + (c.util_avg != null ? `, average utilization ${utilText(c.util_avg)}` : ""),
       head: `Channel ${c.channel} · ${bandName(band)}`,
       rows: [{ c: fill, v: fmtInt(c.aps), l: "APs in the period" },
+             ...(passingThrough(c) ? [{ c: "transparent", v: fmtInt(c.passing), l: "APs passing through" }] : []),
              ...(c.util_avg != null ? [{ c: "transparent", v: utilText(c.util_avg), l: "average utilization" }] : [])],
       notes: [band === "5"
         ? (good ? "Non-DFS channel" : "DFS: the AP must leave the channel when it detects radar")
@@ -101,9 +115,11 @@ export function issueItems(issues, band) {
   ];
   const b = issues.busiest;
   if (b) {
+    const bh = b.busy_hours;
     items.push({ cls: "neu", badge: `Channel ${b.channel}`,
-                 text: `busiest in ${bandName(band)}: ${fmtInt(b.aps)} APs, `
-                   + (b.day_util ? `daytime utilization ${rangeOf(b.day_util)} %` : "no daytime utilization reported") });
+                 text: `busiest in ${bandName(band)}: ${fmtInt(b.aps)} APs; `
+                   + (bh ? `its busiest hours ${hoursText(bh)}, utilization ${rangeOf(bh.util)} %`
+                     : "no utilization reported") });
   }
   const dyn = issues.channel_changes ?? [];
   items.push(dyn.length

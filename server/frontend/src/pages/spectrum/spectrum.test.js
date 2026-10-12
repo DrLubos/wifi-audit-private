@@ -1,6 +1,6 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
-  dynamicText, issueItems, occNote, occupancy, rangeOf, utilCellText, utilColor, utilText, utilTicks,
+  dynamicText, hoursText, issueItems, occNote, occupancy, rangeOf, utilCellText, utilColor, utilText, utilTicks,
 } from "./spectrum.js";
 
 const TZ = "Europe/Bratislava";
@@ -15,6 +15,13 @@ test("occupancy columns", () => {
                  { c: "transparent", v: "13 %", l: "average utilization" }]);
   eq(g[1].notes, ["Overlaps with neighbouring channels"]);
   eq(g[0].aria, "Channel 1: 10 APs, average utilization 13 %");
+  // utilization but no AP on it as its main channel: the APs passing through
+  const p = occupancy([{ ...ch("4", 0, 15.4, false, true), passing: 3 }, { ...ch("1", 10, 12.9), passing: 2 }], "2.4");
+  eq(p[0].rows, [{ c: "var(--c2)", v: "0", l: "APs in the period" },
+                 { c: "transparent", v: "3", l: "APs passing through" },
+                 { c: "transparent", v: "15 %", l: "average utilization" }]);
+  eq(p[0].aria, "Channel 4: 0 APs, 3 passing through, average utilization 15 %");
+  eq(p[1].rows.length, 2);                                   // APs on it: no passing-through row
   // 5 GHz: only the channels with APs, DFS orange
   const f = occupancy([ch("36", 4, 16.1), ch("40", 0, 13.8), ch("52", 3, 13.2, true)], "5");
   eq(f.map((c) => [c.ch, c.good, c.notes[0]]), [["36", true, "Non-DFS channel"],
@@ -38,11 +45,16 @@ test("channel plan issues", () => {
   eq(dynamicText(dyn, 1), "UZVD-zamestnanci 7–11× per day, 2 more networks and 2 hidden networks");
   eq(dynamicText(dyn.slice(0, 1)), "1 hidden network");
   eq(dynamicText(dyn.slice(1, 3)), "UZVD-zamestnanci 7–11×, IK-WIFI-DOT1X 3–9× per day");
-  const items = issueItems({ overlapping: 42, wide_2g: 0, busiest: { channel: "6", aps: 11, day_util: [8.3, 9.8] },
+  const items = issueItems({ overlapping: 42, wide_2g: 0,
+                             busiest: { channel: "6", aps: 11, busy_hours: { from: 21, to: 25, util: [12.2, 14.8] } },
                              channel_changes: dyn, plan: { ch_1_6_11: 23, ch_5_9_13: 12 } }, "2.4");
   eq(items.map((i) => [i.cls, i.badge]), [["warn", "42 APs"], ["ok", "0 APs"], ["neu", "Channel 6"],
                                           ["info", "5 networks"], ["neu", "1/5/9/13 plan"]]);
-  eq(items[2].text, "busiest in 2.4 GHz: 11 APs, daytime utilization 8–10 %");
+  eq(items[2].text, "busiest in 2.4 GHz: 11 APs; its busiest hours 21:00–01:00, utilization 12–15 %");
+  eq(hoursText({ from: 20, to: 24 }), "20:00–24:00");
+  eq(hoursText({ from: 9, to: 13 }), "09:00–13:00");
+  eq(issueItems({ overlapping: 0, wide_2g: 0, busiest: { channel: "48", aps: 7, busy_hours: null }, channel_changes: [],
+                  plan: { ch_1_6_11: 0, ch_5_9_13: 0 } }, "5")[2].text, "busiest in 5 GHz: 7 APs; no utilization reported");
   eq(items[4].text, "in use nearby too: channels 5, 9 and 13 have 12 APs together, channels 1, 6 and 11 have 23");
   const quiet = issueItems({ overlapping: 0, wide_2g: 0, busiest: null, channel_changes: [],
                              plan: { ch_1_6_11: 40, ch_5_9_13: 3 } }, "5");

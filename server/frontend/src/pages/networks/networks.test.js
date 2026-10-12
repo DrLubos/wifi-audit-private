@@ -1,7 +1,7 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
   actualText, bssidCount, cellText, changeRows, changeSummary, complianceBadge, lifetimeText, networkName,
-  notAssessedText, presenceText, securityBadge, shortVendor, vendorList,
+  notAssessedText, presenceText, securityBadge, shortVendor, siblingText, vendorList,
 } from "./networks.js";
 
 const TZ = "Europe/Bratislava";
@@ -56,6 +56,9 @@ test("presence and names", () => {
   eq(presenceText({ presence: "permanent" }), "permanent");
   eq(networkName(null, "hidden:EC:58:EA:95:89:DC"), "hidden network");
   eq(networkName("kram", "kram"), "kram");
+  eq(siblingText({ bssid: "EC:58:EA:95:8E:E8", network: "IK-WIFI" }), "likely the same radio as EC:58:EA:95:8E:E8 (IK-WIFI)");
+  eq(siblingText({ bssid: "EC:58:EA:95:8E:E8", network: null }), "likely the same radio as EC:58:EA:95:8E:E8");
+  eq(siblingText(null), null);
 });
 
 test("security changes", () => {

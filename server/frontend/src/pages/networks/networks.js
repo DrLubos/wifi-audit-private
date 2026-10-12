@@ -93,6 +93,12 @@ export function presenceText(row) {
   return row.presence;
 }
 
+// a hidden BSSID one byte from a visible one (the api's sibling): a hint only,
+// one BSSID stays one AP (decided 2026-10-12)
+export function siblingText(s) {
+  return s ? `likely the same radio as ${s.bssid}${s.network ? ` (${s.network})` : ""}` : null;
+}
+
 // "hidden:EC:58:EA:95:89:DC" -> the BSSID of a hidden network without a known name
 export function hiddenBssid(key) {
   return key && key.startsWith("hidden:") ? key.slice(7) : null;
