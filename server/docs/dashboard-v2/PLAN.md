@@ -1296,6 +1296,32 @@ docker compose build api && docker compose up -d api
 docker compose build frontend && docker compose up -d frontend
 ```
 
+**4c as built (2026-10-12, commits c20fa74 .. 9b70f00).** `/spectrum` is the
+new page (band and view page-local in the URL); the API is the one of
+phase 3, unchanged. As built against the board:
+
+- *Occupancy:* every 2.4 GHz channel (an empty one is information), the
+  5 GHz channels with APs only (25 columns would leave no room - the board
+  shows the occupied ones too). The note says each AP counts once, on the
+  channel it used most, and how many APs without a load record in the
+  period are on their current channel (`current_channel_aps`).
+- *Issues:* the board's five lines from `issues`; the busiest line names the
+  selected band; dynamic channel selection lists up to three named networks
+  with their p25-p75 changes a day and counts the rest (hidden ones apart);
+  the 1/5/9/13 line says "not used nearby" only when 5/9/13 have under a
+  quarter of the APs on 1/6/11 (real data: 12 vs 23, so "in use nearby too").
+- *Utilization:* the board's fixed scale (10 20 30 40 50 65 %+, a share of
+  airtime compares as it is) shown in the legend; hatched cells say in the
+  hint whether no sensor collected or no AP reported; the timeline's grid
+  scrolls on a phone (min 720 px), the hint stays in view.
+- *Shared:* the ramp helpers moved to `charts/ramp.js`; `Heatmap` got
+  positioned ticks and a dense mode; both heatmaps render by the view of the
+  response they show (the previous one stays while the next loads - the
+  timeline crashed on day cells before the fix).
+
+Deploy 4c: the frontend only (`docker compose build frontend && docker
+compose up -d frontend`), in the same go as the schema-10 steps above.
+
 ### Phase 5 – Settings, write token, write endpoints, cleanup
 
 Commits: write token dependency + `/auth/check`; write endpoints + tests;
