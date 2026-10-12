@@ -534,17 +534,19 @@ def event_counts(rows, statuses):
 
 def event_group(row, members):
     """The group of a feed row (events.sql: _row) or None for a row of one
-    event: its local day, the number of events, the first start and the last
-    end, and the events newest first (members: events.members rows)."""
+    event: its local day, the number of events and of their BSSIDs (one
+    network's APs), the first start and the last end, and the events newest
+    first (members: events.members rows)."""
     if not row["members"]:
         return None
     by_id = {m["id"]: m for m in members}
     ms = [by_id[i] for i in row["members"] if i in by_id]
     last = max((m["ts_end"] or m["ts"] for m in ms), default=None)
+    bssids = sorted({m["bssid"] for m in ms if m.get("bssid")})
     return {"n": len(row["members"]), "day": row["day"].isoformat(), "ts_first": iso(row["ts_first"]),
-            "ts_last": iso(last),
+            "ts_last": iso(last), "bssids": len(bssids),
             "members": [{"id": m["id"], "ts": iso(m["ts"]), "ts_end": iso(m["ts_end"]), "summary": m["summary"],
-                         "status_at": iso(m["status_at"])} for m in ms]}
+                         "status_at": iso(m["status_at"]), "bssid": m.get("bssid")} for m in ms]}
 
 
 def utc_now():

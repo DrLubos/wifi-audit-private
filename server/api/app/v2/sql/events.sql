@@ -33,12 +33,16 @@ coalesce(r.label, CASE p.type WHEN 'deauth_flood' THEN 'Deauthentication flood'
 
 -- name: _row
 -- The row of the feed an event is shown in (display only, decided
--- 2026-10-12): repeated info / low events of one sensor, kind, type, AP,
--- status and severity on one local day share a row, every other event has
--- its own. The status is part of it, so a row is one status (its rows count
--- per status) and a later bulk label can take the row as it is.
+-- 2026-10-12): repeated info / low events of one sensor, kind, type,
+-- network, status and severity on one local day share a row - per network
+-- (decided after the first deploy: per AP, NOCLIENTMFP spread over 22
+-- IK-WIFI BSSIDs left 224 rows of 271 events); a hidden AP without a known
+-- name groups on its own BSSID. Every other event has its own row. The
+-- status is part of it, so a row is one status (its rows count per status)
+-- and a bulk label can take the row as it is.
 CASE WHEN d.severity IN ('info', 'low') AND d.kind <> 'sensor' AND d.mac IS NOT NULL
-     THEN concat_ws('|', d.sensor_id, d.kind, d.type, d.mac, d.status, d.severity,
+     THEN concat_ws('|', d.sensor_id, d.kind, d.type,
+                    coalesce(nullif(su.ssid, ''), su.name_seen, d.ssid, upper(d.mac::text)), d.status, d.severity,
                     (d.ts AT TIME ZONE %(tz)s::text)::date)
      ELSE 'e' || d.id END
 
@@ -91,8 +95,9 @@ LEFT JOIN cls c ON c.bssid = p.mac
 ORDER BY p.ts DESC, p.id DESC
 
 -- name: members
--- The events of the page's grouped rows (feed.members).
-SELECT d.id, d.ts, d.ts_end, d.summary, d.status_at
+-- The events of the page's grouped rows (feed.members) with their BSSIDs
+-- (the APs of one network).
+SELECT d.id, d.ts, d.ts_end, d.summary, d.status_at, upper(d.mac::text) AS bssid
 FROM detections d
 WHERE d.id = ANY (%(ids)s::bigint[])
 ORDER BY d.ts DESC, d.id DESC

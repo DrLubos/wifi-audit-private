@@ -3,8 +3,8 @@
 The feed is newest first, keyset-paged on the rows' (ts, id) with opaque
 cursors (before = older page, after = newer page; never OFFSET), 50 rows per
 page (at most 100). A row is one event, or repeated info / low events of
-one AP, type and status on one local day (events.sql: _row; display only,
-item.group lists them). Filters: sensor, status and type (comma-separated),
+one network, type and status on one local day (events.sql: _row; display
+only, item.group lists them). Filters: sensor, status and type (comma-separated),
 severity (the lowest shown), managed (the event's network is a managed one),
 q (BSSID / SSID substring). counts (events) and rows (feed rows): per status
 under every filter but status. No client MAC: summaries and evidence are
@@ -96,7 +96,7 @@ def events(request: Request, acc=Depends(deps.get_account), sensor: str = Depend
         ids = [i for r in rows for i in (r["members"] or ())]
         members = deps.run(conn, _Q, "members", ids=ids) if ids else []
         allowed = deps.allowed_bssids(conn, acc, [[r["bssid"], r["summary"]] for r in rows]
-                                      + [m["summary"] for m in members])
+                                      + [[m["bssid"], m["summary"]] for m in members])
     # one row more than the page: more events in the direction of travel
     more = len(rows) > limit
     if more:

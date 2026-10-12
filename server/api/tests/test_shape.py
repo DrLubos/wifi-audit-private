@@ -298,17 +298,19 @@ class Events(unittest.TestCase):
         self.assertEqual(shape.event_counts([], self.STATUSES)[1]["total"], 0)
 
     def test_event_group(self):
-        def member(i, ts, end=None):
-            return {"id": i, "ts": ts, "ts_end": end, "summary": "Client without MFP", "status_at": None}
+        def member(i, ts, end=None, bssid="EC:58:EA:54:45:8C"):
+            return {"id": i, "ts": ts, "ts_end": end, "summary": "Client without MFP", "status_at": None,
+                    "bssid": bssid}
         row = {"members": [9, 7, 4], "day": datetime(2026, 10, 11).date(), "ts_first": utc(2026, 10, 10, 23, 15)}
         # the members query returns them in its own order; the group keeps the feed's (newest first)
-        members = [member(4, utc(2026, 10, 10, 23, 15)), member(9, utc(2026, 10, 11, 15, 31)),
+        members = [member(4, utc(2026, 10, 10, 23, 15), bssid="EC:58:EA:55:8E:38"), member(9, utc(2026, 10, 11, 15, 31)),
                    member(7, utc(2026, 10, 11, 6, 16), utc(2026, 10, 11, 16, 0)), member(5, utc(2026, 10, 11, 1))]
         g = shape.event_group(row, members)
         self.assertEqual((g["n"], g["day"], g["ts_first"]), (3, "2026-10-11", "2026-10-10T23:15:00Z"))
         self.assertEqual([m["id"] for m in g["members"]], [9, 7, 4])
         self.assertEqual(g["ts_last"], "2026-10-11T16:00:00Z")          # an earlier episode ends last
         self.assertEqual(g["members"][1]["ts_end"], "2026-10-11T16:00:00Z")
+        self.assertEqual((g["bssids"], g["members"][2]["bssid"]), (2, "EC:58:EA:55:8E:38"))   # one network, two APs
         self.assertIsNone(shape.event_group({"members": None}, members))
 
 
