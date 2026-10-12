@@ -53,7 +53,13 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 --    sensor_uploads, kismet_alert_rules, audit_log; detections as the event
 --    table (kind, status, ts_end, updated_at; acked -> status); security_level()
 --    and friends; refresh_events(); new rollup columns (ops/migrate_schema9.sh)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '9')
+-- 10: devices.ever_ap - an AP stays an AP once it has been one (Kismet re-types
+--    devices: an AP seen as a client later kept its events but left the AP
+--    tables); every AP set reads ever_ap instead of type; Kismet episodes are
+--    attributed to the account AP (aps) of the transmitter, and adopt the
+--    unattributed row of the same window; merge_duplicate_kismet_events()
+--    (ops/migrate_schema10.sh)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '10')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- accounts and sensors ------------------------------------------------------------
@@ -136,13 +142,40 @@ CREATE TABLE IF NOT EXISTS devices (
   cur_qbss_stations integer,                 -- AP-reported station count (QBSS IE)
   cur_util_pct      real,                    -- AP-reported channel utilisation (QBSS IE)
   cur_at            timestamptz,             -- poll ts of these values
+  -- schema 10: the device has been an AP (typed ap, or an advertised
+  -- configuration = it beaconed) - never cleared; set by devices_ever_ap()
+  ever_ap    boolean NOT NULL DEFAULT false,
   PRIMARY KEY (sensor_id, device_key));
 CREATE INDEX IF NOT EXISTS devices_mac       ON devices (sensor_id, mac);
 CREATE INDEX IF NOT EXISTS devices_type      ON devices (sensor_id, type);
 CREATE INDEX IF NOT EXISTS devices_ssid      ON devices (sensor_id, ssid);
 CREATE INDEX IF NOT EXISTS devices_last_seen ON devices (sensor_id, last_seen);
+CREATE INDEX IF NOT EXISTS devices_ever_ap   ON devices (sensor_id, device_key) WHERE ever_ap;
 COMMENT ON TABLE devices IS
   'Current identity of every device the sensor has seen and, for APs, the advertised configuration. Never pruned.';
+
+-- An AP stays an AP (schema 10). Kismet re-types devices: an AP that also
+-- sends as a station (a mesh uplink, a repeater) is reported as a client
+-- later, and a device first seen as a client can turn out to be an AP. The
+-- dashboard's and the detectors' AP set is every device that has ever been
+-- one - typed ap, or carrying an advertised configuration (the collector
+-- writes one only for a device that beaconed an SSID or was typed ap). Set on
+-- every insert and update, by whichever writer, and never cleared.
+CREATE OR REPLACE FUNCTION devices_ever_ap() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'UPDATE' THEN             -- OLD exists only for an update
+    IF OLD.ever_ap THEN
+      NEW.ever_ap := true;
+    END IF;
+  END IF;
+  NEW.ever_ap := NEW.ever_ap OR NEW.type = 'ap' OR NEW.ssid IS NOT NULL OR NEW.crypt IS NOT NULL
+                 OR NEW.adv_channel IS NOT NULL;
+  RETURN NEW;
+END
+$$;
+CREATE OR REPLACE TRIGGER devices_ever_ap BEFORE INSERT OR UPDATE ON devices
+  FOR EACH ROW EXECUTE FUNCTION devices_ever_ap();
 
 CREATE TABLE IF NOT EXISTS device_config_history (
   sensor_id  integer NOT NULL,
@@ -619,7 +652,7 @@ BEGIN
     SELECT DISTINCT ON (x.device_key, x.ts)
            x.device_key, x.ts, x.n_clients, x.qbss_stations, x.util_pct
     FROM stage_load_samples x
-    JOIN devices d ON d.sensor_id = p_sensor_id AND d.device_key = x.device_key AND d.type = 'ap'
+    JOIN devices d ON d.sensor_id = p_sensor_id AND d.device_key = x.device_key AND d.ever_ap
     ORDER BY x.device_key, x.ts
   ), u AS (      -- the samples and the APs' known channels from the history, one stream
     SELECT s.device_key, s.ts, 0 AS kind, NULL::text AS h_channel,
@@ -940,7 +973,7 @@ BEGIN
     FROM observations o
     JOIN devices d ON d.sensor_id = o.sensor_id AND d.device_key = o.device_key
     WHERE o.sensor_id = p_sensor_id
-      AND d.type = 'ap'
+      AND d.ever_ap
       AND (o.rssi IS NOT NULL OR o.rssi_floor)
       AND (p_from  IS NULL OR o.ts >= p_from)
       AND (p_until IS NULL OR o.ts <  p_until)
@@ -1016,7 +1049,8 @@ $$;
 
 -- AP inventory with the derived columns the dashboard (and later detection)
 -- need, defined once: OUI, randomised (locally administered) BSSID, hidden
--- SSID, lifetime, plus the baseline if one exists.
+-- SSID, lifetime, plus the baseline if one exists. Every device that has
+-- been an AP (devices.ever_ap, schema 10).
 CREATE OR REPLACE VIEW ap_inventory AS
 SELECT d.sensor_id,
        d.device_key,
@@ -1041,7 +1075,7 @@ SELECT d.sensor_id,
        b.n_floor::real / nullif(b.n_obs + b.n_floor, 0) AS baseline_floor_share
 FROM devices d
 LEFT JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.device_key
-WHERE d.type = 'ap';
+WHERE d.ever_ap;
 
 -- Changes of an AP's advertised configuration, one row per changed field - the
 -- one reading of the configuration timeline (docs/findings.md section 11).
@@ -1477,7 +1511,12 @@ BEGIN
   END IF;
   SELECT max(ts) INTO v_last_poll FROM polls WHERE sensor_id = p_sensor_id;
 
-  -- 1. Kismet alert episodes
+  -- 1. Kismet alert episodes per header and AP. Schema 10: the AP is the
+  --    account AP (aps, the stable record: one per BSSID, never deleted) whose
+  --    BSSID is the transmitter - mac = its BSSID, device_key its device on
+  --    this sensor (ap_sensors; NULL if only another sensor saw it beacon) -
+  --    not a device that Kismet types 'ap' right now. Another transmitter (a
+  --    client, an unknown BSSID) gives no subject: never a client MAC in a row.
   FOR e IN
     WITH a AS (
       SELECT al.id, al.ts, al.header, al.severity AS kseverity, al.channel,
@@ -1486,22 +1525,24 @@ BEGIN
              coalesce(r.label, al.header) AS label
       FROM alerts al
       LEFT JOIN kismet_alert_rules r ON r.header = al.header
-      LEFT JOIN LATERAL (SELECT d.device_key, d.mac, nullif(d.ssid, '') AS ssid
-                         FROM devices d
-                         WHERE d.sensor_id = al.sensor_id AND d.type = 'ap' AND d.mac = al.transmitter_mac
-                         ORDER BY d.last_seen DESC LIMIT 1) ap ON true
+      LEFT JOIN LATERAL (SELECT x.device_key, ac.bssid AS mac, nullif(d.ssid, '') AS ssid
+                         FROM aps ac
+                         LEFT JOIN ap_sensors x ON x.ap_id = ac.id AND x.sensor_id = al.sensor_id
+                         LEFT JOIN devices d ON d.sensor_id = x.sensor_id AND d.device_key = x.device_key
+                         WHERE ac.account_id = v_account AND ac.bssid = al.transmitter_mac
+                         ORDER BY d.last_seen DESC NULLS LAST LIMIT 1) ap ON true
       WHERE al.sensor_id = p_sensor_id AND al.ts IS NOT NULL AND coalesce(r.as_event, true)
     ), b AS (
       SELECT a.*,
              CASE WHEN lag(a.ts) OVER w IS NULL
                     OR a.ts - lag(a.ts) OVER w > make_interval(secs => a.gap_s) THEN 1 ELSE 0 END AS starts
       FROM a
-      WINDOW w AS (PARTITION BY a.header, a.device_key ORDER BY a.ts, a.id)
+      WINDOW w AS (PARTITION BY a.header, a.mac ORDER BY a.ts, a.id)
     ), c AS (
-      SELECT b.*, sum(b.starts) OVER (PARTITION BY b.header, b.device_key ORDER BY b.ts, b.id) AS episode
+      SELECT b.*, sum(b.starts) OVER (PARTITION BY b.header, b.mac ORDER BY b.ts, b.id) AS episode
       FROM b
     )
-    SELECT c.header, c.device_key, (array_agg(c.mac))[1] AS mac, (array_agg(c.ssid))[1] AS ssid,
+    SELECT c.header, c.mac, (array_agg(c.device_key))[1] AS device_key, (array_agg(c.ssid))[1] AS ssid,
            min(c.ts) AS ts, max(c.ts) AS ts_end, count(*) AS n, max(c.gap_s) AS gap_s,
            coalesce(min(c.override), kismet_severity(max(c.kseverity))) AS severity,
            min(c.label) || CASE WHEN count(*) > 1 THEN ' (' || count(*) || ' alerts)' ELSE '' END AS summary,
@@ -1511,15 +1552,27 @@ BEGIN
              'channels', coalesce(to_jsonb(array_agg(DISTINCT c.channel) FILTER (WHERE c.channel IS NOT NULL)),
                                   '[]'::jsonb)) AS evidence
     FROM c
-    GROUP BY c.header, c.device_key, c.episode
+    GROUP BY c.header, c.mac, c.episode
   LOOP
+    -- the stored row of the episode: same header and AP (by BSSID), the
+    -- windows within the gap of each other
     v_id := NULL;
     SELECT x.id INTO v_id FROM detections x
     WHERE x.sensor_id = p_sensor_id AND x.kind = 'kismet' AND x.type = e.header
-      AND x.device_key IS NOT DISTINCT FROM e.device_key
+      AND x.mac IS NOT DISTINCT FROM e.mac
       AND x.ts <= e.ts_end + make_interval(secs => e.gap_s)
       AND coalesce(x.ts_end, x.ts) >= e.ts - make_interval(secs => e.gap_s)
     ORDER BY x.ts LIMIT 1;
+    -- schema 10: an AP's episode adopts the row stored without a subject for
+    -- exactly its window (stored while the transmitter was not yet an AP of
+    -- the account) instead of adding a second row; status and note stay
+    IF v_id IS NULL AND e.mac IS NOT NULL THEN
+      SELECT x.id INTO v_id FROM detections x
+      WHERE x.sensor_id = p_sensor_id AND x.kind = 'kismet' AND x.type = e.header
+        AND x.device_key IS NULL AND x.mac IS NULL
+        AND x.ts = e.ts AND x.ts_end IS NOT DISTINCT FROM e.ts_end
+      ORDER BY x.id LIMIT 1;
+    END IF;
     IF v_id IS NULL THEN
       INSERT INTO detections (sensor_id, kind, ts, ts_end, type, severity, device_key, mac, ssid,
                               summary, evidence)
@@ -1527,11 +1580,12 @@ BEGIN
               e.summary, e.evidence)
       ON CONFLICT DO NOTHING;
     ELSE
-      UPDATE detections x SET ts = e.ts, ts_end = e.ts_end, severity = e.severity, ssid = e.ssid,
-                              summary = e.summary, evidence = e.evidence, updated_at = now()
+      UPDATE detections x SET ts = e.ts, ts_end = e.ts_end, severity = e.severity, device_key = e.device_key,
+                              mac = e.mac, ssid = e.ssid, summary = e.summary, evidence = e.evidence,
+                              updated_at = now()
       WHERE x.id = v_id
-        AND (x.ts, x.ts_end, x.severity, x.ssid, x.summary, x.evidence)
-            IS DISTINCT FROM (e.ts, e.ts_end, e.severity, e.ssid, e.summary, e.evidence);
+        AND (x.ts, x.ts_end, x.severity, x.device_key, x.mac, x.ssid, x.summary, x.evidence)
+            IS DISTINCT FROM (e.ts, e.ts_end, e.severity, e.device_key, e.mac, e.ssid, e.summary, e.evidence);
     END IF;
     GET DIAGNOSTICS v_n = ROW_COUNT;
     v_kismet := v_kismet + v_n;
@@ -1621,6 +1675,76 @@ BEGIN
 END
 $$;
 
+-- Schema 10 cleanup of the duplicates refresh_events() wrote before (run once
+-- by ops/merge_duplicate_events.sql, dry run first): a Kismet episode was
+-- attributed through devices.type, so when Kismet re-typed the transmitter
+-- (an AP later reported as a client, or the other way round) the same episode
+-- was stored twice - once with the AP, once without a subject. Each row
+-- without a subject that has exactly one attributed twin (same sensor,
+-- header, ts and ts_end) is merged into it and deleted. The kept row takes
+-- the merged row's status when its own is open, the later of two labels
+-- otherwise, and both notes; one audit_log row per merge (action
+-- 'event.merge'). Idempotent: a second run finds nothing. Returns the merges.
+CREATE OR REPLACE FUNCTION merge_duplicate_kismet_events(p_sensor_id integer)
+RETURNS TABLE (kept_id bigint, merged_id bigint, alert_header text, new_status text, new_note text)
+LANGUAGE plpgsql AS $$
+DECLARE
+  v_account   integer;
+  v_status    text;
+  v_status_at timestamptz;
+  v_note      text;
+  m           record;
+BEGIN
+  SELECT account_id INTO v_account FROM sensors WHERE id = p_sensor_id;
+  IF v_account IS NULL THEN
+    RAISE EXCEPTION 'merge_duplicate_kismet_events: unknown sensor_id %', p_sensor_id;
+  END IF;
+  FOR m IN
+    SELECT k.id AS k_id, k.status AS k_status, k.status_at AS k_at, k.status_note AS k_note,
+           u.id AS u_id, u.status AS u_status, u.status_at AS u_at, u.status_note AS u_note, u.type AS header
+    FROM detections u
+    JOIN detections k ON k.sensor_id = u.sensor_id AND k.kind = 'kismet' AND k.type = u.type
+                     AND k.ts = u.ts AND k.ts_end IS NOT DISTINCT FROM u.ts_end AND k.mac IS NOT NULL
+    WHERE u.sensor_id = p_sensor_id AND u.kind = 'kismet' AND u.device_key IS NULL AND u.mac IS NULL
+      -- two APs with the same window: ambiguous, left alone
+      AND (SELECT count(*) FROM detections t
+           WHERE t.sensor_id = u.sensor_id AND t.kind = 'kismet' AND t.type = u.type AND t.ts = u.ts
+             AND t.ts_end IS NOT DISTINCT FROM u.ts_end AND t.mac IS NOT NULL) = 1
+    ORDER BY u.id
+  LOOP
+    -- an operator's label wins over open; of two labels the later one
+    IF m.k_status = 'open' OR (m.u_status <> 'open' AND m.u_at > coalesce(m.k_at, '-infinity')) THEN
+      v_status := m.u_status;
+      v_status_at := m.u_at;
+    ELSE
+      v_status := m.k_status;
+      v_status_at := m.k_at;
+    END IF;
+    v_note := CASE WHEN m.u_note IS NULL OR m.u_note = m.k_note THEN m.k_note
+                   WHEN m.k_note IS NULL THEN m.u_note
+                   ELSE m.k_note || E'\n' || m.u_note END;
+    UPDATE detections d SET status = v_status, status_at = v_status_at, status_note = v_note
+    WHERE d.id = m.k_id
+      AND (d.status, d.status_at, d.status_note) IS DISTINCT FROM (v_status, v_status_at, v_note);
+    INSERT INTO audit_log (account_id, action, target, old, new)
+    VALUES (v_account, 'event.merge', 'event:' || m.k_id,
+            jsonb_build_object(
+              'kept', jsonb_build_object('id', m.k_id, 'status', m.k_status, 'status_at', m.k_at,
+                                         'status_note', m.k_note),
+              'merged', jsonb_build_object('id', m.u_id, 'status', m.u_status, 'status_at', m.u_at,
+                                           'status_note', m.u_note)),
+            jsonb_build_object('id', m.k_id, 'status', v_status, 'status_at', v_status_at, 'status_note', v_note));
+    DELETE FROM detections d WHERE d.id = m.u_id;
+    kept_id := m.k_id;
+    merged_id := m.u_id;
+    alert_header := m.header;
+    new_status := v_status;
+    new_note := v_note;
+    RETURN NEXT;
+  END LOOP;
+END
+$$;
+
 -- Recompute the read tables of one sensor from the hour of p_from onward
 -- (p_from NULL, or the sensor never refreshed: the whole history). Idempotent;
 -- the seed importer calls it after every load with the earliest ts it
@@ -1628,8 +1752,10 @@ $$;
 -- the hour of the last poll before p_from, so a poll gap ending after p_from
 -- is split over all its hours again - are deleted and recomputed; an AP with
 -- no hourly row left (new, or re-classified as an AP) is computed over its
--- whole history, rows of devices that are no longer APs are dropped, and the
--- sensor hours go back to the earliest hour either touched. Invariant: an
+-- whole history, rows of devices that are no longer APs are dropped (none
+-- since schema 10: a device stays an AP once it has been one,
+-- devices.ever_ap), and the sensor hours go back to the earliest hour either
+-- touched. Invariant: an
 -- incremental run leaves the same rows as a full one (fixture test
 -- tests/sql/refresh_rollups_test.sql). Then ap_config_changes is refreshed
 -- (all sensors) and ap_summary / sensor_summary are rebuilt. Measured on the 12-day seed (2026-09-29, read-only): the
@@ -1679,7 +1805,7 @@ BEGIN
     WHERE h.sensor_id = p_sensor_id
       AND NOT EXISTS (SELECT 1 FROM devices d
                       WHERE d.sensor_id = h.sensor_id AND d.device_key = h.device_key
-                        AND d.type = 'ap')
+                        AND d.ever_ap)
     RETURNING h.hour)
   SELECT min(hour) INTO v_gone FROM gone;
   DELETE FROM ap_rssi_hourly WHERE sensor_id = p_sensor_id AND hour >= v_from;
@@ -1688,7 +1814,7 @@ BEGIN
                         'UTC'))
     INTO v_new
   FROM devices d
-  WHERE d.sensor_id = p_sensor_id AND d.type = 'ap'
+  WHERE d.sensor_id = p_sensor_id AND d.ever_ap
     AND NOT EXISTS (SELECT 1 FROM ap_rssi_hourly h
                     WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key);
   v_sfrom := least(v_from, v_gone, v_new);
@@ -1708,7 +1834,7 @@ BEGIN
                                    WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key)
                       THEN v_from ELSE '-infinity'::timestamptz END AS since
           FROM devices d
-          WHERE d.sensor_id = p_sensor_id AND d.type = 'ap') a
+          WHERE d.sensor_id = p_sensor_id AND d.ever_ap) a
     JOIN observations o
       ON o.sensor_id = p_sensor_id AND o.device_key = a.device_key AND o.ts >= a.since
     GROUP BY 1, 2) s;
@@ -1841,7 +1967,7 @@ BEGIN
   LEFT JOIN (SELECT device_key, percentile_cont(0.5) WITHIN GROUP (ORDER BY median) AS rssi_typical
              FROM ap_rssi_hourly WHERE sensor_id = p_sensor_id AND median IS NOT NULL
              GROUP BY device_key) rt ON rt.device_key = d.device_key
-  WHERE d.sensor_id = p_sensor_id AND d.type = 'ap';
+  WHERE d.sensor_id = p_sensor_id AND d.ever_ap;
   GET DIAGNOSTICS v_aps = ROW_COUNT;
 
   -- 5b. security periods (refresh_security_periods())
@@ -1893,7 +2019,7 @@ BEGIN
          pl.obs_total,
          (SELECT coalesce(sum(ap_obs), 0) FROM sensor_hourly WHERE sensor_id = p_sensor_id),
          (SELECT mode() WITHIN GROUP (ORDER BY country) FROM devices
-          WHERE sensor_id = p_sensor_id AND type = 'ap' AND country IS NOT NULL),
+          WHERE sensor_id = p_sensor_id AND ever_ap AND country IS NOT NULL),
          (SELECT count(*) FROM alerts WHERE sensor_id = p_sensor_id),
          (SELECT max(ts) FROM alerts WHERE sensor_id = p_sensor_id),
          (SELECT count(*) FROM ap_baselines WHERE sensor_id = p_sensor_id AND rssi_median IS NOT NULL),

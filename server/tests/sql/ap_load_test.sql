@@ -35,6 +35,9 @@ BEGIN
   FOREACH t IN ARRAY ARRAY['sensors', 'devices', 'device_config_history', 'ap_load_hourly'] LOOP
     EXECUTE format('CREATE TABLE %I (LIKE public.%I INCLUDING ALL)', t, t);
   END LOOP;
+  -- LIKE copies no trigger: the deployed ever_ap rule on the copy (schema 10)
+  CREATE TRIGGER devices_ever_ap BEFORE INSERT OR UPDATE ON devices
+    FOR EACH ROW EXECUTE FUNCTION public.devices_ever_ap();
 END $$;
 
 -- --- fixtures: 2026-09-20, UTC ---------------------------------------------------------
@@ -118,7 +121,7 @@ SELECT pg_temp.check_rows('channel = ap_channel_at()',
   $$SELECT x.device_key, date_trunc('hour', x.ts, 'UTC'),
            coalesce(ap_channel_at(1, x.device_key, x.ts), ''), count(DISTINCT x.ts)::integer
     FROM stage_load_samples x
-    JOIN devices d ON d.sensor_id = 1 AND d.device_key = x.device_key AND d.type = 'ap'
+    JOIN devices d ON d.sensor_id = 1 AND d.device_key = x.device_key AND d.ever_ap
     GROUP BY 1, 2, 3$$);
 
 -- --- 2. the same samples again -----------------------------------------------------------

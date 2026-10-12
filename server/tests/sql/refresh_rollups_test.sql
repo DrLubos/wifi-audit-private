@@ -22,11 +22,12 @@
 --      device kept out of the AP tables;
 --   2. an incremental refresh after a later import - new polls closing a gap,
 --      a new AP, a client re-classified as an AP, an AP re-classified as
---      bridged - leaves exactly the rows of a full refresh;
+--      bridged (schema 10: it stays an AP, devices.ever_ap) - leaves exactly
+--      the rows of a full refresh;
 --   3. a second full refresh changes nothing (idempotent).
 -- Schema 9 adds: the collecting / limited polls per hour, the security
 -- columns of ap_summary, ap_security_periods, the account-level aps and
--- ap_sensors (an AP re-classified away keeps its aps row, loses its mapping),
+-- ap_sensors (schema 10: an AP re-classified away keeps both),
 -- sensor_periods, and the derived events of refresh_events() - each checked
 -- after the full and the incremental run, and incremental = full for all of
 -- them. (tests/sql/events_test.sql covers the event rules in detail.)
@@ -56,6 +57,9 @@ BEGIN
   ALTER TABLE aps ALTER COLUMN id SET DEFAULT nextval('refresh_rollups_test.aps_id');
   CREATE SEQUENCE refresh_rollups_test.detections_id;
   ALTER TABLE detections ALTER COLUMN id SET DEFAULT nextval('refresh_rollups_test.detections_id');
+  -- LIKE copies no trigger: the deployed ever_ap rule on the copy (schema 10)
+  CREATE TRIGGER devices_ever_ap BEFORE INSERT OR UPDATE ON devices
+    FOR EACH ROW EXECUTE FUNCTION public.devices_ever_ap();
   EXECUTE 'CREATE MATERIALIZED VIEW ap_config_changes AS ' || cfg || ' WITH NO DATA';
   CREATE UNIQUE INDEX ON ap_config_changes (sensor_id, device_key, ts, field);
 END $$;
@@ -269,7 +273,7 @@ INSERT INTO devices (sensor_id, device_key, mac, type, first_seen, last_seen, ss
 VALUES (1, 'A4', 'A8:00:00:00:00:04', 'ap', '2026-09-20 13:02+00', '2026-09-20 13:02+00', 'New',
         false, 'WPA2', 274945016842, false, false, '36', 'SK');
 UPDATE devices SET type = 'ap' WHERE device_key = 'C1';        -- re-classified, history from 10:00
-UPDATE devices SET type = 'bridged' WHERE device_key = 'A3';   -- no longer an AP
+UPDATE devices SET type = 'bridged' WHERE device_key = 'A3';   -- re-typed by Kismet: stays an AP
 INSERT INTO observations (sensor_id, ts, device_key, rssi) VALUES
   (1, '2026-09-20 13:00+00', 'A1', -65),
   (1, '2026-09-20 13:02+00', 'A4', -75);
@@ -280,9 +284,9 @@ DO $$
 DECLARE r record;
 BEGIN
   -- p_from 13:00 -> hour of the last poll before it (12:29:30) = 12:00; the
-  -- re-classifications move the sensor hours back to 10:00
+  -- new AP C1 (history from 10:00) moves the sensor hours back to 10:00
   SELECT * INTO r FROM refresh_rollups(1, '2026-09-20 13:00+00');
-  IF r.from_hour <> timestamptz '2026-09-20 10:00+00' OR r.aps <> 4 THEN
+  IF r.from_hour <> timestamptz '2026-09-20 10:00+00' OR r.aps <> 5 THEN
     RAISE EXCEPTION 'refresh_rollups: FAIL (incremental run returned %)', r;
   END IF;
 END $$;
@@ -292,23 +296,25 @@ SELECT pg_temp.check_rows('ap_rssi_hourly, incremental', 'SELECT * FROM pg_temp.
          ('A1', 12, 2, 2, 0, -61.0, -61.8, -60.2, -62, -60),
          ('A1', 13, 1, 1, 0, -65.0, -65.0, -65.0, -65, -65),
          ('A2', 12, 1, 1, 0, -70.0, -70.0, -70.0, -70, -70),
+         ('A3', 10, 1, 1, 0, -80.0, -80.0, -80.0, -80, -80),
          ('A4', 13, 1, 1, 0, -75.0, -75.0, -75.0, -75, -75),
          ('C1', 10, 1, 1, 0, -40.0, -40.0, -40.0, -40, -40) $$);
 
--- gap 12:29:30 -> 13:00:00 adds 1830 s to hour 12
+-- gap 12:29:30 -> 13:00:00 adds 1830 s to hour 12; hour 10 has A1, A3 and C1
 SELECT pg_temp.check_rows('sensor_hourly, incremental', 'SELECT * FROM pg_temp.got_sensor_hourly', $$
-  VALUES (10, 120, 119, 30, 60, 30::real, 2, 2, 1, 9),
+  VALUES (10, 120, 119, 30, 60, 30::real, 3, 3, 1, 10),
          (11, 0, 0, 0, 0, 3600, 0, 0, 0, 0),
          (12, 20, 20, 20, 20, 3030, 2, 1, 1, 3),
          (13, 10, 10, 10, 10, 0, 2, 1, 1, 2) $$);
 
--- schema 9 after the incremental run: A3 (now bridged) keeps its aps row but
--- loses its mapping; C1 (now an AP) and A4 are new account APs
+-- schema 9 after the incremental run: A3 (now bridged) stays an AP (schema
+-- 10); C1 (now an AP) and A4 are new account APs
 SELECT pg_temp.check_rows('capture, incremental', 'SELECT * FROM pg_temp.got_capture', $$
   VALUES (10, 119, 30), (11, 0, 0), (12, 20, 0), (13, 10, 0) $$);
 SELECT pg_temp.check_rows('security, incremental', 'SELECT * FROM pg_temp.got_security', $$
   VALUES ('A1', 'psk_no_mfp', 'WPA2-PSK', -61.0), ('A2', 'psk_no_mfp', 'WPA2-PSK', -70.0),
-         ('A4', 'psk_no_mfp', 'WPA2-PSK', -75.0), ('C1', 'unknown', 'Unknown', -40.0) $$);
+         ('A3', 'psk_no_mfp', 'WPA2-PSK', -80.0), ('A4', 'psk_no_mfp', 'WPA2-PSK', -75.0),
+         ('C1', 'unknown', 'Unknown', -40.0) $$);
 SELECT pg_temp.check_rows('aps, incremental', 'SELECT * FROM pg_temp.got_aps', $$
   VALUES ('a8:00:00:00:00:01', timestamptz '2026-09-20 10:00+00', timestamptz '2026-09-20 13:00+00'),
          ('a8:00:00:00:00:02', '2026-09-20 12:22+00', '2026-09-20 12:22+00'),
@@ -316,8 +322,12 @@ SELECT pg_temp.check_rows('aps, incremental', 'SELECT * FROM pg_temp.got_aps', $
          ('a8:00:00:00:00:04', '2026-09-20 13:02+00', '2026-09-20 13:02+00'),
          ('11:00:00:00:00:01', '2026-09-20 10:00+00', '2026-09-20 10:00+00') $$);
 SELECT pg_temp.check_rows('ap_sensors, incremental', 'SELECT * FROM pg_temp.got_ap_sensors', $$
-  VALUES ('A1', 'a8:00:00:00:00:01'), ('A2', 'a8:00:00:00:00:02'), ('A4', 'a8:00:00:00:00:04'),
-         ('C1', '11:00:00:00:00:01') $$);
+  VALUES ('A1', 'a8:00:00:00:00:01'), ('A2', 'a8:00:00:00:00:02'), ('A3', '02:00:00:00:00:03'),
+         ('A4', 'a8:00:00:00:00:04'), ('C1', '11:00:00:00:00:01') $$);
+-- the ever_ap rule (schema 10): set by the type, never cleared by a re-type
+SELECT pg_temp.check_rows('ever_ap', 'SELECT device_key, type, ever_ap FROM devices', $$
+  VALUES ('A1', 'ap', true), ('A2', 'ap', true), ('A3', 'bridged', true), ('A4', 'ap', true),
+         ('C1', 'ap', true), ('B1', 'bridged', false) $$);
 SELECT pg_temp.check_rows('sensor periods, incremental', 'SELECT * FROM pg_temp.got_sensor_periods', $$
   VALUES ('limited', '10:45:00', '10:59:30', 29), ('outage', '10:59:30', '12:20:00', 0),
          ('outage', '12:29:30', '13:00:00', 0) $$);
@@ -369,7 +379,7 @@ SELECT pg_temp.check_rows('last capture, adapter lost', 'SELECT * FROM pg_temp.g
   VALUES (timestamptz '2026-09-20 13:04:30+00', 13, 13, true) $$);
 
 DO $$ BEGIN
-  RAISE NOTICE 'refresh_rollups: PASS (full run vs hand-computed rows; incremental run = full run after a new AP, 2 re-classifications and a closed gap; idempotent; schema 9: capture polls, security, periods, aps, sensor periods, events, the hop list of the last capture)';
+  RAISE NOTICE 'refresh_rollups: PASS (full run vs hand-computed rows; incremental run = full run after a new AP, 2 re-classifications and a closed gap; idempotent; schema 9: capture polls, security, periods, aps, sensor periods, events, the hop list of the last capture; schema 10: a re-typed AP stays)';
 END $$;
 
 ROLLBACK;

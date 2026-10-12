@@ -1,5 +1,6 @@
--- Fixture test of refresh_security_periods(), refresh_sensor_periods() and
--- refresh_events() (schema.sql, schema 9).
+-- Fixture test of refresh_security_periods(), refresh_sensor_periods(),
+-- refresh_events() and merge_duplicate_kismet_events() (schema.sql, schema
+-- 9 and 10).
 --
 -- Writes nothing: everything runs in one transaction that is rolled back. A
 -- scratch schema first on the search path gets empty copies of every table
@@ -24,7 +25,14 @@
 --      the classification rule event; no client MAC anywhere in a row;
 --   4. a second run changes nothing; the operator's status survives an
 --      episode that grows and an outage that ends; a detector row is never
---      touched.
+--      touched;
+--   5. schema 10 - Kismet re-types devices: an alert of a transmitter that is
+--      not an account AP has no subject; once it is one, its episode adopts
+--      that row (same id, label kept) instead of a second row; an AP re-typed
+--      as a client keeps ever_ap and its attribution; the merge of the
+--      duplicates stored before schema 10 keeps the labels and notes (an
+--      operator's label wins over open, the later of two labels), logs each
+--      merge, leaves an ambiguous row alone and finds nothing the second time.
 
 \set ON_ERROR_STOP on
 BEGIN;
@@ -38,12 +46,17 @@ BEGIN
   PERFORM set_config('search_path', 'events_test, public', true);
   FOREACH t IN ARRAY ARRAY['accounts', 'account_settings', 'networks', 'sensors', 'polls', 'devices',
                            'device_config_history', 'alerts', 'kismet_alert_rules', 'detections',
-                           'ap_summary', 'aps', 'ap_security_periods', 'sensor_periods',
-                           'sensor_annotations'] LOOP
+                           'ap_summary', 'aps', 'ap_sensors', 'ap_security_periods', 'sensor_periods',
+                           'sensor_annotations', 'audit_log'] LOOP
     EXECUTE format('CREATE TABLE %I (LIKE public.%I INCLUDING ALL)', t, t);
   END LOOP;
   CREATE SEQUENCE events_test.detections_id;
   ALTER TABLE detections ALTER COLUMN id SET DEFAULT nextval('events_test.detections_id');
+  CREATE SEQUENCE events_test.audit_log_id;
+  ALTER TABLE audit_log ALTER COLUMN id SET DEFAULT nextval('events_test.audit_log_id');
+  -- LIKE copies no trigger: the deployed ever_ap rule on the copy (schema 10)
+  CREATE TRIGGER devices_ever_ap BEFORE INSERT OR UPDATE ON devices
+    FOR EACH ROW EXECUTE FUNCTION public.devices_ever_ap();
   EXECUTE 'CREATE MATERIALIZED VIEW ap_config_changes AS ' || cfg || ' WITH NO DATA';
   CREATE UNIQUE INDEX ON ap_config_changes (sensor_id, device_key, ts, field);
 END $$;
@@ -89,6 +102,7 @@ VALUES (1, 'A1', 'A8:00:00:00:00:01', false, 'Net', false, 'WPA2 WPA2-PSK AES-CC
 INSERT INTO aps (id, account_id, bssid, first_seen, last_seen) VALUES
   (1, 1, 'A8:00:00:00:00:01', '2026-09-20 09:00+00', '2026-09-20 16:00+00'),
   (2, 1, 'A8:00:00:00:00:02', '2026-09-20 10:00+00', '2026-09-20 16:00+00');
+INSERT INTO ap_sensors (ap_id, sensor_id, device_key) VALUES (1, 1, 'A1'), (2, 1, 'A2');
 
 -- polls every 30 s 10:00 - 11:30: a gap 10:10 - 10:20, then no devices until
 -- 10:40, hop list degraded 10:45 - 10:47, one failed poll at 11:00:30, failed
@@ -256,7 +270,110 @@ DO $$ BEGIN
   IF (SELECT updated_at FROM detections WHERE id = 1000) <> '2026-09-21 08:00+00' THEN
     RAISE EXCEPTION 'events: FAIL (the detector row was touched)';
   END IF;
-  RAISE NOTICE 'events: PASS (security and sensor periods; Kismet, config, sensor and rule events; no client MAC; idempotent; labels survive)';
+END $$;
+
+-- --- 5. schema 10: re-typed devices, the merge of old duplicates --------------------------
+-- C2 is a client when its alert comes in: no account AP, so no subject
+INSERT INTO devices (sensor_id, device_key, mac, type, first_seen, last_seen)
+VALUES (1, 'C2', '33:00:00:00:00:03', 'client', '2026-09-20 13:00+00', '2026-09-20 13:30+00');
+INSERT INTO alerts (id, sensor_id, hash, ts, header, severity, source_mac, dest_mac, transmitter_mac, text, raw)
+VALUES (8, 1, 'h8', '2026-09-20 13:10+00', 'NOCLIENTMFP', 5, '11:00:00:00:00:01', '33:00:00:00:00:03',
+        '33:00:00:00:00:03', 'network BSSID 33:00:00:00:00:03 client 11:00:00:00:00:01', '{}');
+DO $$
+DECLARE r record;
+BEGIN
+  IF (SELECT ever_ap FROM devices WHERE device_key = 'C2') THEN
+    RAISE EXCEPTION 'events: FAIL (a client without an AP configuration got ever_ap)';
+  END IF;
+  SELECT * INTO r FROM refresh_events(1);
+  IF (r.n_kismet, r.n_config, r.n_sensor, r.n_rule) IS DISTINCT FROM (1, 0, 0, 0) THEN
+    RAISE EXCEPTION 'events: FAIL (the client''s alert returned %)', r;
+  END IF;
+END $$;
+UPDATE detections SET status = 'confirmed', status_at = '2026-09-21 10:00+00', status_note = 'seen as a client'
+WHERE type = 'NOCLIENTMFP' AND ts = '2026-09-20 13:10+00' AND mac IS NULL AND device_key IS NULL;
+CREATE TEMP TABLE c2_row AS SELECT id FROM detections WHERE type = 'NOCLIENTMFP' AND ts = '2026-09-20 13:10+00';
+
+-- Kismet re-types C2 as an AP; refresh_rollups() would add its account AP
+UPDATE devices SET type = 'ap' WHERE device_key = 'C2';
+INSERT INTO aps (id, account_id, bssid, first_seen, last_seen)
+VALUES (3, 1, '33:00:00:00:00:03', '2026-09-20 13:00+00', '2026-09-20 13:30+00');
+INSERT INTO ap_sensors (ap_id, sensor_id, device_key) VALUES (3, 1, 'C2');
+-- ... and A1 as a client: it stays an AP
+UPDATE devices SET type = 'client' WHERE device_key = 'A1';
+DO $$
+DECLARE r record;
+BEGIN
+  IF NOT (SELECT ever_ap FROM devices WHERE device_key = 'C2') OR NOT (SELECT ever_ap FROM devices WHERE device_key = 'A1') THEN
+    RAISE EXCEPTION 'events: FAIL (ever_ap: C2 % A1 %, expected both true)',
+      (SELECT ever_ap FROM devices WHERE device_key = 'C2'), (SELECT ever_ap FROM devices WHERE device_key = 'A1');
+  END IF;
+  SELECT * INTO r FROM refresh_events(1);
+  IF (r.n_kismet, r.n_config, r.n_sensor, r.n_rule) IS DISTINCT FROM (1, 0, 0, 0) THEN
+    RAISE EXCEPTION 'events: FAIL (the run after re-typing returned %, expected the adoption only)', r;
+  END IF;
+END $$;
+SELECT pg_temp.check_rows('the AP''s episode adopted the row without a subject', $$
+  SELECT d.type, d.device_key, d.mac::text, to_char(d.ts AT TIME ZONE 'UTC', 'HH24:MI'), d.status, d.status_note,
+         d.id = (SELECT id FROM c2_row) AS same_row
+  FROM detections d WHERE d.type = 'NOCLIENTMFP' AND d.ts >= '2026-09-20 13:00+00'$$, $$
+  VALUES ('NOCLIENTMFP', 'C2', '33:00:00:00:00:03', '13:10', 'confirmed', 'seen as a client', true) $$);
+SELECT pg_temp.check_rows('A1 re-typed as a client keeps its episodes', $$
+  SELECT device_key, to_char(ts AT TIME ZONE 'UTC', 'HH24:MI') FROM detections
+  WHERE kind = 'kismet' AND device_key = 'A1'$$, $$
+  VALUES ('A1', '10:05'), ('A1', '12:00'), ('A1', '10:50') $$);
+DO $$
+DECLARE r record;
+BEGIN
+  SELECT * INTO r FROM refresh_events(1);
+  IF (r.n_kismet, r.n_config, r.n_sensor, r.n_rule) IS DISTINCT FROM (0, 0, 0, 0) THEN
+    RAISE EXCEPTION 'events: FAIL (a run after the adoption returned %, expected no change)', r;
+  END IF;
+  IF (SELECT count(*) FROM detections) <> 12 THEN
+    RAISE EXCEPTION 'events: FAIL (% rows after the adoption, expected 12)', (SELECT count(*) FROM detections);
+  END IF;
+END $$;
+
+-- duplicates as refresh_events() stored them before schema 10: an attributed
+-- row and a twin without a subject for the same window
+INSERT INTO detections (id, sensor_id, kind, ts, ts_end, type, severity, device_key, mac, summary, evidence,
+                        status, status_at, status_note)
+VALUES
+  -- both labelled: the later label (the twin's) wins, both notes kept
+  (2000, 1, 'kismet', '2026-09-20 14:00+00', '2026-09-20 14:00+00', 'DISCONCODEINVALID', 'low', 'A1',
+   'A8:00:00:00:00:01', 'x', '{}', 'confirmed', '2026-09-21 10:00+00', 'kept note'),
+  (2001, 1, 'kismet', '2026-09-20 14:00+00', '2026-09-20 14:00+00', 'DISCONCODEINVALID', 'low', NULL, NULL,
+   'x', '{}', 'false_positive', '2026-09-22 10:00+00', 'twin note'),
+  -- the kept row is open: it takes the twin's label and note
+  (2002, 1, 'kismet', '2026-09-20 15:00+00', '2026-09-20 15:05+00', 'DEAUTHFLOOD', 'medium', 'A1',
+   'A8:00:00:00:00:01', 'x', '{}', 'open', NULL, NULL),
+  (2003, 1, 'kismet', '2026-09-20 15:00+00', '2026-09-20 15:05+00', 'DEAUTHFLOOD', 'medium', NULL, NULL,
+   'x', '{}', 'false_positive', '2026-09-21 11:00+00', 'lab'),
+  -- two APs with the same window: the twin is ambiguous and stays
+  (2004, 1, 'kismet', '2026-09-20 16:00+00', '2026-09-20 16:00+00', 'BSSTIMESTAMP', 'low', 'A1',
+   'A8:00:00:00:00:01', 'x', '{}', 'open', NULL, NULL),
+  (2005, 1, 'kismet', '2026-09-20 16:00+00', '2026-09-20 16:00+00', 'BSSTIMESTAMP', 'low', 'A2',
+   'A8:00:00:00:00:02', 'x', '{}', 'open', NULL, NULL),
+  (2006, 1, 'kismet', '2026-09-20 16:00+00', '2026-09-20 16:00+00', 'BSSTIMESTAMP', 'low', NULL, NULL,
+   'x', '{}', 'open', NULL, NULL);
+CREATE TEMP TABLE merges AS SELECT * FROM merge_duplicate_kismet_events(1);   -- once: it writes
+SELECT pg_temp.check_rows('merge: the merges', 'SELECT * FROM merges', $$
+  VALUES (2000::bigint, 2001::bigint, 'DISCONCODEINVALID', 'false_positive', E'kept note\ntwin note'),
+         (2002, 2003, 'DEAUTHFLOOD', 'false_positive', 'lab') $$);
+SELECT pg_temp.check_rows('merge: the rows left', $$
+  SELECT id, status, status_at, status_note FROM detections WHERE id >= 2000$$, $$
+  VALUES (2000::bigint, 'false_positive', timestamptz '2026-09-22 10:00+00', E'kept note\ntwin note'),
+         (2002, 'false_positive', '2026-09-21 11:00+00', 'lab'),
+         (2004, 'open', NULL, NULL), (2005, 'open', NULL, NULL), (2006, 'open', NULL, NULL) $$);
+SELECT pg_temp.check_rows('merge: audit_log', $$
+  SELECT action, target, old->'merged'->>'id', old->'merged'->>'status_note', new->>'status' FROM audit_log$$, $$
+  VALUES ('event.merge', 'event:2000', '2001', 'twin note', 'false_positive'),
+         ('event.merge', 'event:2002', '2003', 'lab', 'false_positive') $$);
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM merge_duplicate_kismet_events(1)) THEN
+    RAISE EXCEPTION 'events: FAIL (a second merge found more)';
+  END IF;
+  RAISE NOTICE 'events: PASS (security and sensor periods; Kismet, config, sensor and rule events; no client MAC; idempotent; labels survive; schema 10: re-typed devices, adoption, the merge of old duplicates)';
 END $$;
 
 ROLLBACK;
