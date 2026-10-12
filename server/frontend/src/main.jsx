@@ -1,7 +1,7 @@
 // Routes (PLAN.md 8.1). Dashboard v2 replaces the previous pages one by one:
 // until a page is rebuilt, its link shows the previous page inside the new
-// shell (Access points, AP detail, Detections) or a note (Networks, Spectrum,
-// Sensors, Settings); the previous Overview stays at /legacy. The route
+// shell (Access points, AP detail, Detections) or a note (Spectrum, Sensors,
+// Settings); the previous Overview stays at /legacy. The route
 // handle names the global filters a page uses.
 
 import { StrictMode } from "react";
@@ -15,6 +15,7 @@ import Shell from "./app/Shell.jsx";
 import Pending from "./app/Pending.jsx";
 import NotFound from "./app/NotFound.jsx";
 import Overview from "./pages/overview/Overview.jsx";
+import Networks from "./pages/networks/Networks.jsx";
 import Legacy from "./legacy/Legacy.jsx";
 import OldOverview from "./legacy/pages/Overview.jsx";
 import Inventory from "./legacy/pages/Inventory.jsx";
@@ -31,7 +32,7 @@ const router = createBrowserRouter([
       { index: true, element: <Overview />, handle: { filters: PERIOD, title: "Overview" } },
       { path: "events", element: <Pending title="Events" phase="phase 4e" legacy={DETECTIONS} />,
         handle: { title: "Events" } },
-      { path: "networks", element: <Pending title="Networks" phase="phase 4b" />, handle: { title: "Networks" } },
+      { path: "networks", element: <Networks />, handle: { filters: PERIOD, title: "Networks" } },
       { path: "spectrum", element: <Pending title="Spectrum" phase="phase 4c" />, handle: { title: "Spectrum" } },
       { path: "sensors", element: <Pending title="Sensors" phase="phase 4f" />, handle: { title: "Sensors" } },
       { path: "settings/*", element: <Pending title="Settings" phase="phase 5" />, handle: { title: "Settings" } },

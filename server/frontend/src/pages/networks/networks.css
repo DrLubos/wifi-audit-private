@@ -1,0 +1,36 @@
+/* The Networks page (boards/Networks.dc.html). */
+.v2 .page-head { display: flex; flex-direction: column; gap: 4px; }
+.v2 .page-head b { color: var(--text); font-weight: 500; }
+
+.v2 .rogue {
+  padding: 16px 18px; border-radius: 10px; background: #fff4f2; border: 1px solid #f0c4be; display: flex;
+  flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between;
+}
+.v2 .rogue .text { display: flex; flex-direction: column; gap: 4px; flex: 1 1 420px; }
+.v2 .rogue h2 { font-size: 16px; color: #7a1414; }
+.v2 .rogue .line { font-size: 13px; color: #5c1f1f; }
+.v2 .rogue .line b { font-weight: 500; }
+.v2 .rogue .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.v2 .rogue .btn { background: #a61b1b; }
+.v2 .rogue .btn2 { height: 44px; padding: 0 16px; }
+
+.v2 .panel h2 { font-size: 17px; }
+.v2 .changes { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border-soft); }
+.v2 .changes .row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; font-size: 13px; }
+.v2 .changes .row .b { min-width: 84px; text-align: center; box-sizing: border-box; }   /* the texts line up */
+
+.v2 .table-card { padding: 18px 0 4px; }
+.v2 .table-head {
+  padding: 0 18px 10px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px;
+}
+.v2 .table-head h2 { font-size: 17px; }
+.v2 .row-toggle {
+  border: 0; background: none; padding: 0; font: inherit; font-weight: 500; color: var(--text); cursor: pointer;
+  text-align: left;
+}
+.v2 .row-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+.v2 tr.expanded { background: #f7fafb; }
+.v2 td.sub { padding: 0 12px 14px 36px; }
+.v2 .sub-table { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 8px; }
+.v2 .name { font-weight: 500; }
+.v2 .heat-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: center; }

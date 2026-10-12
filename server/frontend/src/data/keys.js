@@ -14,4 +14,10 @@ export const ep = {
   overviewStatus: (sensor) => [["overview.status", sensor], `/api/v2/overview/status${qs({ sensor })}`],
   overviewPeriod: (sensor, range) => [["overview.period", sensor, range], `/api/v2/overview/period${qs({ sensor, range })}`],
   recentEvents: (sensor, limit = 5) => [["events.recent", sensor, limit], `/api/v2/events${qs({ sensor, limit })}`],
+  networks: (sensor, range, page) => [["networks", sensor, range, page],
+    `/api/v2/networks${qs({ sensor, range, other_page: page > 1 ? page : null })}`],
+  networksTimeseries: (sensor, range) => [["networks.timeseries", sensor, range],
+    `/api/v2/networks/timeseries${qs({ sensor, range })}`],
+  clientsHeatmap: (sensor, range, view) => [["clients.heatmap", sensor, range, view],
+    `/api/v2/clients/heatmap${qs({ sensor, range, view })}`],
 };
