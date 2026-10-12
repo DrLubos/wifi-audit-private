@@ -1,7 +1,8 @@
 // Routes (PLAN.md 8.1). Dashboard v2 replaces the previous pages one by one:
 // until a page is rebuilt, its link shows the previous page inside the new
-// shell (Access points, AP detail, Detections) or a note (Sensors,
-// Settings); the previous Overview stays at /legacy. The route
+// shell (Detections) or a note (Sensors, Settings); the previous Overview
+// stays at /legacy (its AP links, /aps/<device key>, redirect to the new AP
+// page). The route
 // handle names the global filters a page uses.
 
 import { StrictMode } from "react";
@@ -17,10 +18,10 @@ import NotFound from "./app/NotFound.jsx";
 import Overview from "./pages/overview/Overview.jsx";
 import Networks from "./pages/networks/Networks.jsx";
 import Spectrum from "./pages/spectrum/Spectrum.jsx";
+import ApList from "./pages/aps/ApList.jsx";
+import ApDetail from "./pages/aps/ApDetail.jsx";
 import Legacy from "./legacy/Legacy.jsx";
 import OldOverview from "./legacy/pages/Overview.jsx";
-import Inventory from "./legacy/pages/Inventory.jsx";
-import ApDetail from "./legacy/pages/ApDetail.jsx";
 import Detections from "./legacy/pages/Detections.jsx";
 
 const PERIOD = ["sensor", "range"];
@@ -38,8 +39,8 @@ const router = createBrowserRouter([
       { path: "sensors", element: <Pending title="Sensors" phase="phase 4f" />, handle: { title: "Sensors" } },
       { path: "settings/*", element: <Pending title="Settings" phase="phase 5" />, handle: { title: "Settings" } },
       // the previous dashboard, until phase 4d (access points) and 4e (events)
-      { path: "aps", element: <Legacy><Inventory /></Legacy>, handle: { title: "Access points" } },
-      { path: "aps/:deviceKey", element: <Legacy><ApDetail /></Legacy>, handle: { title: "Access point" } },
+      { path: "aps", element: <ApList />, handle: { filters: PERIOD, title: "Access points" } },
+      { path: "aps/:id", element: <ApDetail />, handle: { title: "Access point" } },
       { path: "detections", element: <Legacy><Detections /></Legacy>, handle: { title: "Detections" } },
       { path: "legacy", element: <Legacy><OldOverview /></Legacy>, handle: { title: "Previous overview" } },
       { path: "*", element: <NotFound />, handle: { title: "Not found" } },

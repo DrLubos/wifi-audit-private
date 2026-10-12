@@ -1,0 +1,70 @@
+/* The Access points list and the AP page (boards/Aps.dc.html, ApDetail.dc.html). */
+.v2 .filters-card { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.v2 .filter-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.v2 .in {
+  height: 44px; width: 100%; padding: 0 10px; border: 1px solid var(--control); border-radius: 8px;
+  background: var(--surface); font: inherit; font-size: 14px; color: var(--text); box-sizing: border-box;
+}
+.v2 .in:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.v2 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.v2 .chip {
+  height: 36px; padding: 0 12px; border: 1px solid var(--control); border-radius: 999px; background: var(--surface);
+  font: inherit; font-size: 13px; color: var(--text); cursor: pointer;
+}
+.v2 .chip[aria-pressed="true"] { background: var(--info-bg); border-color: #9db6d8; color: var(--info-fg); }
+.v2 .chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.v2 .chip-sep { width: 1px; height: 24px; background: var(--border); margin: 0 6px; }
+.v2 .ap-table th, .v2 .ap-table td { padding-left: 8px; padding-right: 8px; }   /* 11 columns fit 1440 px */
+.v2 .ap-table th.wrap { white-space: normal; }
+.v2 .ap-table .ap-name { font-weight: 500; }
+.v2 .ap-table .sec-note { display: block; }
+.v2 .ap-table .vendor { display: inline-block; max-width: 120px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.v2 .ap-table .ap-name.hidden { font-style: italic; }
+.v2 .ap-table tr.suspicious { background: #fff7f6; }
+.v2 .ap-table tr.group-row td { background: var(--bg); font-weight: 500; font-size: 13px; padding-top: 8px; padding-bottom: 8px; }
+.v2 .em { color: var(--text); font-weight: 500; }
+
+/* the AP page */
+.v2 .ap-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.v2 .title-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.v2 .title-row h1.hidden { font-style: italic; font-weight: 500; }
+.v2 .seg button.sus[aria-pressed="true"] { background: #a61b1b; }
+.v2 .seg button[aria-disabled="true"] { cursor: not-allowed; }
+.v2 .seg button[aria-disabled="true"][aria-pressed="true"] { color: #ffffff; }
+.v2.ap-page .panel h2 { font-size: 16px; }                 /* the AP page's cards (board) */
+.v2 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 0; font-size: 14px; }
+.v2 .kv dt { color: var(--muted); }
+.v2 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.v2 .advice { padding: 10px 12px; border-radius: 8px; background: #fdf8f1; font-size: 13px; color: #5e3a08; }
+.v2 .bigs { display: flex; flex-wrap: wrap; gap: 20px; }
+.v2 .big { display: flex; flex-direction: column; gap: 2px; }
+.v2 .big .num { font-size: 28px; font-weight: 600; }
+.v2 .line-key { width: 18px; height: 3px; display: inline-block; border-radius: 2px; }
+.v2 .sensor-key { display: inline-flex; align-items: center; gap: 8px; }
+.v2 .rssi-plot { position: relative; flex: 1 1 auto; min-width: 0; }
+.v2 .rssi-plot svg { position: absolute; inset: 0; width: 100%; height: 100%; background: #fbfbfa; border-radius: 6px; }
+.v2 .rssi-plot .grid { stroke: var(--border-soft); stroke-width: 1; }
+.v2 .rssi-hits { position: absolute; inset: 0; display: flex; }
+.v2 .rssi-hits > .hit { flex: 1 1 0; min-width: 0; height: 100%; display: flex; justify-content: center; outline: none; }
+.v2 .rssi-hits > .hit:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
+.v2 .rssi-hits .x { width: 1px; height: 100%; background: transparent; }
+.v2 .rssi-hits .x.on { background: var(--text); }
+.v2 .history { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.v2 .history li { display: flex; gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--border-soft); font-size: 14px; }
+.v2 .history li:last-child { border-bottom: none; }
+.v2 .history .when { width: 110px; flex: 0 0 auto; font-size: 13px; }
+.v2 .history b { font-weight: 500; }
+.v2 .history-foot { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.v2 .ap-events { display: flex; flex-direction: column; gap: 10px; }
+.v2 .ap-event { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 8px; background: #f7f8f6; }
+.v2 .ap-event .badges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.v2 .note {
+  font: inherit; font-size: 14px; padding: 10px 12px; border: 1px solid var(--control); border-radius: 8px;
+  resize: vertical; background: var(--surface); color: var(--text);
+}
+.v2 .note-foot { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.v2 .ap-head .fl { min-width: 0; max-width: 100%; }
+.v2 .ap-head .seg { flex-wrap: wrap; }
+@media (max-width: 480px) {                   /* five classes in 358 px */
+  .v2 .ap-head .seg button { padding: 0 7px; font-size: 12px; }
+}

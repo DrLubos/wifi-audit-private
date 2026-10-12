@@ -137,6 +137,7 @@ body {
 .v2 .seg button[aria-pressed="true"] { background: var(--side-bg); color: #ffffff; }
 .v2 .seg button[aria-disabled="true"] { color: var(--faint); cursor: not-allowed; }
 .v2 .seg button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.v2 .seg-lg button { height: 44px; }
 .v2 .btn {
   height: 44px; padding: 0 18px; border: 0; border-radius: 8px; background: var(--link); color: #ffffff; font: inherit;
   font-weight: 500; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center;

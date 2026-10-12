@@ -53,7 +53,7 @@ export default function Sidebar() {
       </div>
       <div className="sb">
         <span className="sbh">Previous dashboard</span>
-        <Link to="/legacy">Overview, detections, access points</Link>
+        <Link to="/legacy">Overview, detections</Link>
       </div>
     </nav>
   );

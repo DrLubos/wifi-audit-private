@@ -1,6 +1,6 @@
 /* The Spectrum page (boards/Spectrum.dc.html). */
 .v2 .spec-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px; }
-.v2 .seg-lg button { height: 44px; padding: 0 16px; font-size: 14px; }
+.v2 .spec-head .seg-lg button { padding: 0 16px; font-size: 14px; }
 .v2 .plot.occ { height: 230px; gap: 6px; padding-bottom: 0; }
 .v2 .plot.occ .col { align-items: center; gap: 4px; }
 .v2 .occ-n { font-size: 12px; color: var(--text); }

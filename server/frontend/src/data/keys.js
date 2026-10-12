@@ -24,4 +24,15 @@ export const ep = {
     `/api/v2/spectrum${qs({ sensor, range, band })}`],
   spectrumUtilization: (sensor, range, band, view) => [["spectrum.utilization", sensor, range, band, view],
     `/api/v2/spectrum/utilization${qs({ sensor, range, band, view })}`],
+  // the list: f = the page's filters (q, cls, band, open, new, hotspots shown, group, page)
+  aps: (sensor, range, f, pageSize = 50) => {
+    const p = { sensor, range, q: f.q || null, class: f.cls, band: f.band, open: f.open ? "true" : null,
+                new: f.new ? "true" : null, hide_hotspots: f.hotspots ? "false" : null,
+                group: f.group !== "none" ? f.group : null, page: f.page > 1 ? f.page : null, page_size: pageSize };
+    return [["aps", sensor, range, f.q, f.cls, f.band, f.open, f.new, f.hotspots, f.group, f.page], `/api/v2/aps${qs(p)}`];
+  },
+  ap: (bssid) => [["ap", bssid], `/api/v2/aps/${bssid}`],
+  apRssi: (bssid, days = 7) => [["ap.rssi", bssid, days], `/api/v2/aps/${bssid}/rssi${qs({ days })}`],
+  apLoad: (bssid, view) => [["ap.load", bssid, view],
+    `/api/v2/aps/${bssid}/load${qs(view === "util" ? { view, range: "7d" } : { view, weeks: 4 })}`],
 };
