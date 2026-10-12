@@ -13,7 +13,8 @@ configuration period. Section 8 is the probe-request feasibility study,
 section 9 the channel-plan analysis and the capture-helper crash causes,
 section 10 the first false-positive characterisation of the server-side
 evil_twin detector, section 11 the data-quality rules that came out of it
-(RSSI floor values, config-history churn, `freq_khz`). **The figures of
+(RSSI floor values, config-history churn, `freq_khz`), section 12 what
+Kismet's NOCLIENTMFP alert actually checks (input for RQ2). **The figures of
 sections 1-3 and 10 treat the RSSI floor values -106/-120 dBm as signal
 levels**; sections 2-3 were re-measured without them (2026-09-27, tables at
 the end of each section) - the original text is kept, marked superseded.
@@ -959,3 +960,98 @@ dwell), with a much coarser `iw` sample only to tell those two apart, instead
 of a tight `iw` polling loop (~220 process starts per second for 20 min - no
 helper crash or degraded poll during the test, but too heavy for hours). No rule until the mechanism is shown; until then `FRI_wifi`'s
 (b) detections stay in the "open" class.
+
+## 12. What Kismet's NOCLIENTMFP alert checks (2026-10-12) - input for RQ2
+
+Read in the source of the version on the Pi (`kismet-core 2025-09-R1`, tag
+`kismet-2025-09-R1`): `phy_80211.cc` (`process_client()`, the alert's
+registration), `phy_80211_dissectors.cc` (address mapping, IE 48),
+`dot11_parsers/dot11_ie_48_rsn.h`, `alertracker.h`; the rate is in the Pi's
+`/etc/kismet/kismet_alerts.conf`. Alert counts are from the server
+(read-only, 2026-10-12).
+
+### The rule
+
+- Raised in `kis_80211_phy::process_client()` for a management frame of
+  subtype **association request** (0) only - not for reassociation requests -
+  when the frame carries **no RSN element** (IE 48) or one whose RSN
+  capabilities have **MFPC clear** (bit 7, `0x80`):
+  `dot11info->rsn == nullptr || !dot11info->rsn->rsn_capability_mfp_supported()`.
+- **Nothing about the network enters the condition**: not the AP's beacons,
+  not its RSN element (MFPC/MFPR), not its encryption. "On a network with MFP"
+  is not part of the rule. A client sends no RSN element to an open network,
+  so **every association request to an open network raises it**, whatever the
+  client supports. A network that requires MFP (MFPR) would reject such a
+  client; Kismet raises the same alert either way, on the request, before the
+  AP answers.
+- One alert per frame at most: duplicate frames return before
+  `process_client()`, and the destination is not handled as a second client
+  when it is the BSSID (the normal infrastructure case).
+- Kismet severity low (5), class SPOOF. Rate limit **10/min, burst 1/s**
+  (`kismet_alerts.conf:156`), so the alert count is a lower bound of such
+  association requests, not their number.
+
+### Which BSSID it names
+
+- Association request (`phy_80211_dissectors.cc`, subtype 0, zero-based
+  addresses): `dest_mac` = Address 1 (the AP), `source_mac` = Address 2 (the
+  client), `bssid_mac` = Address 3 (the BSSID).
+- `raise_alert(ref, pack, bssid_mac, source_mac, dest_mac, other_mac, ...)`;
+  the alert record stores its BSSID argument as **`kismet.alert.transmitter_mac`**
+  (`alertracker.h`, `from_alert_info()`: `set_transmitter_mac(info->bssid)`).
+  So `transmitter_mac` is the BSSID the client asked to join - the receiver of
+  the frame, not its transmitter - and `source_mac` is the client. The alert
+  text names the same BSSID (`client_record->get_bssid()`).
+- The server's episodes are attributed by `transmitter_mac` to the account AP
+  (`refresh_events()`), i.e. to the AP the client tried to join - the right
+  subject. No client MAC goes into an event row.
+
+### The alerts so far
+
+164 alerts from 2026-09-15 15:37 to 2026-10-11 15:31 UTC, naming 47 BSSIDs,
+from 63 client MACs (45 of them locally administered, i.e. randomized; median
+5 alerts per client, at most 24); 152 server episodes, all still open, all
+attributed to an AP. In every alert `transmitter_mac` = `dest_mac`, and the
+text names that BSSID.
+
+By the security the named AP advertised at the alert's time
+(`ap_security_periods`):
+
+| AP security then | Alerts | BSSIDs | Clients |
+|---|---|---|---|
+| Open | 113 (69 %) | 21 | 39 |
+| WPA2-PSK, MFP not offered | 20 | 7 | 9 |
+| WPA2-Enterprise, MFP not offered | 17 | 9 | 7 |
+| Unknown (no beacon record of the BSSID) | 14 | 10 | 9 |
+
+**None of the 150 alerts with a known AP state named an AP that offered MFP**
+(capable or required). By network: `IK-WIFI` (open) 114 alerts on 22 BSSIDs,
+`IK-WIFI-DOT1X` 17 on 9, 33 on other networks and hidden BSSIDs.
+
+### Reading (for the false-positive analysis)
+
+- The alert describes one association request, not an attack and not the
+  network. It is correct in that narrow sense for every alert (the request had
+  no MFPC), so it cannot be a false positive of its own rule; the question for
+  RQ2 is whether it is a security event at all.
+- **Open networks (113 alerts):** an open (non-OWE) network cannot use MFP at
+  all (802.11w protects management frames with keys from the RSNA handshake,
+  which an open network does not have), and the client sends no RSN element
+  whatever it supports. These alerts say nothing about the client and nothing
+  about an attack, by construction.
+- **PSK / Enterprise without MFP (37 alerts):** the request had no MFPC.
+  Whether an MFP-capable client sets MFPC when the AP does not offer MFP
+  depends on its supplicant (not checked here), so these do not show that the
+  client lacks MFP either - only that this association runs without it, which
+  the AP's own security level (`psk_no_mfp`, Enterprise without MFP) already
+  records.
+- **Unknown (14 alerts):** BSSIDs without a beacon record (hidden or rarely
+  heard); the network's offer is not known.
+- The server's event label "Client without MFP on a network with MFP"
+  (`kismet_alert_rules`) described a check Kismet does not make; it becomes
+  "Association request without MFP" (schema.sql; the live rows need the
+  update in `server/docs/dashboard-v2/PLAN.md`, phase 4f deploy).
+- Labelling these episodes is the developer's decision. Whatever the status,
+  the case (open network / MFP not offered / unknown) should go into the
+  status note, so the RQ2 analysis can tell "true but not a security event" apart
+  from a real false positive.
