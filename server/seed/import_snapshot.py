@@ -127,6 +127,15 @@ def _cur_newer_wins(col):
             % (col, col, col))
 
 
+# A device of the snapshot that has been an AP (server schema 10,
+# devices.ever_ap): typed ap, or carrying an advertised configuration - the
+# collector writes one only for a device that beaconed an SSID or was typed
+# ap, and keeps it when Kismet re-types the device later. The server side
+# reads the merged devices.ever_ap (set by its trigger), which also remembers
+# APs of earlier snapshots.
+_AP_EVIDENCE = "type = 'ap' OR ssid IS NOT NULL OR crypt IS NOT NULL OR adv_channel IS NOT NULL"
+
+
 # Per-poll AP load samples of observation rows written by buffers <= v5 (v6
 # and later leave the columns NULL), for load_ap_load_samples(). The ts goes
 # in as timestamptz text, the shape that function reads (shared with the dump
@@ -135,7 +144,7 @@ def _cur_newer_wins(col):
 def _load_samples_select(db):
     return ("SELECT strftime('%Y-%m-%d %H:%M:%S+00', ts, 'unixepoch'), key, n_clients, "
             "qbss_stations, util_pct FROM observations WHERE n_clients IS NOT NULL "
-            "AND key IN (SELECT key FROM devices WHERE type = 'ap')")
+            "AND key IN (SELECT key FROM devices WHERE " + _AP_EVIDENCE + ")")
 
 
 def _client_bssids_select(db):
@@ -225,10 +234,12 @@ TABLES = [
         # channel, rssi_min/max, pk_tx/rx, bytes, n_clients, qbss_stations,
         # util_pct, ie_checksum, beacon_fp, bssid) are not read; a client's
         # BSSID comes in through client_bssids (below), the AP load through
-        # devices.cur_*. Non-AP rows are left out on the Pi side already
-        # (snapshot type) and again on the server side (the merged type).
+        # devices.cur_*. Rows of devices that have never been an AP are left
+        # out on the Pi side already (the snapshot's AP evidence) and again
+        # on the server side (the merged devices.ever_ap, schema 10): an AP
+        # that Kismet re-typed as a client keeps its observations.
         "name": "observations",
-        "where": " WHERE key IN (SELECT key FROM devices WHERE type = 'ap')",
+        "where": " WHERE key IN (SELECT key FROM devices WHERE " + _AP_EVIDENCE + ")",
         "order": " ORDER BY ts, key",
         "stage": [("ts", "bigint"), ("device_key", "text", "key"), ("rssi", "smallint"),
                   ("rssi_floor", "integer"), ("pk_total", "bigint"), ("pk_data", "bigint"),
@@ -244,7 +255,7 @@ TABLES = [
             "to_timestamp(s.disconnects_last), :sid, s.disconnects, s.rssi, s.rssi_floor::boolean, "
             "s.device_key\n"
             "FROM stage_observations s\n"
-            "JOIN devices d ON d.sensor_id = :sid AND d.device_key = s.device_key AND d.type = 'ap'\n"
+            "JOIN devices d ON d.sensor_id = :sid AND d.device_key = s.device_key AND d.ever_ap\n"
             "ORDER BY s.ts, s.device_key\n"
             "ON CONFLICT DO NOTHING;"),
     },
@@ -265,7 +276,7 @@ TABLES = [
             "s.clients_max, s.clients_sum, s.qbss_polls, s.qbss_max, s.qbss_sum, s.util_max, "
             "s.util_sum, 'buffer'\n"
             "FROM stage_ap_load_hourly s\n"
-            "JOIN devices d ON d.sensor_id = :sid AND d.device_key = s.device_key AND d.type = 'ap'\n"
+            "JOIN devices d ON d.sensor_id = :sid AND d.device_key = s.device_key AND d.ever_ap\n"
             "ON CONFLICT (sensor_id, device_key, hour, channel) DO UPDATE SET\n"
             "  polls = EXCLUDED.polls, clients_polls = EXCLUDED.clients_polls,\n"
             "  clients_max = EXCLUDED.clients_max, clients_sum = EXCLUDED.clients_sum,\n"

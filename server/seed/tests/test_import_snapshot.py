@@ -169,11 +169,33 @@ class Stream(unittest.TestCase):
                                ["1758981630", AP, "\\N", "1", "10", "0", "0", "\\N", "99"],
                                ["1758981900", AP, "-62", "\\N", "10", "0", "0", "\\N", "99"]])
         self.assertIn("JOIN devices d ON d.sensor_id = :sid AND d.device_key = s.device_key "
-                      "AND d.type = 'ap'", sql)
+                      "AND d.ever_ap", sql)
         for gone in ("last_time", "freq_khz", "rssi_min", "pk_tx", "bytes", "n_clients",
                      "ie_checksum", "beacon_fp"):
             self.assertNotIn(gone, sql.split("CREATE TEMP TABLE stage_observations")[1]
                              .split("\\.")[0].split("\n")[0], gone)
+
+    def test_observations_of_an_ap_that_kismet_re_typed(self):
+        # schema 10: a device with an advertised configuration has been an AP
+        # (it beaconed) - its rows come along although the snapshot types it
+        # client; the plain client's rows stay on the Pi
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "snap.db")
+            make_buffer(path)
+            retyped = "4202770D00000000_A1B2C3D4E5F7"
+            db = sqlite3.connect(path)
+            db.execute("INSERT INTO devices (key, mac, type, first_seen, last_seen, ssid, cloaked, adv_channel) "
+                       "VALUES (?, 'A1:B2:C3:D4:E5:F7', 'client', 1758981600, 1758981900, '', 1, '6')", (retyped,))
+            db.execute("INSERT INTO observations (ts, key, last_time, rssi, pk_total, pk_data) "
+                       "VALUES (1758981630, ?, 1758981630, -75, 3, 0)", (retyped,))
+            db.commit()
+            db.close()
+            snap = imp.open_snapshot(path)
+            out = io.StringIO()
+            imp.emit_stream(out, snap, args(), lambda msg: None)
+            snap.close()
+        keys = sorted({r[1] for r in staged(out.getvalue())["observations"]})
+        self.assertEqual(keys, [AP, retyped])
 
     def test_client_bssids_from_the_table_and_the_old_rows(self):
         rows = staged(self.stream())["client_bssids"]
@@ -194,7 +216,7 @@ class Stream(unittest.TestCase):
         self.assertEqual(len(rows), 2)        # the client's row is staged, the merge drops it
         merge = sql.split("INSERT INTO ap_load_hourly AS t")[1].split(";")[0]
         self.assertIn("JOIN devices d ON d.sensor_id = :sid AND d.device_key = s.device_key "
-                      "AND d.type = 'ap'", merge)
+                      "AND d.ever_ap", merge)
         self.assertIn("'buffer'", merge)
         self.assertIn("WHERE EXCLUDED.polls > t.polls", merge)
 
