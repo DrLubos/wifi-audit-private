@@ -12,6 +12,15 @@
 -- 21:53:20 and 2026-09-21 22:08:19 - 22:13:49 (polls ok, no devices),
 -- 2026-10-06 12:23:51 - 13:24:45 (no polls). A new findings row goes into
 -- findings.md section 6 and degraded_windows.csv with the same times.
+--
+-- Corrections of 2026-10-12 (the developer's decisions after the Sensors
+-- page): 2026-09-27 12:17:20 - 12:22:55 is a no-frames window (findings
+-- section 6: the re-opened source captured nothing), not limited coverage,
+-- so the outage the polls show there gets its cause; the first hour after
+-- installation (2026-09-15) is documented as not investigated; the 2026-10-06
+-- note gives its time in local time like the tables. The UPDATEs below apply
+-- them to rows still as first seeded (an edited row is left alone) and run
+-- before the INSERT, which then skips what exists.
 \set ON_ERROR_STOP on
 BEGIN;
 DO $$
@@ -21,11 +30,24 @@ BEGIN
   END IF;
 END $$;
 
+UPDATE sensor_annotations a
+SET kind = 'no_frames', label = 'Capture-helper crashes at 12:17:20/39/47; the re-opened source captured nothing',
+    ref = 'findings.md section 6'
+WHERE a.sensor_id = (SELECT id FROM sensors WHERE name = 'pi-fri')
+  AND a.starts_at = '2026-09-27 12:17:20+00' AND a.kind = 'coverage'
+  AND a.label = 'Channel 1 only / no frames after capture-helper crashes';
+UPDATE sensor_annotations a
+SET label = 'No polls for 1 h; the collector restarted at 15:24:44 local time (not investigated)'
+WHERE a.sensor_id = (SELECT id FROM sensors WHERE name = 'pi-fri')
+  AND a.starts_at = '2026-10-06 12:23:51+00' AND a.kind = 'gap'
+  AND a.label = 'No polls for 1 h, collector restarted 13:24:44 (not investigated)';
+
 INSERT INTO sensor_annotations (sensor_id, starts_at, ends_at, kind, boundary, label, ref)
 SELECT (SELECT id FROM sensors WHERE name = 'pi-fri'), v.starts_at::timestamptz, v.ends_at::timestamptz,
        v.kind, v.boundary, v.label, v.ref
 FROM (VALUES
   ('2026-09-15 13:53:07+00', NULL, 'change', true, 'Collector started: first poll (start of the measurements)', 'findings.md section 1'),
+  ('2026-09-15 13:53:07+00', '2026-09-15 14:55:17+00', 'gap', false, 'First hour after installation (not investigated)', 'findings.md section 1'),
   ('2026-09-17 19:36:17+00', '2026-09-17 19:38:27+00', 'gap', false, 'Short gap (not investigated)', 'findings.md section 6'),
   ('2026-09-17 19:38:27+00', '2026-09-17 21:53:20+00', 'no_frames', false, 'Polls ok but no devices (not investigated)', 'findings.md section 6'),
   ('2026-09-17 21:37:57+00', '2026-09-17 21:49:50+00', 'gap', false, 'Short gap (not investigated)', 'findings.md section 6'),
@@ -38,12 +60,12 @@ FROM (VALUES
   ('2026-09-26 22:46:43+00', '2026-09-26 22:48:23+00', 'gap', false, 'Controlled reboot after the hop-list and journal install', 'findings.md section 6'),
   ('2026-09-26 23:09:14+00', '2026-09-27 11:34:24+00', 'coverage', false, 'Channel 1 only after a capture-helper crash', 'findings.md section 7'),
   ('2026-09-27 11:30:14+00', '2026-09-27 11:34:25+00', 'no_frames', false, 'Capture-helper crash, broken re-open captured nothing', 'findings.md section 6'),
-  ('2026-09-27 12:17:20+00', '2026-09-27 12:22:55+00', 'coverage', false, 'Channel 1 only / no frames after capture-helper crashes', 'findings.md sections 6 and 7'),
+  ('2026-09-27 12:17:20+00', '2026-09-27 12:22:55+00', 'no_frames', false, 'Capture-helper crashes at 12:17:20/39/47; the re-opened source captured nothing', 'findings.md section 6'),
   ('2026-09-27 13:04:57+00', NULL, 'change', true, 'Hop list: 89 entries (prime length, without 165HT40- and 140HT40-); web UI on loopback only', 'findings.md section 7'),
   ('2026-09-27 14:15:50+00', NULL, 'change', false, 'Hop guard: a collapsed hop list is restored within ~10 s', 'findings.md section 7'),
   ('2026-09-27 19:57:29+00', NULL, 'change', false, 'Collector buffer v5: RSSI floors stored as NULL, configuration merged field by field', 'findings.md section 7'),
   ('2026-10-03 11:00:20+00', NULL, 'change', false, 'Collector buffer v6: slim observations, AP load only as the latest value', 'findings.md section 7'),
-  ('2026-10-06 12:23:51+00', '2026-10-06 13:24:45+00', 'gap', false, 'No polls for 1 h, collector restarted 13:24:44 (not investigated)', 'findings.md section 6'),
+  ('2026-10-06 12:23:51+00', '2026-10-06 13:24:45+00', 'gap', false, 'No polls for 1 h; the collector restarted at 15:24:44 local time (not investigated)', 'findings.md section 6'),
   ('2026-10-06 19:33:15+00', '2026-10-10 21:53:47+00', 'no_frames', false, 'Capture adapter lost from the USB bus', 'findings.md section 6'),
   ('2026-10-11 08:27:04+00', NULL, 'change', false, 'Capture watchdog power-cycles the adapter''s hub port', 'findings.md section 7'),
   ('2026-10-11 10:16:11+00', NULL, 'change', false, 'Collector buffer v7: hourly AP load recorded again', 'findings.md section 7')
