@@ -12,11 +12,17 @@ import { niceMax, pct, thinLabels, tipStyle } from "./geometry.js";
 import Tooltip from "./Tooltip.jsx";
 import { useRoving } from "./useRoving.js";
 
+// Two charts that share their x axis (Networks board) pass the hovered
+// bucket in and out (active / onActive) and a common y maximum (top); only
+// the chart under the pointer shows its tooltip (tip).
 export default function StackedColumns({
   series, on, labels, xlabels, notes = [], events = [], height = 200, ariaLabel, columnAria,
+  active: activeIn, onActive, tip = true, top: topIn, totalLabel = "total",
 }) {
   const n = labels.length;
-  const [active, setActive] = useState(null);
+  const [own, setOwn] = useState(null);
+  const active = onActive ? activeIn : own;
+  const setActive = onActive ?? setOwn;
   const roving = useRoving(n);
   const plot = useRef(null);
   const [width, setWidth] = useState(0);
@@ -27,13 +33,13 @@ export default function StackedColumns({
     return () => ro.disconnect();
   }, []);
   const totals = labels.map((_, i) => series.reduce((a, s) => a + (s.values[i] || 0), 0));
-  const top = niceMax(Math.max(0, ...totals));
+  const top = topIn ?? niceMax(Math.max(0, ...totals));
   const topDown = [...series].reverse();
 
   const enter = (i) => setActive(i);
   const tipRows = (i) => (on[i]
     ? [...topDown.map((s) => ({ c: s.color, v: fmtInt(s.values[i] ?? 0), l: s.label })),
-       { c: "transparent", v: fmtInt(totals[i]), l: "total" }]
+       { c: "transparent", v: fmtInt(totals[i]), l: totalLabel }]
     : []);
 
   return (
@@ -60,7 +66,7 @@ export default function StackedColumns({
               </div>
             );
           })}
-          {active !== null && active < n && (
+          {tip && active != null && active < n && (
             <Tooltip head={labels[active]} rows={tipRows(active)} notes={notes[active] ?? []}
                      style={tipStyle(active, n)} />
           )}

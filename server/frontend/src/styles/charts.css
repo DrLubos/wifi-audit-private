@@ -61,3 +61,17 @@
 .v2 .seglegend > span > span { white-space: nowrap; }      /* the label and its count never break */
 .v2 .seglegend > span.on { background: var(--wash-soft); font-weight: 600; }
 .v2 .seglegend .sw { width: 10px; height: 10px; border-radius: 2px; }
+
+/* heatmap (Networks board) */
+.v2 .hint { min-height: 22px; padding: 8px 12px; border-radius: 8px; background: var(--bg); font-size: 13px; color: var(--text); }
+.v2 .heat { display: flex; flex-direction: column; }
+.v2 .heat-row { display: flex; gap: 2px; align-items: center; }
+.v2 .heat-label { width: 84px; flex: 0 0 auto; font-size: 11px; line-height: 1; color: var(--muted); }
+.v2 .cell { flex: 1 1 0; min-width: 0; border-radius: 2px; outline: none; }
+.v2 .cell.on { outline: 2px solid var(--text); outline-offset: -1px; }
+.v2 .cell:focus-visible { outline: 2px solid var(--focus); outline-offset: -1px; }
+.v2 .heat-axis {
+  display: flex; padding-left: 86px; font-size: 11px; color: var(--muted); justify-content: space-between; padding-top: 4px;
+}
+.v2 .ramp { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.v2 .ramp i { width: 18px; height: 12px; border-radius: 2px; display: inline-block; }
