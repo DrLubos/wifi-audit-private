@@ -522,5 +522,30 @@ def severity_counts(rows):
     return out
 
 
+def event_counts(rows, statuses):
+    """events.counts rows (status, n, rows) -> ({status: events, total},
+    {status: feed rows, total}); a feed row has one status, so the rows of
+    several statuses add up."""
+    events = {r["status"]: r["n"] for r in rows}
+    feed = {r["status"]: r["rows"] for r in rows}
+    return (dict({s: events.get(s, 0) for s in statuses}, total=sum(events.values())),
+            dict({s: feed.get(s, 0) for s in statuses}, total=sum(feed.values())))
+
+
+def event_group(row, members):
+    """The group of a feed row (events.sql: _row) or None for a row of one
+    event: its local day, the number of events, the first start and the last
+    end, and the events newest first (members: events.members rows)."""
+    if not row["members"]:
+        return None
+    by_id = {m["id"]: m for m in members}
+    ms = [by_id[i] for i in row["members"] if i in by_id]
+    last = max((m["ts_end"] or m["ts"] for m in ms), default=None)
+    return {"n": len(row["members"]), "day": row["day"].isoformat(), "ts_first": iso(row["ts_first"]),
+            "ts_last": iso(last),
+            "members": [{"id": m["id"], "ts": iso(m["ts"]), "ts_end": iso(m["ts_end"]), "summary": m["summary"],
+                         "status_at": iso(m["status_at"])} for m in ms]}
+
+
 def utc_now():
     return datetime.now(timezone.utc)

@@ -287,5 +287,30 @@ class Spectrum(unittest.TestCase):
         self.assertEqual(dst[1] - dst[0], timedelta(hours=5))
 
 
+class Events(unittest.TestCase):
+    STATUSES = ("open", "confirmed", "false_positive")
+
+    def test_event_counts_events_and_rows_per_status(self):
+        events, rows = shape.event_counts([{"status": "open", "n": 271, "rows": 224},
+                                           {"status": "false_positive", "n": 3, "rows": 1}], self.STATUSES)
+        self.assertEqual(events, {"open": 271, "confirmed": 0, "false_positive": 3, "total": 274})
+        self.assertEqual(rows, {"open": 224, "confirmed": 0, "false_positive": 1, "total": 225})
+        self.assertEqual(shape.event_counts([], self.STATUSES)[1]["total"], 0)
+
+    def test_event_group(self):
+        def member(i, ts, end=None):
+            return {"id": i, "ts": ts, "ts_end": end, "summary": "Client without MFP", "status_at": None}
+        row = {"members": [9, 7, 4], "day": datetime(2026, 10, 11).date(), "ts_first": utc(2026, 10, 10, 23, 15)}
+        # the members query returns them in its own order; the group keeps the feed's (newest first)
+        members = [member(4, utc(2026, 10, 10, 23, 15)), member(9, utc(2026, 10, 11, 15, 31)),
+                   member(7, utc(2026, 10, 11, 6, 16), utc(2026, 10, 11, 16, 0)), member(5, utc(2026, 10, 11, 1))]
+        g = shape.event_group(row, members)
+        self.assertEqual((g["n"], g["day"], g["ts_first"]), (3, "2026-10-11", "2026-10-10T23:15:00Z"))
+        self.assertEqual([m["id"] for m in g["members"]], [9, 7, 4])
+        self.assertEqual(g["ts_last"], "2026-10-11T16:00:00Z")          # an earlier episode ends last
+        self.assertEqual(g["members"][1]["ts_end"], "2026-10-11T16:00:00Z")
+        self.assertIsNone(shape.event_group({"members": None}, members))
+
+
 if __name__ == "__main__":
     unittest.main()

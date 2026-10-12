@@ -81,7 +81,20 @@ def main(argv):
             if back and [i["id"] for i in back["items"]] != [i["id"] for i in feed["items"]]:
                 failures.append("events: paging back did not return the first page")
                 print("FAIL events paging back")
+    # the feed's rows (single events and groups) hold every event exactly once
+    ids, page, n = [], feed, 0
+    while page and n < 50:
+        ids += [i for r in page["items"] for i in ([m["id"] for m in r["group"]["members"]] if r.get("group")
+                                                    else [r["id"]])]
+        page = check("/events?limit=100&before=" + page["older"]) if page["older"] else None
+        n += 1
+    if feed and (len(ids) != len(set(ids)) or len(ids) != feed["counts"]["total"]):
+        failures.append("events: %d events over the pages, %d distinct, %d counted"
+                        % (len(ids), len(set(ids)), feed["counts"]["total"]))
+        print("FAIL events rows do not hold every event once")
     check("/events?type=detection&limit=100")
+    check("/events?severity=medium&status=open&limit=100")
+    check("/events?severity=urgent", 422)
     check("/events?status=closed", 422)
     check("/events?before=garbage", 422)
     for item in (feed or {}).get("items", [])[:5]:

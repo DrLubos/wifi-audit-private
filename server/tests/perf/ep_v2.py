@@ -42,6 +42,9 @@ FROM sensors s LEFT JOIN sensor_summary ss ON ss.sensor_id = s.id WHERE s.accoun
 SELECT coalesce((SELECT upper(s.bssid::text) FROM ap_baselines b JOIN ap_summary s USING (sensor_id, device_key)
                  ORDER BY coalesce(b.n_obs, 0) + coalesce(b.n_floor, 0) DESC LIMIT 1), '') AS bssid \gset
 SELECT coalesce((SELECT max(id) FROM detections), 0) AS event_id \gset
+-- events.members: the newest 20 events (a page's grouped rows)
+SELECT coalesce((SELECT array_agg(id)::text FROM (SELECT id FROM detections ORDER BY ts DESC, id DESC LIMIT 20) x),
+                '{}') AS ids \gset
 -- networks.sightings: every AP with a randomized BSSID (the phone hotspots of any period)
 SELECT coalesce(array_agg(DISTINCT x.ap_id), '{}')::text AS ap_ids
 FROM ap_sensors x JOIN ap_summary s USING (sensor_id, device_key) WHERE s.random_bssid \gset
@@ -52,7 +55,7 @@ SELECT coalesce((SELECT id FROM aps WHERE upper(bssid::text) = :'bssid'), 0) AS 
 
 # Fixed values of the other parameters (the api's defaults or a typical request).
 FIXED = {
-    "limit": "51", "q": "", "status": "{}", "kinds": "{}", "managed": "false",
+    "limit": "51", "q": "", "status": "{}", "kinds": "{}", "severity": "", "managed": "false",
     "before_ts": "infinity", "before_id": str(2 ** 63 - 1), "after_ts": "-infinity", "after_id": "0",
     "oldest_first": "false", "band": "2.4", "name": "pi-fri",
 }
@@ -87,7 +90,7 @@ def main(argv=None):
                    "now": periods.iso(now), "tz": args.tz})
     values.update(kv.partition("=")[::2] for kv in args.set)    # after the prelude: they win
     looked_up = {"account_id", "sensor_ids", "latest", "account_latest", "sensor_id", "bssid", "event_id",
-                 "ap_id", "macs", "ts", "ts_end", "ap_ids"}
+                 "ap_id", "macs", "ts", "ts_end", "ap_ids", "ids"}
 
     out = [PRELUDE] + [psql_set(k, v) for k, v in sorted(values.items())]
     if args.mode == "json":
