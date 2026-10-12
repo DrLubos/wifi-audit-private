@@ -240,6 +240,28 @@ class SensorDays(unittest.TestCase):
 
 
 class Spectrum(unittest.TestCase):
+    def test_radio_siblings(self):
+        ap = lambda b, hidden, net=None: {"bssid": b, "hidden": hidden, "network_name": net}  # noqa: E731
+        aps = [ap("EC:58:EA:95:8E:E8", False, "IK-WIFI"), ap("EC:58:EA:95:8E:EC", True),
+               ap("EC:58:EA:95:8E:F0", False, "IK-WIFI-DOT1X"), ap("EC:58:EA:95:8E:ED", True, "IK-WIFI-DOT1X"),
+               ap("3C:46:A1:74:62:43", True), ap("3C:46:A1:74:62:00", True)]
+        self.assertEqual(shape.radio_siblings(aps), {
+            "EC:58:EA:95:8E:EC": {"bssid": "EC:58:EA:95:8E:E8", "network": "IK-WIFI"},      # E8 is 4 away, F0 4: lower
+            "EC:58:EA:95:8E:ED": {"bssid": "EC:58:EA:95:8E:F0", "network": "IK-WIFI-DOT1X"},  # F0 3 away, E8 5
+        })                                                                                  # 3C:46 has no visible one
+
+    def test_busy_hours(self):
+        by_hour = {h: [5.0] for h in range(24)}
+        by_hour.update({21: [12.0, 14.0], 22: [15.0], 23: [13.0], 0: [12.0, 16.0]})
+        self.assertEqual(shape.busy_hours(by_hour), {"from": 21, "to": 25, "util": [12.2, 14.8]})
+        # sparse reports: the window is trimmed to its hours with a report
+        self.assertEqual(shape.busy_hours({12: [9.0], 13: [], 20: [3.0]}), {"from": 12, "to": 13, "util": [9.0, 9.0]})
+        # the highest mean wins: the 9 % hour alone over the window 12-15 with 9 and 8 %
+        self.assertEqual(shape.busy_hours({12: [9.0], 14: [8.0]}), {"from": 12, "to": 13, "util": [9.0, 9.0]})
+        self.assertEqual(shape.busy_hours({12: [9.0], 14: [9.0]}), {"from": 12, "to": 15, "util": [9.0, 9.0]})
+        self.assertIsNone(shape.busy_hours({}))
+        self.assertIsNone(shape.busy_hours({5: []}))
+
     def test_band_dfs_iqr(self):
         self.assertEqual([shape.band_of(c) for c in ("1", "13", "36", "165", "", None, "6e")],
                          ["2.4", "2.4", "5", "5", None, None, None])

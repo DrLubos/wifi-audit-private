@@ -3,8 +3,10 @@
 Fixed APs only (spectrum counts exclude hotspots), each counted once on its
 primary channel in the period (sql/spectrum.sql). Definitions (PLAN.md 7.3):
 overlapping 2.4 GHz = primary channel not 1, 6 or 11; 40 MHz in 2.4 GHz =
-HT40+/-; busiest = the channel with the most APs, its daytime utilization =
-p25-p75 of its hourly values 08:00-18:00 local; channel-change frequency =
+HT40+/-; busiest = the channel with the most APs, with its busiest hours of
+the average day (shape.busy_hours(): 4 local hours; decided 2026-10-12, was
+the daytime 08:00-18:00); passing = APs that used a channel in the period
+although their primary channel is another; channel-change frequency =
 changes per AP per observed day, p25-p75 per network, networks with a
 median >= 4 a day; channel plan = APs on 1/6/11 vs on 5/9/13. DFS =
 5 GHz channels 52-144.
@@ -49,25 +51,26 @@ def spectrum(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
     with deps.connection() as conn:
         r = deps.run(conn, _Q, "spectrum", **{k: a[k] for k in ("account_id", "sensor_ids", "account_latest",
                                                                "from", "to", "tz")})[0]
-    aps, util = r["aps"], r["util"]
+    aps, util, passing = r["aps"], r["util"], r["passing"] or {}
     local = ZoneInfo(acc["tz"])
     in_band = [x for x in aps if band_of(x["channel"]) == band]
     per_channel = {}
     for x in in_band:
         per_channel[x["channel"]] = per_channel.get(x["channel"], 0) + 1
     hourly = {}                               # channel -> [hourly utilization]
-    daytime = {}                              # channel -> [hourly utilization 08:00-18:00 local]
+    by_hour = {}                              # channel -> {local hour: [hourly utilization]}
     for u in util:
         if band_of(u["channel"]) != band or u["util"] is None:
             continue
         v = float(u["util"])
         hourly.setdefault(u["channel"], []).append(v)
-        if 8 <= shape.parse_ts(u["hour"]).astimezone(local).hour < 18:
-            daytime.setdefault(u["channel"], []).append(v)
+        h = shape.parse_ts(u["hour"]).astimezone(local).hour
+        by_hour.setdefault(u["channel"], {}).setdefault(h, []).append(v)
     names = sorted(set(CHANNELS[band]) | set(per_channel) | set(hourly), key=int)
     channels = [{"channel": c, "aps": per_channel.get(c, 0),
                  "util_avg": round(sum(hourly[c]) / len(hourly[c]), 1) if c in hourly else None,
-                 "dfs": dfs(c), "overlaps": band == "2.4" and c not in NON_OVERLAPPING} for c in names]
+                 "dfs": dfs(c), "overlaps": band == "2.4" and c not in NON_OVERLAPPING,
+                 "passing": passing.get(c, 0)} for c in names]
     busiest = max(channels, key=lambda c: (c["aps"], -int(c["channel"])), default=None)
     g24 = [x for x in aps if band_of(x["channel"]) == "2.4"]
     rates = {}
@@ -87,7 +90,7 @@ def spectrum(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
             "wide_2g": sum(1 for x in g24 if (x["ht_mode"] or "").startswith("HT40")),
             "busiest": None if not busiest or not busiest["aps"] else {
                 "channel": busiest["channel"], "aps": busiest["aps"],
-                "day_util": iqr(daytime.get(busiest["channel"], []))},
+                "busy_hours": shape.busy_hours(by_hour.get(busiest["channel"], {}))},
             "channel_changes": dynamic,
             "plan": {"ch_1_6_11": sum(1 for x in g24 if x["channel"] in ("1", "6", "11")),
                      "ch_5_9_13": sum(1 for x in g24 if x["channel"] in ("5", "9", "13"))},

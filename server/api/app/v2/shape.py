@@ -369,6 +369,52 @@ def heatmap(period, tz, clients, load_hours, captured, view):
     return rows, peak
 
 
+def radio_siblings(aps):
+    """{hidden BSSID: {"bssid", "network"}}: a hidden AP whose BSSID differs
+    from a visible AP's only in the last byte is likely another BSSID of the
+    same radio (one physical AP advertising several SSIDs). A hint only -
+    one BSSID stays one AP (decided 2026-10-12). Of several candidates the
+    nearest last byte, then the lowest BSSID. aps: rows with bssid (upper
+    case, colons), hidden, network_name."""
+    visible = {}
+    for a in aps:
+        if not a["hidden"]:
+            visible.setdefault(a["bssid"][:14], []).append(a)
+    out = {}
+    for a in aps:
+        cands = visible.get(a["bssid"][:14]) if a["hidden"] else None
+        if cands:
+            last = int(a["bssid"][15:], 16)
+            best = min(cands, key=lambda v: (abs(int(v["bssid"][15:], 16) - last), v["bssid"]))
+            out[a["bssid"]] = {"bssid": best["bssid"], "network": best["network_name"]}
+    return out
+
+
+def busy_hours(by_hour, width=4):
+    """The busiest hours of the average day (decided 2026-10-12; replaces
+    the board's daytime 08:00-18:00 - the sensor is in a dormitory): the
+    `width` consecutive local hours, wrapping at midnight, with the highest
+    mean of the hours' averages (an hour without a report does not count; a
+    window needs one with a report; of equal means the one with more hours
+    with a report), trimmed to its first and last hour with a report. by_hour: {local hour: [hourly values]}. -> {"from": h, "to":
+    end hour (may pass 24), "util": [p25, p75] of the window's hourly values}
+    or None."""
+    means = {h: sum(v) / len(v) for h, v in by_hour.items() if v}
+    best = None
+    for h0 in range(24):
+        vals = [means[(h0 + k) % 24] for k in range(width) if (h0 + k) % 24 in means]
+        key = (sum(vals) / len(vals), len(vals)) if vals else None     # a tie: more hours with a report
+        if key and (best is None or key > best[0]):
+            best = (key, h0)
+    if best is None:
+        return None
+    h0 = best[1]
+    with_data = [k for k in range(width) if (h0 + k) % 24 in means]
+    window = [x for k in range(width) for x in by_hour.get((h0 + k) % 24, ())]
+    start = (h0 + with_data[0]) % 24
+    return {"from": start, "to": start + with_data[-1] - with_data[0] + 1, "util": iqr(window)}
+
+
 def band_of(ch):
     """'2.4' / '5' of an advertised channel number (as band_of_channel() in schema.sql)."""
     try:

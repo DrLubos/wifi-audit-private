@@ -17,7 +17,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from .. import deps, periods, queries, shape
+from .. import apcache, deps, periods, queries, shape
 from ..periods import iso
 
 router = APIRouter(tags=["v2 networks"])
@@ -25,6 +25,7 @@ router = APIRouter(tags=["v2 networks"])
 _Q = queries.load("networks")
 _QC = queries.load("context")
 _QS = queries.load("settings")
+_QA = queries.load("aps")
 
 POLICY = {"enterprise": "Enterprise", "psk_or_better": "WPA2-PSK or better", "wpa3": "WPA3",
           "open_allowed": "Open allowed", None: "No policy"}
@@ -87,6 +88,8 @@ def networks(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
         changes = deps.run(conn, _Q, "security_changes",
                            **{k: a[k] for k in ("account_id", "sensor_ids", "account_latest", "from", "to")})
         configured = deps.run(conn, _QS, "networks", account_id=acc["id"])
+        # hidden BSSIDs one byte from a visible one: likely the same radio (a hint)
+        siblings = shape.radio_siblings(apcache.account_aps(conn, acc, _QA["account_aps"]).values())
         collecting = len(shape.captured_hours(hours))
         names = {n["ssid"] for n in configured}
         others = [n for n in nets if n["network_key"] not in names]
@@ -170,6 +173,7 @@ def networks(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
             "total_rows": len(listed), "page": other_page, "page_size": OTHER_PAGE,
             "rows": [{"network": None if n["hidden"] else n["network_key"], "key": n["network_key"],
                       "hidden": n["hidden"], "bssids": n["bssids"], "vendors": n["vendors"] or [],
+                      "sibling": siblings.get(n["network_key"][7:]) if n["network_key"].startswith("hidden:") else None,
                       "security": {"labels": n["labels"], "weakest": n["weakest"]}, "mobile": n["mobile"],
                       "presence": n["presence"], "hours": n["hours"],
                       "median_sighting_s": (shape.sighting_median([x for i in n["ap_ids"] for x in sight.get(i, ())])

@@ -26,6 +26,7 @@ _QC = queries.load("context")
 BSSID_RE = r"^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$"
 CLASSES = ("managed", "friendly", "unknown", "suspicious", "ignored")
 ACTIVE = timedelta(minutes=5)
+AP_RAMP = (2, 5, 8, 12, 16, 20)     # the ApDetail board's clients scale (an AP without load data)
 SORTS = {
     "last_seen": lambda a: a["last_seen"],
     "first_seen": lambda a: a["first_seen"],
@@ -61,7 +62,7 @@ def _is_new(a, period_start):
     return a["first_seen"] >= period_start and not a["warmup"]
 
 
-def _ap_item(a, active_after, period_start):
+def _ap_item(a, active_after, period_start, siblings):
     policy_met = None if not a["has_policy"] else a["policy_reason"] is None
     return {
         "bssid": a["bssid"], "ssid": a["ssid"], "hidden": a["hidden"], "network": a["network_name"],
@@ -76,6 +77,8 @@ def _ap_item(a, active_after, period_start):
         "first_seen": iso(a["first_seen"]), "last_seen": iso(a["last_seen"]),
         "active": active_after is not None and a["last_seen"] >= active_after,
         "mobile": a["mobile"], "new": _is_new(a, period_start),
+        # a hidden BSSID one byte from a visible one: likely the same radio (a hint only)
+        "sibling": siblings.get(a["bssid"]),
     }
 
 
@@ -144,10 +147,11 @@ def list_aps(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
         rows.sort(key=lambda a: (-sizes[gkey(a)], gkey(a)))           # stable: the sort stays within a group
         groups = [{"key": k, "n": n} for k, n in sorted(sizes.items(), key=lambda kv: (-kv[1], kv[0]))]
     active_after = sel["latest"] - ACTIVE if sel["latest"] else None
+    siblings = shape.radio_siblings(aps.values())
     first = (page - 1) * page_size
     items = []
     for a in rows[first:first + page_size]:
-        item = _ap_item(a, active_after, p.start)
+        item = _ap_item(a, active_after, p.start, siblings)
         if groups is not None:
             item["group"] = a["network_key"] if group == "ssid" else _strongest(a)[0]
         items.append(item)
@@ -173,10 +177,12 @@ def get_ap(request: Request, bssid: str = Path(pattern=BSSID_RE), acc=Depends(de
         return cached
     with deps.connection() as conn:
         a = _find(conn, acc, bssid)
+        sibling = shape.radio_siblings(apcache.account_aps(conn, acc, _Q["account_aps"]).values()).get(a["bssid"])
         sensors = deps.run(conn, _Q, "ap_sensors", ap_id=a["ap_id"])
         history = deps.run(conn, _Q, "config_history", ap_id=a["ap_id"])
         events = deps.run(conn, _Q, "events", account_id=acc["id"], bssid=bssid)
-        allowed = deps.allowed_bssids(conn, acc, [a["bssid"]] + [e["summary"] for e in events])
+        allowed = deps.allowed_bssids(conn, acc, [a["bssid"]] + [e["summary"] for e in events]
+                                      + ([sibling["bssid"]] if sibling else []))
     days = sum(s["days_seen"] for s in sensors)
     channel_changes = sum(s["channel_changes"] for s in sensors)
     policy = None
@@ -188,7 +194,8 @@ def get_ap(request: Request, bssid: str = Path(pattern=BSSID_RE), acc=Depends(de
                      "name_seen": a["name_seen"], "network": a["network_name"], "network_kind": a["network_kind"],
                      "manuf": a["manuf"], "random_bssid": a["random_bssid"], "mobile": a["mobile"],
                      "channel": a["channel"], "band": a["band"], "ht_mode": a["ht_mode"], "country": a["country"],
-                     "first_seen": iso(a["first_seen"]), "last_seen": iso(a["last_seen"])},
+                     "first_seen": iso(a["first_seen"]), "last_seen": iso(a["last_seen"]),
+                     "sibling": sibling},
         "security": {"level": a["security"], "label": a["security_label"], "crypt": a["crypt"],
                      "detail": a["detail"], "mfp": a["mfp"], "policy": policy},
         # as last measured (devices.cur_*); clients: the BSS Load station count when the AP sends one
@@ -298,5 +305,8 @@ def ap_load(request: Request, bssid: str = Path(pattern=BSSID_RE),
     else:
         clients = {r["hour"]: {"total": r["clients"], "by_network": {}} for r in load if r["clients"] is not None}
         rows, peak = shape.heatmap(p, acc["tz"], clients, set(clients), shape.captured_hours(hours), "week")
-        body.update({"weeks": weeks, "rows": rows, "peak": peak, "ramp": list(shape.RAMP)})
+        # the AP's own scale: thresholds from its peak cell (as the clients heatmap
+        # of Networks, decided 2026-10-12), the board's 2 .. 20+ without data
+        thresholds, top = shape.ramp(peak["value"]) if peak["value"] else (AP_RAMP, None)
+        body.update({"weeks": weeks, "rows": rows, "peak": peak, "ramp": list(thresholds), "scale": {"top": top}})
     return deps.respond(body, tag)

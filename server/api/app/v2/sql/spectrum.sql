@@ -28,7 +28,9 @@ fixed AS MATERIALIZED (
 -- selected sensors in the period its primary channel, HT mode, network,
 -- local days observed and channel changes (ap_config_changes) in the
 -- period; per UTC hour and channel the utilization over the APs that
--- reported it. The api filters the band.
+-- reported it; per channel the APs that used it in the period although
+-- their primary channel is another (passing through, decided 2026-10-12).
+-- The api filters the band.
 WITH {{_fixed}}, hl AS (                 -- the period's UTC hours -> local date
   SELECT g AS hour, (g AT TIME ZONE %(tz)s::text)::date AS day
   FROM generate_series(%(from)s::timestamptz, %(to)s::timestamptz - interval '1 hour', interval '1 hour') AS g
@@ -74,7 +76,12 @@ SELECT (SELECT coalesce(json_agg(json_build_object(
        (SELECT coalesce(json_agg(json_build_object('hour', u.hour, 'channel', u.channel, 'util', round(u.util::numeric, 1),
                                                    'aps', u.aps) ORDER BY u.hour, u.channel), '[]'::json)
         FROM (SELECT hour, channel, avg(util) AS util, count(*)::int AS aps
-              FROM load WHERE util IS NOT NULL GROUP BY hour, channel) u) AS util
+              FROM load WHERE util IS NOT NULL GROUP BY hour, channel) u) AS util,
+       (SELECT coalesce(json_object_agg(t.channel, t.n), '{}'::json)
+        FROM (SELECT l.channel, count(DISTINCT l.ap_id)::int AS n
+              FROM load l JOIN prim p ON p.ap_id = l.ap_id
+              WHERE p.channel <> l.channel
+              GROUP BY l.channel) t) AS passing
 
 -- name: utilization
 -- Utilization per UTC hour and channel of the band: the mean over the fixed
