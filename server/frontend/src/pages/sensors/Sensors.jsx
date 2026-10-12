@@ -97,7 +97,7 @@ function SensorCard({ s, account, now, n }) {
       {note && <div className={note.bad ? "sen-note bad-note" : "sen-note"}>{note.text}</div>}
       <div className="sen-foot">
         <span className={foot.warn ? "small warn-text" : "muted small"}>{foot.text}</span>
-        <Link to="/settings/sensors" className="btn2 sen-btn">Sensor settings</Link>
+        <Link to={`/settings/sensors?sensor=${encodeURIComponent(s.name)}`} className="btn2 sen-btn">Sensor settings</Link>
       </div>
     </section>
   );
