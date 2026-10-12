@@ -3,18 +3,21 @@
 
 networks: the rogue banner (BSSIDs classified suspicious: an unknown BSSID
 broadcasting a managed SSID), managed networks (policy, actual security,
-compliance, sensors, clients now, BSSID rows), friendly networks, other
-networks (count, hidden, phone hotspots summary, presence per network,
-paged) and the security changes in the period. timeseries: networks per
-bucket as configured / mobile / other and by their weakest security level.
-heatmap: clients on managed networks, day by day or as an average week.
+compliance - a BSSID of unknown security is not assessed -, sensors, clients
+now, BSSID rows), friendly networks, other networks (count, hidden, phone
+hotspots summary, presence per network with the median sighting of the
+transient ones, paged) and the security changes in the period (without
+MFP-only changes of mobile APs). timeseries: networks per bucket as
+configured / mobile / other and by their weakest security level. heatmap:
+clients on managed networks, day by day or as an average week, on one scale
+from the account's 30-day peak.
 """
 
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from .. import deps, queries, shape
+from .. import deps, periods, queries, shape
 from ..periods import iso
 
 router = APIRouter(tags=["v2 networks"])
@@ -40,13 +43,21 @@ def _policy(n):
             "label": label + (" + required MFP" if n["require_mfp"] else "")}
 
 
+def _assessed(b):
+    """A BSSID's compliance can be assessed only when its security is known
+    (a beacon record); otherwise it is counted as not assessed, never failing
+    (decided 2026-10-12)."""
+    return b["security"] not in (None, "unknown")
+
+
 def _bssid_row(b, active_after):
     return {
         "bssid": b["bssid"], "channel": b["channel"], "band": b["band"], "ht_mode": b["ht_mode"],
         "security": b["security"], "label": b["security_label"], "mfp": b["mfp"], "clients": b["clients"],
         "rssi": _rssi(b), "last_seen": iso(b["last_seen"]),
         "active": _active(b, active_after), "classification": b["classification"],
-        "classified_by": b["classified_by"], "reason": b["reason"],
+        "classified_by": b["classified_by"], "assessed": _assessed(b),
+        "reason": b["reason"] if _assessed(b) else None,
     }
 
 
@@ -73,9 +84,24 @@ def networks(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
         hours = deps.run(conn, _QC, "sensor_hours", sensor_ids=sel["ids"], **{"from": p.start, "to": p.ends[-1]})
         nets = deps.run(conn, _Q, "networks", **a)
         bss = deps.run(conn, _Q, "bssids", **{k: a[k] for k in ("account_id", "sensor_ids", "from", "to")})
-        changes = deps.run(conn, _Q, "security_changes", **{k: a[k] for k in ("sensor_ids", "from", "to")})
+        changes = deps.run(conn, _Q, "security_changes",
+                           **{k: a[k] for k in ("account_id", "sensor_ids", "account_latest", "from", "to")})
         configured = deps.run(conn, _QS, "networks", account_id=acc["id"])
-    collecting = len(shape.captured_hours(hours))
+        collecting = len(shape.captured_hours(hours))
+        names = {n["ssid"] for n in configured}
+        others = [n for n in nets if n["network_key"] not in names]
+        hotspots = [n for n in others if n["randomized"]]
+        listed = [n for n in others if not n["randomized"]]
+        first = (other_page - 1) * OTHER_PAGE
+        page = [dict(n, presence=shape.presence(n, collecting)) for n in listed[first:first + OTHER_PAGE]]
+        # sightings: of the hotspot BSSIDs and of the transient networks on the page
+        ids = sorted({i for n in hotspots for i in n["ap_ids"]}
+                     | {i for n in page if n["presence"] == "transient" for i in n["ap_ids"]})
+        sight = {}
+        if ids:
+            for r in deps.run(conn, _Q, "sightings", ap_ids=ids, sensor_ids=sel["ids"],
+                              **{"from": p.start, "to": p.ends[-1]}):
+                sight.setdefault(r["ap_id"], []).append(r["seconds"])
     # active now: seen within 5 min of the last collecting poll of a selected sensor
     active_after = {s["name"]: s["last_capture_at"] - ACTIVE for s in sel["sensors"] if s["last_capture_at"]}
     seen = {n["network_key"]: n for n in nets}
@@ -105,16 +131,17 @@ def networks(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
                 "bssids_active": sum(1 for b in rows if _active(b, active_after)), "vendors": vendors,
                 "sensors": sensors, "note": n["note"], "seen": net is not None}
         if n["kind"] == "managed":
-            failing = [b for b in rows if b["reason"]]
+            # BSSIDs without a beacon record are counted, not mixed into the labels, and not assessed
+            known = [b for b in rows if _assessed(b)]
+            failing = [b for b in known if b["reason"]]
             reasons = sorted({b["reason"] for b in failing})
-            # BSSIDs without a beacon record are counted, not mixed into the labels
-            known = [b for b in rows if b["security"] not in (None, "unknown")]
             managed.append(dict(base, policy=_policy(n),
                                 actual={"labels": sorted({b["security_label"] for b in known}),
                                         "mfp": sorted({b["mfp"] or "unknown" for b in known}),
                                         "unknown": len(rows) - len(known)},
-                                compliance={"met": len(rows) > 0 and not failing, "failing": len(failing),
-                                            "total": len(rows), "reason": reasons[0] if reasons else None},
+                                compliance={"met": len(known) > 0 and not failing, "failing": len(failing),
+                                            "total": len(known), "not_assessed": len(rows) - len(known),
+                                            "reason": reasons[0] if reasons else None},
                                 clients_now=sum(b["clients"] or 0 for b in rows if _active(b, active_after)),
                                 bssid_rows=[_bssid_row(b, active_after) for b in rows]))
         else:
@@ -126,12 +153,8 @@ def networks(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
             friendly.append(dict(base, security={"labels": labels, "weakest": (seen.get(n["ssid"]) or {}).get("weakest")},
                                  rssi=rssi))
 
-    names = {n["ssid"] for n in configured}
-    others = [n for n in nets if n["network_key"] not in names]
-    hotspots = [n for n in others if n["randomized"]]
-    listed = [n for n in others if not n["randomized"]]
     hot_bssids = sum(n["bssids"] for n in hotspots)
-    first = (other_page - 1) * OTHER_PAGE
+    hot_sightings = [x for n in hotspots for i in n["ap_ids"] for x in sight.get(i, ())]
     body = dict(p.envelope(sel["filter"]), account=deps.account_head(acc))
     body.update({
         "collecting_hours": collecting,
@@ -141,17 +164,18 @@ def networks(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
         "other": {
             "networks": len(others), "hidden": sum(1 for n in others if n["hidden"]),
             "hotspots": {"networks": len(hotspots), "bssids": hot_bssids,
-                         "avg_presence_s": (round(sum(n["lifetime_s"] * n["bssids"] for n in hotspots) / hot_bssids)
-                                            if hot_bssids else None),
+                         "median_sighting_s": shape.sighting_median(hot_sightings),
                          # randomized BSSIDs are classified ignored by the rules
                          "ignored": acc["ignore_random_bssid"]},
             "total_rows": len(listed), "page": other_page, "page_size": OTHER_PAGE,
             "rows": [{"network": None if n["hidden"] else n["network_key"], "key": n["network_key"],
                       "hidden": n["hidden"], "bssids": n["bssids"], "vendors": n["vendors"] or [],
                       "security": {"labels": n["labels"], "weakest": n["weakest"]}, "mobile": n["mobile"],
-                      "presence": shape.presence(n, collecting), "hours": n["hours"],
-                      "lifetime_s": n["lifetime_s"], "last_seen": iso(n["last_seen"])}
-                     for n in listed[first:first + OTHER_PAGE]],
+                      "presence": n["presence"], "hours": n["hours"],
+                      "median_sighting_s": (shape.sighting_median([x for i in n["ap_ids"] for x in sight.get(i, ())])
+                                            if n["presence"] == "transient" else None),
+                      "last_seen": iso(n["last_seen"])}
+                     for n in page],
         },
         "security_changes": [dict(c, ts=iso(c["ts"])) for c in shape.group_changes(changes)],
     })
@@ -193,10 +217,16 @@ def clients_heatmap(request: Request, acc=Depends(deps.get_account), sensor: str
     tag, cached = deps.etag(request, acc, p.epoch, envelope=p.envelope(sel["filter"]))
     if cached:
         return cached
+    p30 = periods.period("30d", acc["tz"], p.now)
     with deps.connection() as conn:
         hours = deps.run(conn, _QC, "sensor_hours", sensor_ids=sel["ids"], **{"from": p.start, "to": p.ends[-1]})
         rows = deps.run(conn, _Q, "clients_hourly", account_id=acc["id"], sensor_ids=sel["ids"],
                         **{"from": p.start, "to": p.ends[-1]})
+        # one scale for every period, view and sensor filter: the account's 30-day peak
+        peak30 = deps.run(conn, _Q, "clients_peak", account_id=acc["id"],
+                          sensor_ids=[s["id"] for s in acc["sensors"]],
+                          **{"from": p30.start, "to": p30.ends[-1]})[0]["peak"]
+    thresholds, top = shape.ramp(peak30)
     clients, load_hours = {}, set()
     for r in rows:
         if r["network"] is None:
@@ -207,5 +237,6 @@ def clients_heatmap(request: Request, acc=Depends(deps.get_account), sensor: str
         c["by_network"][r["network"]] = r["clients"]
     grid, peak = shape.heatmap(p, acc["tz"], clients, load_hours, shape.captured_hours(hours), view)
     body = dict(p.envelope(sel["filter"]), account=deps.account_head(acc))
-    body.update({"view": view, "rows": grid, "peak": peak, "ramp": list(shape.RAMP)})
+    body.update({"view": view, "rows": grid, "peak": peak, "ramp": list(thresholds),
+                 "scale": {"peak_30d": peak30, "top": top}})
     return deps.respond(body, tag)

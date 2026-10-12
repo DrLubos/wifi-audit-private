@@ -9,7 +9,9 @@
 -- or the name seen for a hidden AP), seen by the selected sensors in the 24 h
 -- before their latest capture and classified managed or unknown (a suspicious
 -- BSSID is the rogue banner's, not the network's); each must meet the
--- network's policy (security_meets()).
+-- network's policy (security_meets()). A BSSID of unknown security (no beacon
+-- record) is not assessed: counted in not_assessed, never failing (decided
+-- 2026-10-12); bssids counts the assessed ones.
 WITH ev AS (
   SELECT d.severity FROM detections d
   WHERE d.sensor_id = ANY (%(sensor_ids)s::int[]) AND d.status = 'open'
@@ -24,7 +26,8 @@ WITH ev AS (
   WHERE s.sensor_id = ANY (%(sensor_ids)s::int[])
     AND s.last_seen >= %(latest)s::timestamptz - interval '24 hours'
 ), bss AS MATERIALIZED (
-  SELECT mn.id AS network_id, mn.expected_security, mn.require_mfp, v.bssid, v.crypt, v.crypt_bits_known, v.mfp_req
+  SELECT mn.id AS network_id, mn.expected_security, mn.require_mfp, v.bssid, v.crypt, v.crypt_bits_known, v.mfp_req,
+         coalesce(v.security, 'unknown') = 'unknown' AS unassessed
   FROM account_aps v
   JOIN mn ON mn.ssid = v.network_name
   WHERE v.ap_id = ANY (ARRAY(SELECT ap_id FROM cand))     -- each AP's view row once
@@ -33,10 +36,12 @@ WITH ev AS (
   SELECT c.*, security_meets(c.expected_security, c.require_mfp, c.crypt, c.crypt_bits_known, c.mfp_req) AS reason
   FROM (SELECT DISTINCT expected_security, require_mfp, crypt, crypt_bits_known, mfp_req FROM bss) c
 ), net AS (
-  SELECT mn.ssid, count(b.bssid)::int AS bssids, count(b.bssid) FILTER (WHERE b.reason IS NOT NULL)::int AS failing,
-         mode() WITHIN GROUP (ORDER BY b.reason) FILTER (WHERE b.reason IS NOT NULL) AS reason
+  SELECT mn.ssid, count(b.bssid) FILTER (WHERE NOT b.unassessed)::int AS bssids,
+         count(b.bssid) FILTER (WHERE b.unassessed)::int AS not_assessed,
+         count(b.bssid) FILTER (WHERE b.reason IS NOT NULL AND NOT b.unassessed)::int AS failing,
+         mode() WITHIN GROUP (ORDER BY b.reason) FILTER (WHERE b.reason IS NOT NULL AND NOT b.unassessed) AS reason
   FROM mn
-  LEFT JOIN (SELECT bss.network_id, bss.bssid, v.reason
+  LEFT JOIN (SELECT bss.network_id, bss.bssid, bss.unassessed, v.reason
              FROM bss JOIN verdict v
                ON (v.expected_security, v.require_mfp, v.crypt, v.crypt_bits_known, v.mfp_req)
                   IS NOT DISTINCT FROM (bss.expected_security, bss.require_mfp, bss.crypt, bss.crypt_bits_known,
@@ -47,7 +52,8 @@ SELECT (SELECT count(*) FROM ev)::int AS open_total,
        (SELECT coalesce(json_agg(json_build_object('severity', severity, 'n', n)), '[]'::json)
         FROM (SELECT severity, count(*)::int AS n FROM ev GROUP BY 1) t) AS open_by_severity,
        (SELECT coalesce(json_agg(json_build_object('network', ssid, 'bssids', bssids, 'failing', failing,
-                                                   'reason', reason) ORDER BY ssid), '[]'::json)
+                                                   'reason', reason, 'not_assessed', not_assessed)
+                                 ORDER BY ssid), '[]'::json)
         FROM net) AS networks
 
 -- name: attention

@@ -42,6 +42,9 @@ FROM sensors s LEFT JOIN sensor_summary ss ON ss.sensor_id = s.id WHERE s.accoun
 SELECT coalesce((SELECT upper(s.bssid::text) FROM ap_baselines b JOIN ap_summary s USING (sensor_id, device_key)
                  ORDER BY coalesce(b.n_obs, 0) + coalesce(b.n_floor, 0) DESC LIMIT 1), '') AS bssid \gset
 SELECT coalesce((SELECT max(id) FROM detections), 0) AS event_id \gset
+-- networks.sightings: every AP with a randomized BSSID (the phone hotspots of any period)
+SELECT coalesce(array_agg(DISTINCT x.ap_id), '{}')::text AS ap_ids
+FROM ap_sensors x JOIN ap_summary s USING (sensor_id, device_key) WHERE s.random_bssid \gset
 SELECT coalesce((SELECT id FROM aps WHERE upper(bssid::text) = :'bssid'), 0) AS ap_id,
        '{' || :'bssid' || '}' AS macs,
        :'latest'::timestamptz - interval '6 hours' AS ts, :'latest' AS ts_end \gset
@@ -84,7 +87,7 @@ def main(argv=None):
                    "now": periods.iso(now), "tz": args.tz})
     values.update(kv.partition("=")[::2] for kv in args.set)    # after the prelude: they win
     looked_up = {"account_id", "sensor_ids", "latest", "account_latest", "sensor_id", "bssid", "event_id",
-                 "ap_id", "macs", "ts", "ts_end"}
+                 "ap_id", "macs", "ts", "ts_end", "ap_ids"}
 
     out = [PRELUDE] + [psql_set(k, v) for k, v in sorted(values.items())]
     if args.mode == "json":

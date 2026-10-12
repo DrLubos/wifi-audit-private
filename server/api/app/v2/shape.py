@@ -11,7 +11,8 @@ Standard library only (tests/test_shape.py).
 """
 
 from datetime import datetime, timedelta, timezone
-from statistics import quantiles
+from math import ceil, floor, log10
+from statistics import median, quantiles
 from zoneinfo import ZoneInfo
 
 from .periods import iso
@@ -168,14 +169,24 @@ def severity_rank(sev):
 WEAKER = {"not Enterprise", "weaker than WPA2-PSK", "not WPA3"}
 
 
+NOT_ASSESSED = "security not assessed (no beacon record)"
+
+
 def compliance(networks):
-    """(summary, findings) of the managed networks (rows: network, bssids, failing, reason)."""
+    """(summary, findings) of the managed networks (rows: network, bssids,
+    failing, reason, not_assessed). bssids counts the BSSIDs whose security
+    is known; a BSSID without a beacon record is not assessed - counted, never
+    failing (decided 2026-10-12). A network with BSSIDs but none assessed is a
+    low finding, not a compliant one."""
     problems = []
     for n in networks:
-        if n["bssids"] == 0:
+        na = n.get("not_assessed") or 0
+        if n["bssids"] == 0 and not na:
             problems.append(dict(n, reason="not seen by the selected sensors"))
         elif n["failing"]:
             problems.append(n)
+        elif n["bssids"] == 0:
+            problems.append(dict(n, reason=NOT_ASSESSED))
     met = len(networks) - len(problems)
     first = None
     if problems:
@@ -186,7 +197,9 @@ def compliance(networks):
         "kind": "compliance",
         "title": "Managed network %s: %s" % (p["network"], p["reason"]),
         "network": p["network"],
-        "detail": ("%d of %d BSSIDs" % (p["failing"], p["bssids"])) if p["bssids"] else None,
+        "detail": ", ".join(x for x in (
+            "%d of %d BSSIDs" % (p["failing"], p["bssids"]) if p["bssids"] else None,
+            "%d not assessed" % p["not_assessed"] if p.get("not_assessed") else None) if x) or None,
         "link": "/networks",
     } for p in problems]
     return {"met": met, "total": len(networks), "first_problem": first}, findings
@@ -213,7 +226,7 @@ def presence(net, collecting_hours):
     """Presence of a network in the period (SPEC section 4, Q9): permanent =
     seen in >= 90 % of the collecting hours; daytime only = >= 80 % of its
     hours between 07:00 and 20:00 local, on >= 2 days; transient = mobile
-    (with the mean lifetime); otherwise intermittent."""
+    (with the median sighting, sighting_median()); otherwise intermittent."""
     hours = net["hours"] or 0
     if collecting_hours and hours >= 0.9 * collecting_hours:
         return "permanent"
@@ -227,11 +240,30 @@ def presence(net, collecting_hours):
 LEVEL_KIND = {"high": "downgrade", "medium": "downgrade", "info": "upgrade", "low": "change"}
 
 
+SIGHTING_GAP = timedelta(minutes=10)    # sightings.sql: a longer gap ends a sighting
+
+
+def sighting_median(seconds):
+    """Median duration of continuous sightings (decided 2026-10-12: a run of
+    observations without a gap over 10 minutes, last - first; 0 for a single
+    poll), whole seconds; None without sightings."""
+    return round(median(seconds)) if seconds else None
+
+
+def mfp_only(r):
+    """A security change of the MFP state only (the configuration label is the same)."""
+    return r["from_label"] == r["to_label"] and r["from_mfp"] != r["to_mfp"]
+
+
 def group_changes(rows):
     """Security change events -> one item per network, minute and change
-    (from -> to), newest first: [{ts, kind, network, bssids, from, to, event_ids}]."""
+    (from -> to), newest first: [{ts, kind, network, bssids, from, to, event_ids}].
+    MFP-only changes of mobile APs (phone hotspots toggling MFP capable/no)
+    stay out of the list (decided 2026-10-12; they remain events)."""
     out, index = [], {}
     for r in rows:
+        if r.get("mobile") and mfp_only(r):
+            continue
         minute = r["ts"].replace(second=0, microsecond=0)
         frm = r["from_label"] if r["from_label"] != r["to_label"] else "MFP %s" % (r["from_mfp"] or "unknown")
         to = r["to_label"] if r["from_label"] != r["to_label"] else "MFP %s" % (r["to_mfp"] or "unknown")
@@ -246,7 +278,25 @@ def group_changes(rows):
     return out
 
 
-RAMP = (25, 75, 150, 250, 350, 450)     # bins of the clients heatmap (Networks board)
+RAMP = (25, 75, 150, 250, 350, 450)     # the board's bins: the scale without data
+RAMP_SHARE = (1 / 18, 1 / 6, 1 / 3, 5 / 9, 7 / 9, 1)    # the board's thresholds as shares of its top (450)
+
+
+def ramp(peak):
+    """The clients heatmap's six thresholds (seven colors) from the account's
+    30-day peak (decided 2026-10-12: one scale for every period, view and
+    sensor filter). top = the peak rounded up to two significant digits;
+    thresholds at the board's shares of top, rounded to the same step,
+    strictly increasing. -> (thresholds, top); the board's bins without a peak."""
+    if not peak or peak <= 0:
+        return RAMP, None
+    step = 10 ** max(0, floor(log10(peak)) - 1)
+    top = ceil(peak / step) * step
+    out = []
+    for share in RAMP_SHARE:
+        t = max(floor(top * share / step + 0.5) * step, (out[-1] + step) if out else step)   # half up
+        out.append(int(t))
+    return tuple(out), int(top)
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 

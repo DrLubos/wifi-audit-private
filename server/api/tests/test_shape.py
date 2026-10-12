@@ -111,6 +111,15 @@ class StatusAndLists(unittest.TestCase):
                                                     "failing": 1, "bssids": 3})
         self.assertEqual([f["severity"] for f in findings], ["low", "medium", "low"])
         self.assertEqual(findings[2]["title"], "Managed network D: not seen by the selected sensors")
+        # unknown security is not assessed (decided 2026-10-12): counted, never failing
+        summary, f2 = shape.compliance([
+            {"network": "E", "bssids": 26, "failing": 0, "reason": None, "not_assessed": 2},
+            {"network": "F", "bssids": 3, "failing": 1, "reason": "not Enterprise", "not_assessed": 1},
+            {"network": "G", "bssids": 0, "failing": 0, "reason": None, "not_assessed": 2}])
+        self.assertEqual((summary["met"], summary["total"]), (1, 3))
+        self.assertEqual([(f["network"], f["detail"]) for f in f2],
+                         [("F", "1 of 3 BSSIDs, 1 not assessed"), ("G", "2 not assessed")])
+        self.assertEqual(f2[1]["title"], "Managed network G: security not assessed (no beacon record)")
         ev = lambda i, sev, kind="kismet", ongoing=False: {  # noqa: E731
             "id": i, "severity": sev, "kind": kind, "type": "T", "summary": "s%d" % i, "bssid": None,
             "ssid": None, "sensor": "pi-fri", "ts": None, "ts_end": None, "total": 3, "ongoing": ongoing}
@@ -154,6 +163,31 @@ class Networks(unittest.TestCase):
             ("A", "upgrade", ["B3"], "WPA2-PSK", "WPA3-SAE"),
             ("A", "change", ["B4"], "MFP no", "MFP capable"),
             ("C", "downgrade", ["B5"], "WPA2-PSK", "Open")])
+
+    def test_group_changes_leave_out_mfp_only_changes_of_mobile_aps(self):
+        t = utc(2026, 10, 11, 9, 42)
+        row = lambda i, mobile, f="WPA2-PSK", to="WPA2-PSK", fm="no", tm="capable": {  # noqa: E731
+            "id": i, "ts": t, "severity": "low" if f == to else "medium", "bssid": "B%d" % i, "network": "N%d" % i,
+            "from_label": f, "to_label": to, "from_mfp": fm, "to_mfp": tm, "mobile": mobile}
+        out = shape.group_changes([row(1, True), row(2, False), row(3, True, "WPA2-PSK", "Open"),
+                                   row(4, True, fm="no", tm="no")])
+        # the hotspot's MFP toggle goes; a fixed AP's stays, and so does every label change of a hotspot
+        self.assertEqual([(c["network"], c["from"], c["to"]) for c in out], [
+            ("N2", "MFP no", "MFP capable"), ("N3", "WPA2-PSK", "Open"), ("N4", "MFP no", "MFP no")])
+
+    def test_sighting_median(self):
+        self.assertEqual(shape.sighting_median([0, 180, 4116]), 180)
+        self.assertEqual(shape.sighting_median([0, 60, 120, 600]), 90)
+        self.assertIsNone(shape.sighting_median([]))
+
+    def test_ramp_from_the_30_day_peak(self):
+        self.assertEqual(shape.ramp(199), ((10, 30, 70, 110, 160, 200), 200))
+        self.assertEqual(shape.ramp(112), ((10, 20, 40, 70, 90, 120), 120))
+        self.assertEqual(shape.ramp(1234), ((100, 200, 400, 700, 1000, 1300), 1300))
+        self.assertEqual(shape.ramp(7), ((1, 2, 3, 4, 5, 7), 7))
+        self.assertEqual(shape.ramp(3)[0], (1, 2, 3, 4, 5, 6))          # strictly increasing even above top
+        self.assertEqual(shape.ramp(None), (shape.RAMP, None))          # no data: the board's bins
+        self.assertEqual(shape.ramp(0), (shape.RAMP, None))
 
     def test_heatmap_days_and_dst_end(self):
         # 30d ending 26 Oct 01:30 local: the local day 25 Oct has 25 hours (02:00 twice)
