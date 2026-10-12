@@ -7,15 +7,25 @@ from rows and serialized with json.dumps (timestamps as UTC ISO 8601 with a
 Z), guarded by the weak v2 ETag (cache.v2_etag): a matching If-None-Match is
 answered with 304, a body this URL got under the same tag is served from
 memory (respcache), both before the endpoint's queries run.
+
+Writes (PLAN.md 7.5): require_write() checks the bearer token against
+WRITE_TOKEN (auth.py); write_tx() is the one transaction of a write - its
+audit_log rows and accounts.write_version + 1, so every ETag of the account
+changes with it.
 """
 
+import logging
+import os
 from contextlib import contextmanager
 from typing import Literal
 
-from fastapi import HTTPException, Query, Request, Response
+from fastapi import Header, HTTPException, Query, Request, Response
+from psycopg.types.json import Jsonb
 
 from .. import cache, db
-from . import periods, privacy, queries, respcache, shape
+from . import auth, periods, privacy, queries, respcache, shape, writes
+
+log = logging.getLogger("api.write")
 
 ACCOUNT_ID = 1
 
@@ -136,3 +146,76 @@ def allowed_bssids(conn, acc, values):
 
 def account_head(acc):
     return {"name": acc["name"], "tz": acc["tz"]}
+
+
+# --- writes (phase 5) ---------------------------------------------------------------------------
+
+def require_write(request: Request, authorization: str | None = Header(None)):
+    """The write token (auth.py): 403 when writes are disabled (no
+    WRITE_TOKEN on the server), 401 without the right token - logged with
+    the client address (the operator or an intruder, never a bystander)."""
+    status = auth.check(authorization, os.environ.get("WRITE_TOKEN", ""))
+    if status == auth.DISABLED:
+        raise HTTPException(status_code=403, detail="writes are disabled: no WRITE_TOKEN on the server")
+    if status != auth.OK:
+        log.warning("write token %s: %s %s from %s", status, request.method, request.url.path,
+                    request.client.host if request.client else "?")
+        raise HTTPException(status_code=401, detail="write token required",
+                            headers={"WWW-Authenticate": "Bearer"})
+
+
+class Audit:
+    """The audit rows of one write transaction (audit_log: action, target, old, new)."""
+
+    def __init__(self):
+        self.rows = []
+
+    def __call__(self, action, target, old=None, new=None):
+        self.rows.append((action, target, old, new))
+
+
+@contextmanager
+def write_tx(acc):
+    """(conn, audit): one transaction; on success its audit rows are
+    stored and accounts.write_version goes up by one (every ETag of the
+    account changes). Any exception rolls everything back."""
+    with db.pool.connection() as conn:
+        with conn.transaction():
+            conn.execute("SET LOCAL jit = off")
+            audit = Audit()
+            yield conn, audit
+            for action, target, old, new in audit.rows:
+                conn.execute("INSERT INTO audit_log (account_id, action, target, old, new) "
+                             "VALUES (%s, %s, %s, %s, %s)",
+                             (acc["id"], action, target, _jsonb(old), _jsonb(new)))
+            conn.execute("UPDATE accounts SET write_version = write_version + 1 WHERE id = %s", (acc["id"],))
+
+
+def _jsonb(v):
+    return None if v is None else Jsonb(v, dumps=lambda o: respcache.dumps(o).decode("utf-8"))
+
+
+def written(body, status=200):
+    """The response of a write: JSON as the reads (UTC with a Z), never cached."""
+    if body is None:
+        return Response(status_code=status, headers={"Cache-Control": "no-store"})
+    return Response(content=respcache.dumps(body), media_type="application/json", status_code=status,
+                    headers={"Cache-Control": "no-store"})
+
+
+def invalid(fn, *args, **kwargs):
+    """fn(...) with writes.Invalid as a 422."""
+    try:
+        return fn(*args, **kwargs)
+    except writes.Invalid as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+
+
+def refresh_events_all(conn, acc):
+    """refresh_events() for every sensor of the account (after a change of
+    the networks or the rules); returns {sensor: counts}."""
+    out = {}
+    for s in acc["sensors"]:
+        r = conn.execute("SELECT * FROM refresh_events(%s)", (s["id"],)).fetchone()
+        out[s["name"]] = r
+    return out

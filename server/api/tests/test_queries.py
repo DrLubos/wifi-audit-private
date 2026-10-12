@@ -32,8 +32,20 @@ class SqlFiles(unittest.TestCase):
                     bare = queries.PARAM.sub("", sql).replace("%%", "")
                     self.assertNotIn("%", bare, "positional or stray % placeholder")
                     self.assertFalse(sql.rstrip().endswith(";"))
-                    self.assertTrue(re.match(r"^(--[^\n]*\n)*\s*(WITH|SELECT)\b", sql, re.S),
-                                    "a read statement")
+                    # writes.sql holds the write statements (phase 5), every other file reads
+                    kinds = r"(INSERT|UPDATE|DELETE)" if g == "writes" else r"(WITH|SELECT)"
+                    self.assertTrue(re.match(r"^(--[^\n]*\n)*\s*" + kinds + r"\b", sql, re.S),
+                                    "a write statement" if g == "writes" else "a read statement")
+
+    def test_the_perf_tool_never_runs_the_writes(self):
+        # tests/perf/ep_v2.py runs every query of its groups under EXPLAIN ANALYZE
+        path = os.path.join(os.path.dirname(__file__), "..", "..", "tests", "perf", "ep_v2.py")
+        if not os.path.exists(path):              # the api image has only api/
+            self.skipTest("tests/perf not here")
+        src = open(path).read()
+        groups = re.search(r"^GROUPS = \((.*?)\)", src, re.M | re.S).group(1)
+        self.assertNotIn('"writes"', groups)
+        self.assertIn("writes", self.groups())
 
     def test_every_query_a_route_runs_exists(self):
         used = 0

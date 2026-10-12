@@ -34,3 +34,46 @@ FROM sensor_annotations a
 JOIN sensors se ON se.id = a.sensor_id AND se.account_id = %(account_id)s
 WHERE a.kind = 'change'
 ORDER BY a.starts_at DESC
+
+-- name: sensor_meta
+-- The editable details of the account's sensors (Settings > Sensors).
+SELECT se.id, se.name, se.location, se.description, se.hardware
+FROM sensors se
+WHERE se.account_id = %(account_id)s
+ORDER BY se.id
+
+-- name: hardware
+-- The capture hardware catalog; used = rows of sensor_hardware naming it (a
+-- used row cannot be deleted).
+SELECT h.id, h.kind, h.name, h.gain_dbi, h.bands, h.connector, h.note, h.created_at,
+       (SELECT count(*) FROM sensor_hardware x WHERE x.adapter_id = h.id OR x.antenna_id = h.id)::int AS used
+FROM capture_hardware h
+WHERE h.account_id = %(account_id)s
+ORDER BY h.kind, h.name
+
+-- name: sensor_hardware
+-- What the account's sensors had attached since when, newest first.
+SELECT se.name AS sensor, x.valid_from, x.adapter_id, x.antenna_id, x.created_by, x.note, x.created_at
+FROM sensor_hardware x
+JOIN sensors se ON se.id = x.sensor_id AND se.account_id = %(account_id)s
+ORDER BY se.id, x.valid_from DESC
+
+-- name: classification_affected
+-- What the rules act on today: the account's APs, of them with a randomized
+-- (locally administered) BSSID - phone hotspots, "ignored" by the first rule.
+SELECT count(DISTINCT x.ap_id)::int AS aps,
+       count(DISTINCT x.ap_id) FILTER (WHERE su.random_bssid)::int AS random_bssid
+FROM ap_sensors x
+JOIN aps a ON a.id = x.ap_id AND a.account_id = %(account_id)s
+JOIN ap_summary su ON su.sensor_id = x.sensor_id AND su.device_key = x.device_key
+
+-- name: oui_vendors
+-- The vendor of each OUI the account's networks allow, from the manufacturer
+-- of the account's APs with that prefix (the tags of the Networks tab).
+SELECT DISTINCT ON (o) upper(left(o::text, 8)) AS oui, d.manuf
+FROM networks n
+CROSS JOIN LATERAL unnest(n.allowed_ouis) AS o
+JOIN devices d ON trunc(d.mac) = o AND d.ever_ap AND d.manuf IS NOT NULL
+               AND d.sensor_id IN (SELECT s.id FROM sensors s WHERE s.account_id = %(account_id)s)
+WHERE n.account_id = %(account_id)s
+ORDER BY o, d.manuf

@@ -1,8 +1,12 @@
 """Smoke test of the /api/v2 endpoints, run INSIDE the api container after a
 deploy (stdlib + the deployed app.v2.privacy; measure.sh MODE=v2 pipes it into
-`docker compose exec -T api python - <BSSID,BSSID,...>`). Read-only GETs:
+`docker compose exec -T api python - <BSSID,BSSID,...>`). Read-only GETs, and
+writes only without (or with a wrong) token, which the api refuses before it
+reads the body - nothing is written:
 
 - every endpoint answers 200 with JSON (and the documented 404 / 422 cases);
+- every write endpoint refuses a request without the token (401, or 403 when
+  WRITE_TOKEN is not set);
 - the ETag round trip: the same request with If-None-Match is a 304;
 - the privacy scan: every MAC in every response is a BSSID of the account's
   APs (the comma-separated argument; measure.sh reads it as claude_ro).
@@ -29,6 +33,25 @@ def get(path, headers=None):
             return r.status, r.headers, r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.headers, e.read()
+
+
+def send(method, path, token=None):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    req = urllib.request.Request(BASE + path, data=b"{}", method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+WRITES = (("POST", "/auth/check"), ("PUT", "/settings/networks"), ("POST", "/settings/networks"),
+          ("POST", "/settings/networks/1/allowed"), ("PUT", "/settings/classification"),
+          ("PUT", "/settings/detectors"), ("POST", "/settings/sensors"), ("PUT", "/settings/sensors/pi-fri"),
+          ("POST", "/settings/hardware"), ("PUT", "/settings/hardware/1"), ("DELETE", "/settings/hardware/1"),
+          ("POST", "/settings/sensors/pi-fri/hardware"))
 
 
 def main(argv):
@@ -116,8 +139,15 @@ def main(argv):
         check("/sensors/%s/coverage?days=14" % urllib.parse.quote(s["name"]))
         check("/sensors/%s/outages" % urllib.parse.quote(s["name"]))
     check("/sensors/no-such-sensor/outages", 404)
-    for t in ("networks", "classification", "detectors", "sensors"):
+    for t in ("networks", "classification", "detectors", "sensors", "hardware"):
         check("/settings/%s" % t)
+    for method, path in WRITES:
+        for token in (None, "not-the-write-token-0000"):
+            code = send(method, path, token)
+            ok = code in (401, 403)
+            print("%-4s %3d %s %s (%s token)" % ("ok" if ok else "FAIL", code, method, path, "a wrong" if token else "no"))
+            if not ok:
+                failures.append("%s %s accepted without the token (%d)" % (method, path, code))
     check("/overview/period?range=90d", 422)
     check("/overview/period?sensor=no-such-sensor", 422)
     print("%d failure(s)" % len(failures))
