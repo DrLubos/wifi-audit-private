@@ -1,0 +1,26 @@
+/* The Sensors page (boards/Sensors.dc.html). */
+.v2 .sensors-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px; }
+.v2 .sen-cards { display: flex; flex-wrap: wrap; gap: 16px; }
+.v2 .sen-card { flex: 1 1 420px; min-width: 0; padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; }
+.v2 .sen-card h2 { font-size: 18px; }
+.v2 .sen-top { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.v2 .sen-top .stack { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.v2 .sen-top .badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.v2 .sen-kv { grid-template-columns: minmax(120px, max-content) minmax(0, 1fr); gap: 8px 24px; font-size: 13px; }
+.v2 .sen-note { padding: 10px 12px; border-radius: 8px; background: var(--bg); font-size: 13px; }
+.v2 .sen-note.bad-note { background: #fbf7f6; color: #5c1f1f; }
+.v2 .sen-foot {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between;
+  padding-top: 12px; border-top: 1px solid var(--border-soft); margin-top: auto;
+}
+.v2 .sen-foot .warn-text { color: var(--warn-fg); }
+.v2 .sen-btn { height: 40px; padding: 0 16px; font-size: 14px; font-weight: 500; }
+.v2 .sen-panel { padding: 20px 22px; display: flex; flex-direction: column; gap: 12px; }
+.v2 .sen-panel h2, .v2 .sen-table h2 { font-size: 17px; }
+.v2 .sen-panel-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: flex-end; }
+.v2 .sen-panel-head .stack { display: flex; flex-direction: column; min-width: 0; }
+.v2 .cov-plot { gap: 6px; }
+.v2 .cov-labels { display: flex; gap: 6px; }
+.v2 .cov-labels span { flex: 1 1 0; min-width: 0; text-align: center; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.v2 .sen-table { padding: 20px 0 6px; }
+.v2 .sen-table .nowrap { white-space: nowrap; }

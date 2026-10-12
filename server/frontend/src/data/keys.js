@@ -11,6 +11,9 @@ function qs(params) {
 export const ep = {
   health: () => ["health", "/api/health"],
   sensors: () => ["sensors", "/api/v2/sensors"],
+  sensorCoverage: (name, days = 14) => [["sensor.coverage", name, days],
+    `/api/v2/sensors/${encodeURIComponent(name)}/coverage${qs({ days })}`],
+  sensorOutages: (name) => [["sensor.outages", name], `/api/v2/sensors/${encodeURIComponent(name)}/outages`],
   overviewStatus: (sensor) => [["overview.status", sensor], `/api/v2/overview/status${qs({ sensor })}`],
   overviewPeriod: (sensor, range) => [["overview.period", sensor, range], `/api/v2/overview/period${qs({ sensor, range })}`],
   recentEvents: (sensor, limit = 5) => [["events.recent", sensor, limit], `/api/v2/events${qs({ sensor, limit })}`],
