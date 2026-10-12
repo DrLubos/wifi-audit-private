@@ -11,6 +11,10 @@ function qs(params) {
 export const ep = {
   health: () => ["health", "/api/health"],
   sensors: () => ["sensors", "/api/v2/sensors"],
+  settingsNetworks: () => ["settings.networks", "/api/v2/settings/networks"],
+  settingsClassification: () => ["settings.classification", "/api/v2/settings/classification"],
+  settingsDetectors: () => ["settings.detectors", "/api/v2/settings/detectors"],
+  settingsSensors: () => ["settings.sensors", "/api/v2/settings/sensors"],
   sensorCoverage: (name, days = 14) => [["sensor.coverage", name, days],
     `/api/v2/sensors/${encodeURIComponent(name)}/coverage${qs({ days })}`],
   sensorOutages: (name) => [["sensor.outages", name], `/api/v2/sensors/${encodeURIComponent(name)}/outages`],
