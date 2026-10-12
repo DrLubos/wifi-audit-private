@@ -526,7 +526,9 @@ CREATE INDEX IF NOT EXISTS sensor_uploads_sensor ON sensor_uploads (sensor_id, r
 
 -- Which Kismet alerts become events, and severity overrides (NULL = Kismet's
 -- own: kismet_severity()). SOURCEERROR / SOURCEOPEN are sensor health (the
--- capture-crash count, sensor_periods), not events.
+-- capture-crash count, sensor_periods), not events. NOCLIENTMFP looks only at
+-- the client's association request (no RSN element or no MFPC), never at the
+-- network's MFP offer (../wifi-sensor/docs/findings.md section 12).
 CREATE TABLE IF NOT EXISTS kismet_alert_rules (
   header        text PRIMARY KEY,
   as_event      boolean NOT NULL DEFAULT true,
@@ -538,7 +540,7 @@ INSERT INTO kismet_alert_rules (header, as_event, severity, label) VALUES
   ('SOURCEOPEN',        false, NULL,  'Capture source opened'),
   ('DEAUTHFLOOD',       true,  NULL,  'Deauthentication flood (Kismet)'),
   ('BCASTDISCON',       true,  NULL,  'Broadcast deauthentication or disassociation'),
-  ('NOCLIENTMFP',       true,  NULL,  'Client without MFP on a network with MFP'),
+  ('NOCLIENTMFP',       true,  NULL,  'Association request without MFP'),
   ('BEACONRATE',        true,  'low', 'Beacon rate changed'),
   ('DISCONCODEINVALID', true,  'low', 'Invalid disconnection reason code'),
   ('ADVCRYPTCHANGE',    true,  NULL,  'Advertised encryption changed (Kismet)'),
