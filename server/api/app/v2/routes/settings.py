@@ -230,8 +230,9 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
         changes = [dict(h, ts=iso(h["ts"]), kind="change") for h in history]
         for x in attached:
             changes.append({"sensor": x["sensor"], "ts": iso(x["valid_from"]), "boundary": True, "kind": "hardware",
-                            "label": "Capture hardware: %s + %s" % (_hardware_text(by_id.get(x["adapter_id"])),
-                                                                    _hardware_text(by_id.get(x["antenna_id"]))),
+                            "label": "Capture hardware: %s + %s" % (
+                                _hardware_text(by_id.get(x["adapter_id"])),
+                                "its own antenna" if x["antenna_id"] is None else _hardware_text(by_id.get(x["antenna_id"]))),
                             "ref": None})
         changes.sort(key=lambda h: h["ts"], reverse=True)
         return {"sensors": out, "mixed_plans": len(plans) > 1, "catalog": catalog, "history": changes,
