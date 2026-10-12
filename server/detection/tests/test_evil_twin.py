@@ -357,6 +357,26 @@ class StreamingEquivalenceTest(unittest.TestCase):
         ref_devs, ref_aps = _whole_window_deviations(self.rows, self.meta, self.p)
         self.assertEqual((devs, aps), (ref_devs, ref_aps))
 
+    def test_readings_of_other_hardware_are_not_compared(self):
+        # schema 11: AP-B's baseline was learned after an antenna swap at
+        # reading 40; the readings before it (any level) are skipped, counted
+        from collections import Counter
+        swap = at(40 * 30)
+        meta = {k: dict(v) for k, v in self.meta.items()}
+        meta["AP-B"].update(hw_from=swap, hw_to=None)
+        skipped = Counter()
+        devs, aps = scan_deviations(iter(self.rows), meta, self.p, skipped)
+        later = [r for r in self.rows if r[0] != "AP-B" or r[1] >= swap]
+        ref_devs, ref_aps = _whole_window_deviations(later, self.meta, self.p)
+        self.assertEqual((devs, aps), (ref_devs, ref_aps))
+        self.assertEqual(skipped["other_hardware"], sum(1 for r in self.rows if r[0] == "AP-B" and r[1] < swap))
+        self.assertGreater(skipped["other_hardware"], 0)
+        # a baseline ending at the next swap: nothing after it either
+        meta["AP-B"].update(hw_from=None, hw_to=swap)
+        devs, _ = scan_deviations(iter(self.rows), meta, self.p)
+        earlier = [r for r in self.rows if r[0] != "AP-B" or r[1] < swap]
+        self.assertEqual(devs, _whole_window_deviations(earlier, self.meta, self.p)[0])
+
     def test_memory_does_not_grow_with_window_length(self):
         meta = {"AP-A": {"rssi_median": -60.0, "rssi_robust_sd": 2.0}}
 

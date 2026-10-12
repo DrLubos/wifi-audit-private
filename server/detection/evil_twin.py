@@ -96,7 +96,11 @@ SELECT d.device_key,
        b.rssi_median, b.rssi_robust_sd, b.n_obs AS base_n_obs, b.n_days AS base_n_days,
        b.n_floor AS base_n_floor,
        b.window_start AS base_from, b.window_end AS base_to,
-       coalesce(b.trusted, false) AS trusted
+       coalesce(b.trusted, false) AS trusted,
+       -- schema 11: the capture-hardware period the baseline was learned in;
+       -- readings outside it came through other hardware and are not compared
+       -- (NULL bounds are open: psycopg cannot load an infinite time)
+       b.hw_from, nullif(upper(hardware_period(d.sensor_id, coalesce(b.hw_from, '-infinity'))), 'infinity') AS hw_to
 FROM devices d
 JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.device_key
 WHERE d.sensor_id = %(sid)s AND d.ever_ap
@@ -338,24 +342,44 @@ def windowed_deviations(readings, base_median, base_robust_sd, params, device_ke
     return out
 
 
-def scan_deviations(rows, meta, params):
+def in_hardware_period(ts, m):
+    """The reading at ts came through the capture hardware the AP's baseline
+    was learned with (schema 11: [hw_from, hw_to) of the AP row; None = an
+    open bound - a baseline from before schema 11, or no hardware recorded)."""
+    lo, hi = m.get("hw_from"), m.get("hw_to")
+    return (lo is None or ts >= lo) and (hi is None or ts < hi)
+
+
+def scan_deviations(rows, meta, params, skipped=None):
     """Deviating windows of every AP from one pass over ROWS: an iterable of
     (device_key, ts, rssi) ordered by (device_key, ts), e.g. a server-side
     cursor. One AP is processed at a time and only its last W readings are held,
     so memory does not grow with the number of rows. META maps device_key to
     the AP row (rssi_median, rssi_robust_sd, ...); rows of other APs are
-    skipped. Returns (deviations, aps_scanned) - aps_scanned counts APs with at
-    least one reading."""
+    skipped, and so are readings outside the hardware period of the AP's
+    baseline (a swapped antenna shifts every RSSI - never compared with a
+    baseline of other hardware), counted in skipped["other_hardware"] when
+    a Counter is given. Returns (deviations, aps_scanned) - aps_scanned
+    counts APs with at least one reading compared."""
     deviations = []
     aps = 0
     for key, group in itertools.groupby(rows, key=lambda r: r[0]):
         m = meta.get(key)
         if m is None:
             continue
-        aps += 1
-        deviations += windowed_deviations(((r[1], r[2]) for r in group),
-                                          float(m["rssi_median"]), float(m["rssi_robust_sd"]),
+        n_compared = [0]            # a count, never the readings: memory stays O(window)
+
+        def compared(group=group, m=m):
+            for r in group:
+                if in_hardware_period(r[1], m):
+                    n_compared[0] += 1
+                    yield r[1], r[2]
+                elif skipped is not None:
+                    skipped["other_hardware"] += 1
+        deviations += windowed_deviations(compared(), float(m["rssi_median"]), float(m["rssi_robust_sd"]),
                                           params, key)
+        if n_compared[0]:
+            aps += 1
     return deviations, aps
 
 
@@ -660,9 +684,10 @@ def analyse(conn, sensor, frm, to, params, quiet=False):
     _log("scanning RSSI %s .. %s ..." % (fmt_ts(scan_from), fmt_ts(scan_to)), quiet)
     baselined = {r["device_key"]: r for r in conn.execute(AP_META_SQL, {"sid": sid})}
     ap_meta, excluded = eligible_aps(baselined, params)
+    skipped = Counter()
     deviations, aps_scanned = scan_deviations(
         _stream_readings(conn, READINGS_SQL, {"sid": sid, "scan_from": scan_from, "scan_to": scan_to}),
-        ap_meta, params)
+        ap_meta, params, skipped)
     guard = timedelta(seconds=params.channel_guard_s)
     changes = defaultdict(list)
     if params.channel_guard_s > 0:
@@ -717,6 +742,7 @@ def analyse(conn, sensor, frm, to, params, quiet=False):
     info = {
         "scan_from": scan_from, "scan_to": scan_to,
         "aps_baselined": len(baselined), "aps_excluded": dict(excluded),
+        "readings_other_hardware": skipped["other_hardware"],
         "windows_channel_guarded": guarded,
         "aps_scanned": aps_scanned, "deviations": len(deviations),
         "episodes": len(episodes), "established_ssids": len(tsets),
@@ -815,8 +841,9 @@ def report(sensor, frm, to, params, episodes, unknowns, findings, info, args):
              info["deviations"], info["episodes"], info["findings_b"], info["established_ssids"],
              info["unknown_candidates"], info["findings_a"]), file=out)
     print("  eligibility: %d baselined APs, excluded %s; %d deviating windows dropped by the "
-          "channel guard (%gs)" % (info["aps_baselined"], info["aps_excluded"] or "none",
-                                   info["windows_channel_guarded"], params.channel_guard_s), file=out)
+          "channel guard (%gs); %d readings not compared (other capture hardware than the baseline's)"
+          % (info["aps_baselined"], info["aps_excluded"] or "none", info["windows_channel_guarded"],
+             params.channel_guard_s, info["readings_other_hardware"]), file=out)
     print("  peak RSS of this process: %.0f MB" % info["peak_rss_mb"], file=out)
     print(file=out)
     rows = []

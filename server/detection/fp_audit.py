@@ -81,6 +81,13 @@ WHERE o.sensor_id = %(sid)s AND d.ever_ap AND (o.rssi IS NOT NULL OR o.rssi_floo
   AND o.ts >= %(from_)s AND o.ts < %(to)s
 ORDER BY o.device_key"""
 
+# schema 11: a hardware change inside the window - split baselines and
+# readings would mix antennas, so the audit refuses (one period at a time)
+HARDWARE_CHANGES_SQL = """
+SELECT valid_from FROM sensor_hardware
+WHERE sensor_id = %(sid)s AND valid_from > %(from_)s AND valid_from < %(to)s
+ORDER BY valid_from"""
+
 AP_KIND_SQL = """
 SELECT device_key, trunc(mac)::text AS oui,
        (mac & macaddr '02:00:00:00:00:00') <> macaddr '00:00:00:00:00:00' AS random_bssid
@@ -292,6 +299,11 @@ def run(args):
         with conn.transaction():
             conn.execute("SET TRANSACTION READ ONLY")
             sensor = common.get_sensor(conn, args.sensor)
+            swaps = [r["valid_from"] for r in conn.execute(
+                HARDWARE_CHANGES_SQL, {"sid": sensor["id"], "from_": frm, "to": to})]
+            if swaps:
+                sys.exit("fp-audit: the capture hardware changed inside the window (%s) - audit each hardware "
+                         "period on its own" % ", ".join(fmt_ts(t) for t in swaps))
             if args.mode == "floor-share":
                 summary, rows = run_floor_share(conn, sensor, frm, to)
                 print(json.dumps({"mode": "floor-share", "sensor": sensor["name"], "window": [frm, to],
