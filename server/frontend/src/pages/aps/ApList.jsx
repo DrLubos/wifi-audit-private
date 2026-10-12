@@ -18,8 +18,8 @@ import { useNow } from "../../hooks/useNow.js";
 import { fmtInt } from "../../format.js";
 import { siblingText } from "../networks/networks.js";
 import {
-  apName, channelText, chips, classBadge, CLASSES, groupLabel, lastSeenText, pagerText, securityCell, seenByChips,
-  statusBadge, utilText, vendorText,
+  apName, channelText, chips, classBadge, CLASSES, clientsCell, groupLabel, lastSeenText, lastSeenTitle, latestCapture,
+  pagerText, securityCell, seenByChips, statusBadge, utilText, vendorText,
 } from "./aps.js";
 import "./aps.css";
 
@@ -62,6 +62,8 @@ export default function ApList() {
   const q = useQuery(key, url);
   const d = q.data;
   const tz = account.tz;
+  // "last seen" counts from the selected sensors' latest capture (decided 2026-10-12)
+  const ref = latestCapture(account.sensors, sensor === "all" ? null : [sensor], now);
   const ch = chips(d?.counts);
   const toggleOn = { band24: f.band === "2.4", band5: f.band === "5", open: f.open, new: f.new, hotspots: !f.hotspots };
   const toggle = (k) => {
@@ -132,6 +134,7 @@ export default function ApList() {
                   const sec = securityCell(a);
                   const st = statusBadge(a.active);
                   const cl = classBadge(a.classification);
+                  const cc = clientsCell(a);
                   const head = d.group !== "none" && a.group !== lastGroup;
                   lastGroup = a.group;
                   return (
@@ -143,7 +146,7 @@ export default function ApList() {
                         <td><span className={`b ${st.cls}`} title="seen within 5 min of its sensor's latest capture">{st.text}</span></td>
                         <td>
                           <Link to={`/aps/${a.bssid}`} className={name.hidden ? "ap-name hidden" : "ap-name"}>{name.text}</Link>
-                          {a.sibling && <span className="sib muted tiny">{siblingText(a.sibling)}</span>}
+                          {a.sibling && !a.network && <span className="sib muted tiny">{siblingText(a.sibling)}</span>}
                         </td>
                         <td className="mono">{a.bssid}</td>
                         <td><span className="vendor" title={a.manuf ?? undefined}>{vendorText(a)}</span></td>
@@ -153,10 +156,10 @@ export default function ApList() {
                           {sec.note && <span className="sec-note muted tiny" title={sec.title}>{sec.note}</span>}
                         </td>
                         <td>{channelText(a)}</td>
-                        <td>{a.clients == null ? "–" : fmtInt(a.clients)}</td>
+                        <td className={cc.muted ? "muted" : undefined} title={cc.title}>{cc.text}</td>
                         <td>{utilText(a.util)}</td>
                         <td>{seenByChips(a.seen_by).map((s) => <span className="sen" key={s.name}>{s.text}</span>)}</td>
-                        <td>{lastSeenText(a.last_seen, now, tz)}</td>
+                        <td title={lastSeenTitle(a.last_seen, ref, tz)}>{lastSeenText(a.last_seen, ref, tz)}</td>
                       </tr>
                     </Fragment>
                   );

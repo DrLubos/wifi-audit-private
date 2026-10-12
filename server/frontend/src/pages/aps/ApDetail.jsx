@@ -21,8 +21,8 @@ import { cellText, siblingText } from "../networks/networks.js";
 import { collecting, labelsOf } from "../overview/period.js";
 import {
   bssidOfKey, changesPerDayText, channelDetail, channelLine, classBadge, CLASSES, encryptionText, eventBadges,
-  historyRows, isActive, isBssid, lastSeenText, loadNote, mfpText, policyBadge, ratingBadge, recommendation,
-  statusBadge, utilSummary,
+  historyRows, isActive, isBssid, lastSeenText, lastSeenTitle, latestCapture, loadNote, loadNumbers, mfpText,
+  policyBadge, ratingBadge, recommendation, statusBadge, utilSummary,
 } from "./aps.js";
 import RssiChart from "./RssiChart.jsx";
 import UtilColumns from "./UtilColumns.jsx";
@@ -70,6 +70,8 @@ function ApPage({ bssid }) {
   const colors = Object.fromEntries(d.sensors.map((s, i) => [s.name, COLORS[i % COLORS.length]]));
   const name = id.network ?? (id.hidden ? "hidden network" : id.ssid || id.bssid);
   const st = statusBadge(isActive(id.last_seen, d.sensors, account.sensors));
+  // "last seen" counts from the AP's sensors' latest capture (decided 2026-10-12)
+  const ref = latestCapture(account.sensors, d.sensors.map((s) => s.name), now);
   const rating = ratingBadge(d.security.level);
   return (
     <main className="content v2 ap-page">
@@ -104,12 +106,12 @@ function ApPage({ bssid }) {
       </div>
 
       <div className="row-wrap">
-        <Identity d={d} now={now} tz={tz} />
+        <Identity d={d} ref_={ref} tz={tz} />
         <Security sec={d.security} />
-        <Load load={d.load} now={now} />
+        <Load load={d.load} ref_={ref} tz={tz} />
       </div>
 
-      <RssiCard bssid={bssid} sensors={d.sensors} colors={colors} tz={tz} now={now} />
+      <RssiCard bssid={bssid} sensors={d.sensors} colors={colors} tz={tz} ref_={ref} />
 
       <div className="row-wrap">
         <ClientsCard bssid={bssid} />
@@ -135,7 +137,7 @@ function ApPage({ bssid }) {
   );
 }
 
-function Identity({ d, now, tz }) {
+function Identity({ d, ref_, tz }) {
   const id = d.identity;
   return (
     <section className="card panel kv-card" aria-labelledby="id-h" style={{ flex: "1 1 340px" }}>
@@ -149,7 +151,7 @@ function Identity({ d, now, tz }) {
         <dt>Channel</dt><dd>{channelDetail(id)}</dd>
         <dt>Country</dt><dd>{id.country ?? "–"}</dd>
         <dt>First seen</dt><dd>{fmtDateTime(id.first_seen, tz)}</dd>
-        <dt>Last seen</dt><dd>{lastSeenText(id.last_seen, now, tz)}</dd>
+        <dt>Last seen</dt><dd title={lastSeenTitle(id.last_seen, ref_, tz)}>{lastSeenText(id.last_seen, ref_, tz)}</dd>
       </dl>
     </section>
   );
@@ -175,24 +177,25 @@ function Security({ sec }) {
   );
 }
 
-function Load({ load, now }) {
-  const big = (label, v) => (
-    <div className="big"><span className="muted tiny">{label}</span><span className="num">{v}</span></div>
-  );
+// the AP's own BSS Load report first, the sensor's cumulative count second
+// and labelled so (decided 2026-10-12, SPEC section 4)
+function Load({ load, ref_, tz }) {
   return (
     <section className="card panel" aria-labelledby="load-h" style={{ flex: "1 1 260px", gap: 12 }}>
       <h2 id="load-h">Current load</h2>
       <div className="bigs">
-        {big("Clients seen", load.kismet_clients == null ? "–" : fmtInt(load.kismet_clients))}
-        {big("Channel utilization", load.util == null ? "–" : `${Math.round(load.util)} %`)}
-        {big("Stations reported by AP", load.qbss_stations == null ? "–" : fmtInt(load.qbss_stations))}
+        {loadNumbers(load).map((x) => (
+          <div className={x.secondary ? "big secondary" : "big"} key={x.label} title={x.title}>
+            <span className="muted tiny">{x.label}</span><span className="num">{x.value}</span>
+          </div>
+        ))}
       </div>
-      <span className="muted tiny">{loadNote(load, now)}</span>
+      <span className="muted tiny">{loadNote(load, ref_, tz)}</span>
     </section>
   );
 }
 
-function RssiCard({ bssid, sensors, colors, tz, now }) {
+function RssiCard({ bssid, sensors, colors, tz, ref_ }) {
   const [k, u] = ep.apRssi(bssid, 7);
   const q = useQuery(k, u);
   const d = q.data;
@@ -232,7 +235,7 @@ function RssiCard({ bssid, sensors, colors, tz, now }) {
                   <td>{s.baseline?.floor_share == null ? "–" : fmtPct(s.baseline.floor_share)}</td>
                   <td>{fmtInt(s.obs_7d)}</td>
                   <td>{fmtDateTime(s.first_capture ?? s.first_seen, tz)}</td>
-                  <td>{lastSeenText(s.last_capture ?? s.last_seen, now, tz)}</td>
+                  <td title={lastSeenTitle(s.last_capture ?? s.last_seen, ref_, tz)}>{lastSeenText(s.last_capture ?? s.last_seen, ref_, tz)}</td>
                 </tr>
               );
             })}

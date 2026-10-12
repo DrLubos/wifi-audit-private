@@ -1,7 +1,8 @@
 import { test, eq, ok, done } from "../../testing/tiny.js";
 import {
   apName, bandRect, bssidOfKey, changeParts, changesPerDayText, channelDetail, channelLine, chips, classBadge,
-  encryptionText, eventBadges, groupLabel, historyRows, isActive, isBssid, lastSeenText, loadNote, mfpText, pagerText,
+  clientsCell, encryptionText, eventBadges, groupLabel, historyRows, isActive, isBssid, lastSeenText, lastSeenTitle,
+  latestCapture, loadNote, loadNumbers, mfpText, pagerText,
   policyBadge, ratingBadge, recommendation, rssiLines, rssiScale, rssiTicks, rssiTip, securityCell, seenByChips,
   statusBadge, utilSummary, vendorText, widthText,
 } from "./aps.js";
@@ -33,7 +34,15 @@ test("list cells", () => {
   eq(groupLabel("sensor", "pi-fri", 120), "pi-fri · 120 APs");
 });
 
-test("last seen", () => {
+test("last seen, from the sensors' latest capture", () => {
+  const sensors = [{ name: "pi-fri", last_capture_at: "2026-10-11T20:46:41Z" }, { name: "pi-lab", last_capture_at: null }];
+  eq(latestCapture(sensors, null, "2026-10-12T10:00:00Z"), "2026-10-11T20:46:41.000Z");
+  eq(latestCapture(sensors, ["pi-lab"], "2026-10-12T10:00:00Z"), "2026-10-12T10:00:00.000Z");   // no capture: the clock
+  const ref = "2026-10-11T20:46:41Z";
+  eq(lastSeenText("2026-10-11T20:46:41Z", ref, TZ), "now");                // at the latest capture, not "yesterday"
+  eq(lastSeenText("2026-10-11T19:41:11Z", ref, TZ), "1 h ago");
+  eq(lastSeenTitle("2026-10-11T19:41:11Z", ref, TZ),
+     "11 Oct 21:41 · counted from the sensor's latest capture, 11 Oct 22:46");
   const now = "2026-10-12T10:00:00Z";                    // 12:00 local
   eq(lastSeenText("2026-10-12T09:59:30Z", now, TZ), "now");
   eq(lastSeenText("2026-10-12T09:54:00Z", now, TZ), "6 min ago");
@@ -68,11 +77,19 @@ test("AP page texts", () => {
   eq(recommendation({ met: false, reason: "MFP not required" }, "strong"),
      "Require MFP, otherwise clients stay exposed to forged deauthentication.");
   eq(recommendation({ met: true }, "strong"), null);
-  const now = "2026-10-11T19:41:41Z";
-  eq(loadNote({ qbss_stations: 0, util: 11.4, at: "2026-10-11T19:41:11Z", sensor: "pi-fri" }, now),
-     "Utilization and station count come from the AP's own BSS Load element, measured by pi-fri 30 s ago.");
-  eq(loadNote({ qbss_stations: null, util: null, at: "2026-10-11T16:41:41Z", sensor: "pi-fri" }, now),
-     "This AP sends no BSS Load element: clients are the stations the sensor saw, measured by pi-fri 3 h ago.");
+  const ref = "2026-10-11T19:41:41Z";
+  eq(loadNote({ qbss_stations: 0, util: 11.4, at: "2026-10-11T19:41:11Z", sensor: "pi-fri" }, ref, TZ),
+     "Stations and utilization come from the AP's own BSS Load element, measured by pi-fri at its latest capture. "
+     + "The sensor's count adds up every client seen associated since it began tracking the AP.");
+  eq(loadNote({ qbss_stations: null, util: null, at: "2026-10-11T16:41:41Z", sensor: "pi-fri" }, ref, TZ),
+     "This AP sends no BSS Load element (measured by pi-fri 3 h ago, 11 Oct 18:41). "
+     + "The sensor's count adds up every client seen associated since it began tracking the AP.");
+  const ln = loadNumbers({ qbss_stations: 3, util: 7.1, kismet_clients: 21 });
+  eq(ln.map((x) => [x.label, x.value]), [["Stations reported by the AP", "3"], ["Channel utilization", "7 %"],
+                                         ["Clients seen by the sensor (cumulative)", "21"]]);
+  eq(clientsCell({ clients: 3, clients_source: "ap" }).muted, false);
+  eq(clientsCell({ clients: 21, clients_source: "sensor" }).muted, true);
+  eq(clientsCell({ clients: null }).text, "–");
   eq(changeParts({ field: "adv_channel", old: "64", new: "48" }), { what: "Channel", from: "64", to: "48" });
   eq(changeParts({ field: "mfp_sup", old: "false", new: "true" }), { what: "MFP capable", from: "no", to: "yes" });
   eq(changesPerDayText(11.5), "changes channel ~12× per day (dynamic channel selection)");

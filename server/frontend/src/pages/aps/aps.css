@@ -68,3 +68,4 @@
 @media (max-width: 480px) {                   /* five classes in 358 px */
   .v2 .ap-head .seg button { padding: 0 7px; font-size: 12px; }
 }
+.v2 .big.secondary .num { font-size: 20px; font-weight: 500; color: var(--muted); }   /* the sensor's cumulative count */

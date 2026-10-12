@@ -51,16 +51,58 @@ export function utilText(v) {
   return v == null ? "–" : `${Math.round(v)} %`;
 }
 
-// "now", "6 min ago", "2 h ago", "yesterday", "8 Oct" (against the wall clock)
-export function lastSeenText(t, now, tz) {
+// "now", "6 min ago", "2 h ago", "yesterday", "8 Oct", counted from ref: the
+// latest capture of the sensors (decided 2026-10-12 - between imports the
+// data ends there, not at the wall clock)
+export function lastSeenText(t, ref, tz) {
   const d = toDate(t);
   if (!d) return "–";
-  const s = (toDate(now).getTime() - d.getTime()) / 1000;
+  const s = Math.max(0, (toDate(ref).getTime() - d.getTime()) / 1000);
   if (s < 60) return "now";
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
-  if (s < 86400 && partsOf(d, tz).day === partsOf(now, tz).day) return `${Math.floor(s / 3600)} h ago`;
-  if (s < 2 * 86400 && partsOf(d.getTime() + 86400e3, tz).day === partsOf(now, tz).day) return "yesterday";
+  if (s < 86400 && partsOf(d, tz).day === partsOf(ref, tz).day) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 2 * 86400 && partsOf(d.getTime() + 86400e3, tz).day === partsOf(ref, tz).day) return "yesterday";
   return fmtDate(d, tz);
+}
+
+// the tooltip: the absolute time and what the relative one counts from
+export function lastSeenTitle(t, ref, tz) {
+  return t ? `${fmtDateTime(t, tz)} · counted from the sensor's latest capture, ${fmtDateTime(ref, tz)}` : undefined;
+}
+
+// the reference of "last seen": the newest capture of the given sensors
+// (names; all of them without), else the wall clock
+export function latestCapture(sensors, names, now) {
+  const caps = (sensors ?? []).filter((s) => !names || names.includes(s.name)).map((s) => toDate(s.last_capture_at))
+    .filter(Boolean).map((d) => d.getTime());
+  return caps.length ? new Date(Math.max(...caps)).toISOString() : toDate(now).toISOString();
+}
+
+// SPEC section 4: an AP's clients = the stations its BSS Load element reports;
+// without one, Kismet's num_associated_clients - every client seen associated
+// since Kismet began tracking the AP (Kismet 2025-09-R1 never prunes the map),
+// so not a current count: shown muted, said so in the tooltip
+const SENSOR_COUNT = "the sensor's count (Kismet): every client seen associated since it began tracking the AP, "
+  + "not a current number - this AP sends no BSS Load element";
+export function clientsCell(a) {
+  if (a.clients == null) return { text: "–", muted: false, title: undefined };
+  return a.clients_source === "sensor"
+    ? { text: fmtInt(a.clients), muted: true, title: SENSOR_COUNT }
+    : { text: fmtInt(a.clients), muted: false, title: "stations the AP reports in its BSS Load element" };
+}
+
+// the AP page's load numbers, the AP's own report first (decided 2026-10-12)
+export function loadNumbers(load) {
+  return [
+    { label: "Stations reported by the AP", value: load.qbss_stations == null ? "–" : fmtInt(load.qbss_stations),
+      title: "the station count of the AP's BSS Load element" },
+    { label: "Channel utilization", value: load.util == null ? "–" : `${Math.round(load.util)} %`,
+      title: "the airtime the AP reports busy in its BSS Load element" },
+    { label: "Clients seen by the sensor (cumulative)",
+      value: load.kismet_clients == null ? "–" : fmtInt(load.kismet_clients),
+      title: "Kismet's num_associated_clients: every client seen associated since Kismet began tracking this AP "
+        + "(the list is never pruned) - not how many are connected now", secondary: true },
+  ];
 }
 
 // "Seen by sensors (RSSI)": strongest first (the api's order), "pi-fri −63"
@@ -171,16 +213,17 @@ export function recommendation(policy, level) {
   return ADVICE[policy.reason] ?? null;
 }
 
-// "measured by pi-fri 30 s ago" - the AP's own BSS Load element, or what the sensor saw
-export function loadNote(load, now) {
+// "measured by pi-fri at its latest capture" - the AP's own BSS Load element,
+// and what the sensor's count is (counted from ref, the latest capture)
+export function loadNote(load, ref, tz) {
   if (!load.at) return "No load measured yet.";
-  const s = Math.max(0, (toDate(now).getTime() - toDate(load.at).getTime()) / 1000);
-  const ago = s < 60 ? `${Math.round(s)} s ago` : s < 3600 ? `${Math.floor(s / 60)} min ago`
-    : s < 86400 ? `${Math.floor(s / 3600)} h ago` : `${Math.floor(s / 86400)} d ago`;
-  const by = load.sensor ? `measured by ${load.sensor} ${ago}` : `measured ${ago}`;
-  return load.qbss_stations != null || load.util != null
-    ? `Utilization and station count come from the AP's own BSS Load element, ${by}.`
-    : `This AP sends no BSS Load element: clients are the stations the sensor saw, ${by}.`;
+  const s = Math.max(0, (toDate(ref).getTime() - toDate(load.at).getTime()) / 1000);
+  const when = s < 60 ? "at its latest capture" : `${lastSeenText(load.at, ref, tz)}, ${fmtDateTime(load.at, tz)}`;
+  const by = load.sensor ? `measured by ${load.sensor} ${when}` : `measured ${when}`;
+  const own = load.qbss_stations != null || load.util != null
+    ? `Stations and utilization come from the AP's own BSS Load element, ${by}.`
+    : `This AP sends no BSS Load element (${by}).`;
+  return `${own} The sensor's count adds up every client seen associated since it began tracking the AP.`;
 }
 
 const FIELD = { adv_channel: "Channel", ht_mode: "Channel width", crypt: "Encryption", crypt_bits: "Encryption bits",
