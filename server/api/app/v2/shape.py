@@ -369,6 +369,16 @@ def heatmap(period, tz, clients, load_hours, captured, view):
     return rows, peak
 
 
+AP_CLASS_ORDER = {"suspicious": 0, "managed": 1}
+
+
+def ap_order(classification, rssi):
+    """The AP list's default order (decided 2026-10-12): suspicious, then
+    managed, then the rest; within each the strongest signal first (rssi:
+    the strongest sensor's median, None last)."""
+    return (AP_CLASS_ORDER.get(classification, 2), -rssi if rssi is not None else 999.0)
+
+
 def radio_siblings(aps):
     """{hidden BSSID: {"bssid", "network"}}: a hidden AP whose BSSID differs
     from a visible AP's only in the last byte is likely another BSSID of the

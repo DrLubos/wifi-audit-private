@@ -9,6 +9,14 @@
 CASE WHEN coalesce(v.cur_qbss_stations, 0) > 0 OR coalesce(v.cur_util_pct, 0) > 0
      THEN v.cur_qbss_stations ELSE v.cur_n_clients END
 
+-- name: _clients_source
+-- where _clients comes from: 'ap' = the station count of its BSS Load
+-- element; 'sensor' = Kismet's num_associated_clients, which counts every
+-- client seen associated since Kismet began tracking the AP (Kismet
+-- 2025-09-R1 never prunes associated_client_map) - not a current count
+CASE WHEN coalesce(v.cur_qbss_stations, 0) > 0 OR coalesce(v.cur_util_pct, 0) > 0 THEN 'ap'
+     WHEN v.cur_n_clients IS NOT NULL THEN 'sensor' END
+
 -- name: account_aps
 -- Every account AP (account_aps) with the policy check of its managed
 -- network (security_meets(), once per policy and configuration) and the
@@ -25,7 +33,7 @@ WITH v AS MATERIALIZED (
 SELECT v.ap_id, upper(v.bssid::text) AS bssid, v.ssid, v.hidden, v.network_name, v.network_key, v.network_kind,
        v.manuf, v.random_bssid, v.mobile, v.classification, v.classified_by, v.security, v.security_label,
        v.network_kind = 'managed' AS has_policy, p.reason AS policy_reason,
-       v.adv_channel AS channel, v.band, v.ht_mode, {{_clients}} AS clients,
+       v.adv_channel AS channel, v.band, v.ht_mode, {{_clients}} AS clients, {{_clients_source}} AS clients_source,
        CASE WHEN coalesce(v.cur_qbss_stations, 0) > 0 OR coalesce(v.cur_util_pct, 0) > 0
             THEN v.cur_util_pct END AS util,
        v.first_seen, v.last_seen,

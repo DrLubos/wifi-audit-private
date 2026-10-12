@@ -240,6 +240,12 @@ class SensorDays(unittest.TestCase):
 
 
 class Spectrum(unittest.TestCase):
+    def test_ap_order(self):
+        aps = [("unknown", -50.0, "U1"), ("managed", -80.0, "M1"), ("suspicious", -90.0, "S1"),
+               ("managed", -60.0, "M2"), ("ignored", None, "I1"), ("unknown", -70.0, "U2")]
+        out = sorted(aps, key=lambda a: (shape.ap_order(a[0], a[1]), a[2]))
+        self.assertEqual([a[2] for a in out], ["S1", "M2", "M1", "U1", "U2", "I1"])
+
     def test_radio_siblings(self):
         ap = lambda b, hidden, net=None: {"bssid": b, "hidden": hidden, "network_name": net}  # noqa: E731
         aps = [ap("EC:58:EA:95:8E:E8", False, "IK-WIFI"), ap("EC:58:EA:95:8E:EC", True),

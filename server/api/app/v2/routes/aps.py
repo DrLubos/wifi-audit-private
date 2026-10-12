@@ -28,6 +28,8 @@ CLASSES = ("managed", "friendly", "unknown", "suspicious", "ignored")
 ACTIVE = timedelta(minutes=5)
 AP_RAMP = (2, 5, 8, 12, 16, 20)     # the ApDetail board's clients scale (an AP without load data)
 SORTS = {
+    # suspicious, managed, the rest - strongest signal first (decided 2026-10-12)
+    "default": lambda a: (shape.ap_order(a["classification"], _rssi_or_none(a)), a["bssid"]),
     "last_seen": lambda a: a["last_seen"],
     "first_seen": lambda a: a["first_seen"],
     "ssid": lambda a: ((a["network_name"] or "￿").lower(), a["bssid"]),
@@ -57,6 +59,11 @@ def _strongest(a):
     return (a["seen_by"][0]["sensor"] if a["seen_by"] else None), -999.0
 
 
+def _rssi_or_none(a):
+    s, v = _strongest(a)
+    return None if v == -999.0 else v
+
+
 def _is_new(a, period_start):
     """First seen in the period, and not in a sensor's warm-up (decided 2026-10-12)."""
     return a["first_seen"] >= period_start and not a["warmup"]
@@ -69,7 +76,7 @@ def _ap_item(a, active_after, period_start, siblings):
         "manuf": a["manuf"], "random_bssid": a["random_bssid"], "classification": a["classification"],
         "classified_by": a["classified_by"], "security": a["security"], "label": a["security_label"],
         "policy_met": policy_met, "policy_reason": a["policy_reason"], "channel": a["channel"], "band": a["band"],
-        "ht_mode": a["ht_mode"], "clients": a["clients"],
+        "ht_mode": a["ht_mode"], "clients": a["clients"], "clients_source": a["clients_source"],
         "util": None if a["util"] is None else round(a["util"], 1),
         "seen_by": [{"sensor": s["sensor"],
                      "rssi_median": None if s["rssi_median"] is None else float(s["rssi_median"])}
@@ -91,7 +98,7 @@ def list_aps(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
              band: str | None = Query(None, pattern=r"^(2\.4|5)$"),
              open_: bool = Query(False, alias="open"), new: bool = Query(False),
              hide_hotspots: bool = Query(True), group: str = Query("none", pattern="^(none|ssid|sensor)$"),
-             sort: str = Query("-last_seen", max_length=20), page: int = Query(1, ge=1, le=10_000),
+             sort: str = Query("default", max_length=20), page: int = Query(1, ge=1, le=10_000),
              page_size: int = Query(50, ge=1, le=100)):
     classes = [c.strip() for c in (cls or "").split(",") if c.strip()]
     if any(c not in CLASSES for c in classes):
