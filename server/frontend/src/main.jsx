@@ -1,9 +1,9 @@
 // Routes (PLAN.md 8.1). Dashboard v2 replaces the previous pages one by one:
-// until a page is rebuilt, its link shows the previous page inside the new
-// shell (Detections) or a note (Sensors, Settings); the previous Overview
-// stays at /legacy (its AP links, /aps/<device key>, redirect to the new AP
-// page). The route
-// handle names the global filters a page uses.
+// a page not rebuilt yet shows a note (Sensors, Settings); the previous
+// Overview (/legacy) and Detections (/detections) stay reachable under
+// "Previous dashboard" until phase 5 (their AP links, /aps/<device key>,
+// redirect to the new AP page). The route handle names the global filters a
+// page uses.
 
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -20,20 +20,19 @@ import Networks from "./pages/networks/Networks.jsx";
 import Spectrum from "./pages/spectrum/Spectrum.jsx";
 import ApList from "./pages/aps/ApList.jsx";
 import ApDetail from "./pages/aps/ApDetail.jsx";
+import Events from "./pages/events/Events.jsx";
 import Legacy from "./legacy/Legacy.jsx";
 import OldOverview from "./legacy/pages/Overview.jsx";
 import Detections from "./legacy/pages/Detections.jsx";
 
 const PERIOD = ["sensor", "range"];
-const DETECTIONS = { to: "/detections", label: "Detections" };
 
 const router = createBrowserRouter([
   {
     element: <Shell />,
     children: [
       { index: true, element: <Overview />, handle: { filters: PERIOD, title: "Overview" } },
-      { path: "events", element: <Pending title="Events" phase="phase 4e" legacy={DETECTIONS} />,
-        handle: { title: "Events" } },
+      { path: "events", element: <Events />, handle: { filters: ["sensor"], title: "Events" } },
       { path: "networks", element: <Networks />, handle: { filters: PERIOD, title: "Networks" } },
       { path: "spectrum", element: <Spectrum />, handle: { filters: PERIOD, title: "Spectrum" } },
       { path: "sensors", element: <Pending title="Sensors" phase="phase 4f" />, handle: { title: "Sensors" } },

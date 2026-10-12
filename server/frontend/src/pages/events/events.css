@@ -1,0 +1,22 @@
+/* The Events page (boards/Events.dc.html). */
+.v2 .events-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px; }
+.v2 .events-filters { padding: 14px 18px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.v2 .events-search { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.v2 .events-search .in { height: 36px; font-size: 13px; width: 180px; }
+.v2 .events-table th, .v2 .events-table td { padding-left: 8px; padding-right: 8px; }
+.v2 .events-table .nowrap { white-space: nowrap; }
+.v2 .events-table td.ev { min-width: 210px; }
+.v2 .events-table td.type { max-width: 140px; }
+.v2 .events-table td.net { max-width: 130px; overflow-wrap: anywhere; }      /* 9 columns fit 1440 px */
+.v2 .events-table .act { height: 32px; padding: 0 10px; font-size: 12px; }
+.v2 .events-table .ev-toggle { font-weight: 500; text-align: left; }
+.v2 .events-table .hidden-net { font-style: italic; }
+.v2 .events-table .act + .act { margin-left: 6px; }
+.v2 .ev-detail-cell { padding: 4px 16px 18px 40px; }
+.v2 .ev-detail { display: flex; flex-wrap: wrap; gap: 20px; }
+.v2 .ev-col { flex: 1 1 320px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.v2 .ev-label { font-size: 12px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.02em; }
+.v2 .ev-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+.v2 .ev-actions .btn, .v2 .ev-actions .btn2 { height: 40px; padding: 0 14px; }
+.v2 .linked-event { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.v2 .linked-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; }
