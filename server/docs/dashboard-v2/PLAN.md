@@ -1321,6 +1321,55 @@ phase 3, unchanged. As built against the board:
 
 Deploy 4c: the frontend only (`docker compose build frontend && docker
 compose up -d frontend`), in the same go as the schema-10 steps above.
+Deployed 2026-10-12 11:13-11:27 UTC together with schema 10 (one-time
+exception: Claude ran the steps, log `~/deploy-20261012.log` on the box).
+
+**Spectrum decisions (2026-10-12), as built (shipped with 4d).**
+
+1. *Hidden BSSIDs one byte from a visible one:* never merged - one BSSID
+   stays one AP. `shape.radio_siblings()` (a hidden AP whose BSSID differs
+   from a visible AP's only in the last byte; the nearest last byte) feeds a
+   hint "likely the same radio as <BSSID> (<network>)" on the hidden rows of
+   Networks (`other.rows[].sibling`), the AP list (`items[].sibling`) and
+   the AP page (`identity.sibling`).
+2. *Busiest channel:* its busiest hours of the average day
+   (`shape.busy_hours()`: the 4 consecutive local hours, wrapping at
+   midnight, with the highest mean; ties: more hours with a report; trimmed
+   to the hours with a report) and the p25-p75 of their hourly values,
+   instead of the board's daytime 08:00-18:00 (`issues.busiest.busy_hours`).
+3. *Passing through:* `channels[].passing` = APs that used a channel in the
+   period while their primary channel is another; the occupancy tooltip of
+   a channel with utilization but no AP on it as its main channel shows
+   "N APs passing through".
+
+**4d as built (2026-10-12, commits 20fb26d .. 73bd746).** `/aps` and
+`/aps/:bssid` are the new pages; the previous inventory and AP page are no
+longer routed (their code stays in `src/legacy/` until phase 5), and
+`/aps/<Kismet device key>` - the links of the previous Overview and
+Detections - redirects to the AP's BSSID. As built against the boards:
+
+- *List:* every filter in the URL (q debounced 300 ms, class, band, open,
+  new, hotspots shown, group, page); the 11 columns fit 1440 px (headers of
+  two words wrap, the security note and the radio-sibling hint go under
+  their badge / name, long vendor names end in an ellipsis). "Active" = seen
+  within 5 min of its sensor's latest capture (as the api), "Last seen"
+  against the wall clock - between imports "Active · yesterday".
+- *AP page:* the RSSI chart shows the hourly medians (D8; the board says
+  2-hour) of the 7 days before the AP was last seen, the baseline band is
+  median ± 2 robust σ per sensor; the clients heatmap uses the AP's own scale
+  (thresholds from its peak cell, `shape.ramp()`; the board's 2 .. 20+
+  without data); configuration history: the api's newest 200 rows, 12 shown
+  ("Show all"); events: 5 shown ("Show all"); the classification control and
+  the note are read-only until the write token (phase 5).
+
+Deploy 4d (the api first - Spectrum decisions, siblings, the AP scale - then
+the frontend; no schema change):
+
+```sh
+cd ~/wifi-audit && git pull && cd server
+docker compose build api && docker compose up -d api
+docker compose build frontend && docker compose up -d frontend
+```
 
 ### Phase 5 – Settings, write token, write endpoints, cleanup
 

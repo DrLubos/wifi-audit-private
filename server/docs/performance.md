@@ -371,3 +371,14 @@ of 30 days, 117k observation rows. A plain join made the planner estimate
 3.7M observations: 47k pages, 6.3-7.0 s cold. One index-only range scan per
 AP (`LATERAL ... OFFSET 0`) reads 3.5k pages: 1.4 s on the first run after
 the scans, 0.34 s warm - once per import or bucket, then the response cache.
+
+After schema 10 and the 4c/decision deploy (2026-10-12, `MODE=v2
+measure.sh`, 11:27-11:35 UTC; 887 APs, 38 of them re-typed): smoke test 0
+failures (every 304 round trip, paging, the privacy scan); warm HTTP p95
+8-27 ms on every endpoint (cache hits). The EXPLAIN timings of that run are
+not usable as numbers: the back-to-back statements spent the CPU burst
+credit, warm ran slower than cold (spectrum 1.3 s cold, 4.3 s warm; the
+sightings 5.9 / 3.8 s with all 3.6k pages from shared buffers). The same
+statements after idle (warm, read-only EXPLAIN, 11:58 UTC): sightings 0.49
+s, spectrum 0.69 s, networks 0.28 s, clients_hourly 0.13 s, overview.clients
+0.12 s.
