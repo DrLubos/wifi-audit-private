@@ -7,7 +7,9 @@ import { fmtInt } from "../format.js";
 import Tooltip from "./Tooltip.jsx";
 import { useRoving } from "./useRoving.js";
 
-export default function Sparkline({ values, on, labels, unit, ariaLabel, gapText = () => "no sensor collecting" }) {
+export default function Sparkline({
+  values, on, labels, unit, ariaLabel, notes = [], gapText = () => "no sensor collecting",
+}) {
   const n = values.length;
   const [hv, setHv] = useState(null);
   const roving = useRoving(n);
@@ -27,7 +29,7 @@ export default function Sparkline({ values, on, labels, unit, ariaLabel, gapText
         </span>
       ))}
       {hv !== null && hv < n && (
-        <Tooltip className="above" head={labels[hv]}
+        <Tooltip className="above" head={labels[hv]} notes={notes}
                  rows={[{ c: "var(--spark)", v: has(hv) ? fmtInt(values[hv]) : "–", l: has(hv) ? unit : gapText(hv) }]} />
       )}
     </div>

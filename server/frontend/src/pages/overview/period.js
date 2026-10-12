@@ -2,6 +2,7 @@
 // response - pure, tested in period.test.js.
 
 import { bucketLabel, UNIT } from "../../charts/geometry.js";
+import { SEVERITY } from "../../app/status.js";
 import { fmtDate, fmtDateTime, fmtDay, fmtInt, fmtPct, fmtTime, toDate } from "../../format.js";
 
 const TITLE = { "24h": "last 24 h", "7d": "last 7 days", "30d": "last 30 days" };
@@ -75,4 +76,19 @@ export function tileTexts(d, tz) {
       ? "client counts were not recorded in this period"
       : `${c.avg_label} ${fmtInt(c.avg)} · peak ${fmtDay(c.peak_at, tz)} ${fmtTime(c.peak_at, tz)}`,
   };
+}
+
+// event dots (decided 2026-10-12): only buckets with an event of severity
+// medium or higher get one; the api lists a bucket's events most severe
+// first, so its first event decides. Low ones stay in the tooltip.
+export function majorEvents(d) {
+  return d.aps.events.map((evs) => (evs.length && SEVERITY[evs[0].severity]?.rank <= SEVERITY.medium.rank ? 1 : 0));
+}
+
+// the New APs tile's tooltip note (decided 2026-10-12: the first 24 h of
+// each sensor are a warm-up; nothing first seen there counts as new)
+export function warmupNote(d) {
+  const n = d.tiles.new_aps.warmup_excluded ?? 0;
+  const base = "APs first seen in a sensor's first 24 h (warm-up) are not new";
+  return n ? `${base} (${fmtInt(n)} left out in this period)` : base;
 }

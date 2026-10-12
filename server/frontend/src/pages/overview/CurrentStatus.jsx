@@ -1,5 +1,7 @@
 // "Current status" (now, sensor filter): sensor cards, open events by
-// severity, managed networks compliant, needs attention (Main board).
+// severity, managed networks compliant, needs attention (Main board;
+// decided 2026-10-12: compliance findings and ongoing sensor problems
+// first, then open events of the last 7 days, older ones as one line).
 
 import { Link } from "react-router-dom";
 import { ATTENTION_BG, sensorState, severitySummary } from "../../app/status.js";
@@ -70,6 +72,7 @@ function Attention({ st, now }) {
   if (st.error && !st.data) return null;
   const items = st.data?.attention ?? [];
   const more = (st.data?.attention_total ?? 0) - Math.min(items.length, SHOWN);
+  const older = st.data?.attention_older ?? 0;
   return (
     <section className="card attn" aria-labelledby="att-h">
       <h3 id="att-h">Needs attention</h3>
@@ -91,7 +94,13 @@ function Attention({ st, now }) {
           </div>
         ))}
       </div>
-      {more > 0 && <Link to="/events" className="small">{fmtInt(more)} more open events</Link>}
+      {(more > 0 || older > 0) && (
+        <span className="small">
+          {more > 0 && <Link to="/events">{fmtInt(more)} more open events</Link>}
+          {more > 0 && older > 0 && " · "}
+          {older > 0 && <Link to="/events">{fmtInt(older)} older open {older === 1 ? "event" : "events"} → Events</Link>}
+        </span>
+      )}
     </section>
   );
 }

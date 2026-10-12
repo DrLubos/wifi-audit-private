@@ -13,7 +13,7 @@ import Skeleton from "../../components/Skeleton.jsx";
 import { ep } from "../../data/keys.js";
 import { useQuery } from "../../data/query.js";
 import { fmtInt } from "../../format.js";
-import { chartSub, collecting, columnNotes, labelsOf, rangeText, tileTexts } from "./period.js";
+import { chartSub, collecting, columnNotes, labelsOf, majorEvents, rangeText, tileTexts, warmupNote } from "./period.js";
 
 const UNIT_ARIA = { "1h": "hour", "6h": "6-hour window", "1d": "day" };
 
@@ -42,7 +42,7 @@ function Tiles({ d, labels, on, tz }) {
     <section aria-label="Period indicators" className="tiles">
       <Tile label="New APs" link="Access points" to="/aps" value={fmtInt(t.new_aps.total)} sub={text.newSub}
             spark={<Sparkline values={t.new_aps.series} on={on} labels={labels} unit="new APs"
-                              ariaLabel={`New APs per ${unit}`} />} />
+                              notes={[warmupNote(d)]} ariaLabel={`New APs per ${unit}`} />} />
       <Tile label="Open networks nearby" link="Networks" to="/networks" value={fmtInt(t.open_nearby.total)}
             sub={text.openSub}
             spark={<Sparkline values={t.open_nearby.series} on={on} labels={labels} unit="open APs seen"
@@ -76,12 +76,12 @@ function ApsOverTime({ d, labels, on, sensor, sensors, tz }) {
         <div className="lg">
           <span><span className="sw" style={{ background: "var(--c1)" }} />fixed APs</span>
           <span><span className="sw" style={{ background: "var(--c2)" }} />mobile APs (hotspots)</span>
-          <span><span className="evdot" />event</span>
+          <span><span className="evdot" />event (medium or higher)</span>
           <span><span className="sw hatch" />sensor not collecting</span>
         </div>
       </div>
       <StackedColumns series={series} on={on} labels={labels} xlabels={xLabels(d.buckets, d.period.bucket, tz)}
-                      notes={notes} events={d.aps.event_counts} columnAria={aria}
+                      notes={notes} events={majorEvents(d)} columnAria={aria}
                       ariaLabel={`Stacked columns of fixed and mobile APs per ${unit}; hover or focus a column for exact values`} />
       <span className="muted chart-note">
         <b style={{ color: "var(--text)", fontWeight: 500 }}>Mobile AP</b> = randomized (locally administered)

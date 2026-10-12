@@ -1,5 +1,5 @@
 import { test, eq, done } from "../../testing/tiny.js";
-import { chartSub, collecting, columnNotes, rangeText, tileTexts } from "./period.js";
+import { chartSub, collecting, columnNotes, majorEvents, rangeText, tileTexts, warmupNote } from "./period.js";
 
 const TZ = "Europe/Bratislava";
 
@@ -42,6 +42,17 @@ test("column notes: coverage, events, no data", () => {
 test("chart sub-line", () => {
   eq(chartSub(d, ["a", "b", "c"], [true, true, false]),
      "APs per 6-hour window · peak 141 (a) · latest window no data");
+});
+
+test("event dots for medium and above only", () => {
+  const e = { aps: { events: [[{ severity: "high" }], [{ severity: "low" }, { severity: "info" }], [], [{ severity: "medium" }]] } };
+  eq(majorEvents(e), [1, 0, 0, 1]);
+});
+
+test("warm-up note", () => {
+  eq(warmupNote({ tiles: { new_aps: { warmup_excluded: 172 } } }),
+     "APs first seen in a sensor's first 24 h (warm-up) are not new (172 left out in this period)");
+  eq(warmupNote({ tiles: { new_aps: { warmup_excluded: 0 } } }), "APs first seen in a sensor's first 24 h (warm-up) are not new");
 });
 
 test("tile texts", () => {
