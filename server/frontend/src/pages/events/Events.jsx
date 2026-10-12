@@ -3,7 +3,7 @@
 // outages - with status chips (counts; Open by default, the work queue),
 // type chips, "Medium and above", "Managed networks only", BSSID / SSID
 // search, keyset pages (← Newer / Older →), and a row that expands into "Why
-// it fired" and "Who saw it". Repeated low events of one AP, type and status
+// it fired" and "Who saw it". Repeated low events of one network, type and status
 // on one local day are one row with a count that expands into its events
 // (display only, decided 2026-10-12). Confirm / False positive (on a group:
 // for all of it) and "Add to allowed BSSIDs" stay visible but locked until the
@@ -23,7 +23,7 @@ import { useAccount } from "../../hooks/useAccount.js";
 import { useFilters } from "../../hooks/useFilters.js";
 import { fmtDateTime } from "../../format.js";
 import {
-  actionsFor, apCell, groupActions, groupText, headText, KINDS, pagerText, parseStatus, rowOf, selected,
+  actionsFor, apCell, bssidCell, groupActions, groupText, headText, KINDS, pagerText, parseStatus, rowOf, selected,
   SEVERITY_MIN, severityBadge, statusBadge, statusChips, statusParam, timeText, timeTitle, typeText, whoRows, whyRows,
 } from "./events.js";
 import "./events.css";
@@ -176,6 +176,8 @@ function EventRow({ e, tz, open = false, group = false, expanded = false, member
   const sev = severityBadge(e.severity);
   const st = statusBadge(e.status);
   const ap = apCell(e);
+  // a member shows its own BSSID (the APs of one network)
+  const bc = member ? { text: e.bssid ?? e.ap?.bssid ?? "–", mono: true } : bssidCell(e);
   const bg = open ? { background: ATTENTION_BG[e.severity] } : undefined;
   const actions = group ? groupActions(e) : actionsFor(e);
   const lock = group ? `${LOCKED}; it will label all ${e.group.n} events of the row` : LOCKED;
@@ -195,7 +197,7 @@ function EventRow({ e, tz, open = false, group = false, expanded = false, member
           {group && <span className="muted tiny ev-span">{groupText(e, tz)}</span>}
         </td>
         <td className={ap.hidden ? "net hidden-net" : "net"}>{!member && ap.text}</td>
-        <td className="mono nowrap">{!member && (e.ap?.bssid ?? "–")}</td>
+        <td className={bc.mono ? "mono nowrap" : "nowrap"} title={bc.title}>{bc.text}</td>
         <td>{!member && e.sensors.join(", ")}</td>
         <td>
           {!member && (

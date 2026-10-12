@@ -1,6 +1,6 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
-  actionsFor, apCell, groupActions, groupText, headText, pagerText, parseStatus, rowOf, selected, severityBadge,
+  actionsFor, apCell, bssidCell, groupActions, groupText, headText, pagerText, parseStatus, rowOf, selected, severityBadge,
   statusBadge, statusChips, statusParam, timeTitle, typeText, whoRows, whyRows,
 } from "./events.js";
 
@@ -23,7 +23,7 @@ test("feed cells", () => {
   eq(statusChips({ open: 3, confirmed: 241, false_positive: 68 }).map((c) => c.label),
      ["Open 3", "Confirmed 241", "False positive 68"]);
   eq(pagerText(2, 50, 50, 38, 38), "51–100 of 38 · only the newest are loaded, older ones on request");
-  eq(pagerText(1, 50, 50, 224, 271), "1–50 of 224 rows · 271 events, repeated low ones grouped per AP and day");
+  eq(pagerText(1, 50, 50, 159, 271), "1–50 of 159 rows · 271 events, repeated low ones grouped per network and day");
   eq(pagerText(1, 50, 0, 0, 0), "no event matches the filters");
   eq(actionsFor({ status: "open", kind: "kismet" }), ["Confirm", "False positive"]);
   eq(actionsFor({ status: "open", kind: "sensor" }), ["Confirm"]);
@@ -62,6 +62,11 @@ test("grouped rows", () => {
   eq(rowOf(items, 360), items[2]);
   eq(rowOf(items, 1), null);
   eq(rowOf(items, null), null);
+  // a network's group: the number of its BSSIDs, the list in the title
+  const net = { ap: { bssid: "EC:58:EA:54:45:8C" }, group: { bssids: 2, members: [{ bssid: "EC:58:EA:54:45:8C" }, { bssid: "EC:58:EA:55:8E:38" }] } };
+  eq(bssidCell(net), { text: "2 BSSIDs", mono: false, title: "EC:58:EA:54:45:8C, EC:58:EA:55:8E:38" });
+  eq(bssidCell({ ap: { bssid: "EC:58:EA:54:45:8C" }, group: { bssids: 1, members: [] } }).text, "EC:58:EA:54:45:8C");
+  eq(bssidCell({ ap: null }).text, "–");
 });
 
 test("why it fired", () => {

@@ -1,7 +1,7 @@
 // The texts of the Events page (boards/Events.dc.html) from the api's rows -
 // pure, tested in events.test.js. A feed row is one event or a group
-// (item.group: repeated info / low events of one AP, type and status on one
-// local day; display only). The expanded row: "Why it fired" from the
+// (item.group: repeated info / low events of one network, type and status
+// on one local day; display only). The expanded row: "Why it fired" from the
 // event's evidence (one reading per kind: detector, Kismet alert episode,
 // security change, sensor outage) and "Who saw it" from who_saw_it.
 
@@ -71,6 +71,15 @@ export function groupText(e, tz) {
     + `${same ? fmtTime(end, tz) : fmtDateTime(end, tz)}`;
 }
 
+// the BSSID cell: the event's, a group's one BSSID, or "8 BSSIDs" (a network's APs)
+export function bssidCell(e) {
+  if (e.group && e.group.bssids > 1) {
+    return { text: `${fmtInt(e.group.bssids)} BSSIDs`, mono: false,
+             title: [...new Set(e.group.members.map((m) => m.bssid).filter(Boolean))].join(", ") };
+  }
+  return { text: e.ap?.bssid ?? "–", mono: true, title: undefined };
+}
+
 // the feed row that holds an event: its own or the group it is in (null: not on the page)
 export function rowOf(items, id) {
   if (id == null) return null;
@@ -92,13 +101,13 @@ export function selected(counts, status) {
 }
 
 // "1–50 of 271 · only the newest are loaded, older ones on request"; with
-// groups "1–50 of 224 rows · 271 events, repeated low ones grouped per AP and day"
+// groups "1–50 of 159 rows · 271 events, repeated low ones grouped per network and day"
 export function pagerText(page, limit, shown, rows, events) {
   if (!shown) return "no event matches the filters";
   const first = (page - 1) * limit + 1;
   const range = `${fmtInt(first)}–${fmtInt(first + shown - 1)}`;
   if (rows === events) return `${range} of ${fmtInt(events)} · only the newest are loaded, older ones on request`;
-  return `${range} of ${fmtInt(rows)} rows · ${fmtInt(events)} events, repeated low ones grouped per AP and day`;
+  return `${range} of ${fmtInt(rows)} rows · ${fmtInt(events)} events, repeated low ones grouped per network and day`;
 }
 
 // the actions an event offers (locked until the write token, phase 5): an open
