@@ -60,4 +60,15 @@ await atest("stale after the interval or for another url; invalidate refetches a
   eq(s.get("overview.period|all|7d").data, 2);
 });
 
+await atest("a write marks every entry stale without a request", async () => {
+  const api = fakeApi([{ status: 200, data: 1, etag: 'W/"1"' }]);
+  const s = createStore(api.getJson);
+  await s.fetchKey("k", "/u");
+  eq(s.isStale("k", "/u", 60_000), false);
+  s.markStale();
+  eq(api.calls.length, 1);
+  eq(s.isStale("k", "/u", 60_000), true);
+  eq(s.get("k").data, 1);
+});
+
 done();

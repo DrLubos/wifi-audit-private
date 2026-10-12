@@ -62,5 +62,11 @@ export function createStore(getJson) {
     return Promise.all(done);
   }
 
-  return { get, subscribe, fetchKey, isStale, invalidate, entries };
+  // after a write: every entry is stale, so a page that mounts later
+  // revalidates (no request now; the writer refetches what the page shows)
+  function markStale() {
+    for (const [key, e] of entries) entries.set(key, Object.freeze({ ...e, fetchedAt: 0 }));
+  }
+
+  return { get, subscribe, fetchKey, isStale, invalidate, markStale, entries };
 }

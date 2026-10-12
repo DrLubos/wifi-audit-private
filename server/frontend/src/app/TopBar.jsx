@@ -1,6 +1,9 @@
 // The top bar (SPEC section 3): the filters the page uses (route handle), the
-// time of the newest stored poll, the write state (writes come with phase 5).
+// time of the newest stored poll, the write state (locked: a link to the
+// token box in Settings; unlocked: Lock).
 
+import { Link } from "react-router-dom";
+import { useWrite } from "../data/write.js";
 import { RANGES } from "../hooks/filters.js";
 import { useAccount } from "../hooks/useAccount.js";
 import { useFilters } from "../hooks/useFilters.js";
@@ -11,6 +14,7 @@ const RANGE_LABEL = { "24h": "Last 24 hours", "7d": "Last 7 days", "30d": "Last 
 export default function TopBar() {
   const { keys, sensor, range, setFilter } = useFilters();
   const account = useAccount();
+  const w = useWrite();
   const names = (account.sensors ?? []).map((s) => s.name);
   return (
     <header className="top v2">
@@ -33,7 +37,14 @@ export default function TopBar() {
       </div>
       <div className="sync">
         <span>Latest data: {account.latestData ? fmtDateTime(account.latestData, account.tz) : "–"}</span>
-        <span className="b neu" title="Write actions need the write token (dashboard phase 5)">Write locked</span>
+        {w.unlocked ? (
+          <>
+            <span className="b ok">Write unlocked</span>
+            <button type="button" className="btn2 lock-btn" onClick={w.lock}>Lock</button>
+          </>
+        ) : (
+          <Link to="/settings/networks" className="b neu" title="Unlock with the write token in Settings">Write locked</Link>
+        )}
       </div>
     </header>
   );
