@@ -122,17 +122,6 @@ export function changeSummary(changes) {
   return `${changes.length} ${changes.length === 1 ? "change" : "changes"}, ${downs} ${downs === 1 ? "downgrade" : "downgrades"}`;
 }
 
-// heatmap: the ramp step of a value (the api's six thresholds, e.g. 10 30 70 110 160 200)
-export function rampIndex(v, ramp) {
-  let i = 0;
-  while (i < ramp.length && v >= ramp[i]) i += 1;
-  return i;              // 0 .. ramp.length (7 colors)
-}
-
-// the legend: the lower bound of each color, the last one open ("0 10 30 ... 200+")
-export function rampLabels(ramp) {
-  return [0, ...ramp].map((t, i) => (i === ramp.length ? `${fmtInt(t)}+` : fmtInt(t)));
-}
 
 const WEEKDAY_PLURAL = { Mon: "Mondays", Tue: "Tuesdays", Wed: "Wednesdays", Thu: "Thursdays", Fri: "Fridays",
                          Sat: "Saturdays", Sun: "Sundays" };

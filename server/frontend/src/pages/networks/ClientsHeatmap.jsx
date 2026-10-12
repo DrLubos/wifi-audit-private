@@ -7,15 +7,13 @@
 // ramp), shown in the legend.
 
 import Heatmap from "../../charts/Heatmap.jsx";
+import { RAMP_COLORS as RAMP, rampIndex, rampLabels } from "../../charts/ramp.js";
 import ErrorBox from "../../components/ErrorBox.jsx";
 import Skeleton from "../../components/Skeleton.jsx";
 import { ep } from "../../data/keys.js";
 import { useQuery } from "../../data/query.js";
 import { fmtInt } from "../../format.js";
-import { cellText, rampIndex, rampLabels } from "./networks.js";
-
-const RAMP = ["var(--ramp-1)", "var(--ramp-2)", "var(--ramp-3)", "var(--ramp-4)", "var(--ramp-5)", "var(--ramp-6)",
-              "var(--ramp-7)"];
+import { cellText } from "./networks.js";
 const AXIS = ["00:00", "06:00", "12:00", "18:00", "23:00"];
 
 export default function ClientsHeatmap({ sensor, range, view, setView }) {
@@ -23,15 +21,16 @@ export default function ClientsHeatmap({ sensor, range, view, setView }) {
   const [key, url] = ep.clientsHeatmap(sensor, range, v);
   const q = useQuery(key, url);
   const d = q.data;
+  const shownView = d?.view ?? v;          // the previous response is shown while the next loads
   const rows = d ? d.rows.map((row, r) => ({
     key: row.date ?? row.label ?? r,
     label: row.label,
     cells: row.cells.map((cell, h) => ({
       bg: cell.state === "ok" ? RAMP[rampIndex(cell.value, d.ramp)] : "var(--hatch)",
-      text: cellText(v, row, h, cell),
+      text: cellText(shownView, row, h, cell),
     })),
   })) : [];
-  const sub = (v === "days" ? "Sum of clients on all managed networks per hour"
+  const sub = (shownView === "days" ? "Sum of clients on all managed networks per hour"
     : "Average for each weekday and hour over the period")
     + (d?.peak?.value != null ? ` · peak ${fmtInt(d.peak.value)} (${d.peak.label})` : "");
   const hint = range === "24h"

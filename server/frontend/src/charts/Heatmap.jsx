@@ -3,10 +3,12 @@
 // collecting, outside the period, load not recorded); the hovered or focused
 // cell is outlined and its text shown in the hint line above (aria-live);
 // keyboard: one cell in the tab order, arrow keys move in both directions.
+// The axis: evenly spread labels (axis) or labels at a position (ticks
+// [{t, left}], a timeline); dense = 1 px gaps for rows of 168 / 180 cells.
 
 import { useRef, useState } from "react";
 
-export default function Heatmap({ rows, ariaLabel, hint, axis, compact }) {
+export default function Heatmap({ rows, ariaLabel, hint, axis, ticks, compact, dense }) {
   const [on, setOn] = useState(null);           // {r, c} under the pointer or focused
   const [focus, setFocus] = useState({ r: 0, c: 0 });
   const refs = useRef({});
@@ -19,7 +21,7 @@ export default function Heatmap({ rows, ariaLabel, hint, axis, compact }) {
   };
   const onKey = (e, r, c) => {
     const to = { ArrowLeft: [r, c - 1], ArrowRight: [r, c + 1], ArrowUp: [r - 1, c], ArrowDown: [r + 1, c],
-                 Home: [r, 0], End: [r, 23] }[e.key];
+                 Home: [r, 0], End: [r, (rows[r]?.cells.length ?? 1) - 1] }[e.key];
     if (to) {
       e.preventDefault();
       move(...to);
@@ -29,7 +31,7 @@ export default function Heatmap({ rows, ariaLabel, hint, axis, compact }) {
   return (
     <>
       <div className="hint" aria-live="polite">{current ?? hint}</div>
-      <div className="heat" role="group" aria-label={ariaLabel} onMouseLeave={() => setOn(null)}
+      <div className={dense ? "heat dense" : "heat"} role="group" aria-label={ariaLabel} onMouseLeave={() => setOn(null)}
            style={{ gap: compact ? 2 : 3 }}>
         {rows.map((row, r) => (
           <div className="heat-row" key={row.key ?? r}>
@@ -44,7 +46,11 @@ export default function Heatmap({ rows, ariaLabel, hint, axis, compact }) {
             ))}
           </div>
         ))}
-        <div className="heat-axis" aria-hidden="true">{axis.map((t) => <span key={t}>{t}</span>)}</div>
+        {ticks
+          ? <div className="heat-ticks" aria-hidden="true">
+              {ticks.map((x) => <span key={x.left} style={{ left: x.left }}>{x.t}</span>)}
+            </div>
+          : <div className="heat-axis" aria-hidden="true">{axis.map((t) => <span key={t}>{t}</span>)}</div>}
       </div>
     </>
   );

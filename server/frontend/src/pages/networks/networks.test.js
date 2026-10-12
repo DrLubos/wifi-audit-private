@@ -1,7 +1,7 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
   actualText, bssidCount, cellText, changeRows, changeSummary, complianceBadge, lifetimeText, networkName,
-  notAssessedText, presenceText, rampIndex, rampLabels, securityBadge, shortVendor, vendorList,
+  notAssessedText, presenceText, securityBadge, shortVendor, vendorList,
 } from "./networks.js";
 
 const TZ = "Europe/Bratislava";
@@ -73,12 +73,7 @@ test("security changes", () => {
   eq(changeSummary([]), "no changes in this period");
 });
 
-test("heatmap ramp and hint", () => {
-  const ramp = [25, 75, 150, 250, 350, 450];
-  eq([0, 24, 25, 149, 450, 900].map((v) => rampIndex(v, ramp)), [0, 0, 1, 2, 6, 6]);
-  const own = [10, 30, 70, 110, 160, 200];                 // from a 30-day peak of 199
-  eq([0, 9, 10, 112, 199, 200].map((v) => rampIndex(v, own)), [0, 0, 1, 4, 5, 6]);
-  eq(rampLabels(own), ["0", "10", "30", "70", "110", "160", "200+"]);
+test("heatmap hint", () => {
   const row = { label: "Sat 10 Oct" };
   eq(cellText("days", row, 9, { state: "ok", value: 68, by_network: { "IK-WIFI": 53, "IK-WIFI-DOT1X": 15, FRI_wifi: 0 } }),
      "Sat 10 Oct, 09:00–10:00 · 68 clients (IK-WIFI 53, IK-WIFI-DOT1X 15, FRI_wifi 0)");

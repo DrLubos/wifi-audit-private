@@ -73,5 +73,10 @@
 .v2 .heat-axis {
   display: flex; padding-left: 86px; font-size: 11px; color: var(--muted); justify-content: space-between; padding-top: 4px;
 }
-.v2 .ramp { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.v2 .ramp { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.v2 .ramp .step { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }   /* "0 %" stays whole */
 .v2 .ramp i { width: 18px; height: 12px; border-radius: 2px; display: inline-block; }
+.v2 .heat.dense .heat-row { gap: 1px; }
+.v2 .heat.dense .cell { border-radius: 1px; }
+.v2 .heat-ticks { position: relative; height: 16px; margin-left: 86px; font-size: 11px; color: var(--muted); padding-top: 4px; }
+.v2 .heat-ticks span { position: absolute; white-space: nowrap; }
