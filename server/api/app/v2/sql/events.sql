@@ -145,3 +145,36 @@ FROM detections d
 JOIN sensors se ON se.id = d.sensor_id AND se.account_id = %(account_id)s
 WHERE d.id = ANY (%(ids)s::bigint[])
 ORDER BY d.id
+
+-- name: label_history
+-- The changes of one event's label, newest first (audit_log 'event.status':
+-- every label write keeps the old value next to the new one).
+SELECT l.at, l.old, l.new
+FROM audit_log l
+WHERE l.account_id = %(account_id)s AND l.action = 'event.status' AND l.target = 'event:' || %(event_id)s::text
+ORDER BY l.at DESC, l.id DESC
+
+-- name: export_labels
+-- The RQ2 dataset: every event of the account, oldest first, with its current
+-- outcome (open = not judged yet). No summary or evidence (they can name client
+-- MACs); the BSSID only when it is an account AP.
+SELECT p.id, p.ts, p.ts_end, se.name AS sensor, p.kind, p.type, {{_label}} AS type_label, p.severity,
+       CASE WHEN a.id IS NOT NULL THEN upper(p.mac::text) END AS bssid,
+       coalesce(nullif(su.ssid, ''), su.name_seen, p.ssid) AS ssid,
+       p.status, p.status_reason, p.status_note, p.status_at
+FROM detections p
+JOIN sensors se ON se.id = p.sensor_id AND se.account_id = %(account_id)s
+LEFT JOIN ap_summary su ON su.sensor_id = p.sensor_id AND su.device_key = p.device_key
+LEFT JOIN kismet_alert_rules r ON p.kind = 'kismet' AND r.header = p.type
+LEFT JOIN aps a ON a.account_id = se.account_id AND a.bssid = p.mac
+ORDER BY p.ts, p.id
+
+-- name: export_history
+-- Every change of a label, oldest first (long format: one row per change).
+SELECT l.at, split_part(l.target, ':', 2)::bigint AS event_id, d.kind, d.type,
+       l.old->>'status' AS old_status, l.old->>'reason' AS old_reason, l.old->>'note' AS old_note,
+       l.new->>'status' AS new_status, l.new->>'reason' AS new_reason, l.new->>'note' AS new_note
+FROM audit_log l
+LEFT JOIN detections d ON d.id = split_part(l.target, ':', 2)::bigint
+WHERE l.account_id = %(account_id)s AND l.action = 'event.status'
+ORDER BY l.at, l.id

@@ -11,9 +11,9 @@ under every filter but status. No client MAC: summaries and evidence are
 redacted to the account's AP BSSIDs (privacy.redact()).
 """
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request, Response
 
-from .. import cursor, deps, privacy, queries, shape, writes
+from .. import cursor, deps, export, privacy, queries, shape, writes
 from ..periods import iso
 
 router = APIRouter(prefix="/events", tags=["v2 events"])
@@ -124,6 +124,28 @@ def events(request: Request, acc=Depends(deps.get_account), sensor: str = Depend
     return deps.respond(body, tag)
 
 
+def _csv(name, query, build, acc):
+    with deps.connection() as conn:
+        rows = deps.run(conn, _Q, query, account_id=acc["id"])
+    return Response(content=build(rows).encode("utf-8"), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="%s"' % export.filename(name, shape.utc_now()),
+                             "Cache-Control": "no-store"})
+
+
+@router.get("/export/labels.csv", dependencies=[Depends(deps.require_write)])
+def export_labels(acc=Depends(deps.get_account)):
+    """The RQ2 dataset: every event with its current outcome and reason (open =
+    not judged yet). Behind the write token (the labels are research data)."""
+    return _csv("labels", "export_labels", export.labels_csv, acc)
+
+
+@router.get("/export/label-history.csv", dependencies=[Depends(deps.require_write)])
+def export_label_history(acc=Depends(deps.get_account)):
+    """Every change of a label, one row per change (old and new outcome, reason
+    and note) - the history behind labels.csv."""
+    return _csv("label-history", "export_history", export.history_csv, acc)
+
+
 @router.get("/{event_id}")
 def event(request: Request, event_id: int = Path(ge=1, le=2 ** 63 - 1), acc=Depends(deps.get_account)):
     tag, cached = deps.etag(request, acc, None)
@@ -141,6 +163,7 @@ def event(request: Request, event_id: int = Path(ge=1, le=2 ** 63 - 1), acc=Depe
             end = r["ts_end"] or ts
             who = deps.run(conn, _Q, "who_saw_it", ap_id=r["ap_id"], ts=ts, ts_end=end)
         allowed = deps.allowed_bssids(conn, acc, [r["bssid"], r["summary"], r["evidence"]])
+        history = deps.run(conn, _Q, "label_history", account_id=acc["id"], event_id=event_id)
     item = _item(r)
     item.update({"status_note": r["status_note"], "created_at": iso(r["created_at"]),
                  "updated_at": iso(r["updated_at"])})
@@ -149,7 +172,8 @@ def event(request: Request, event_id: int = Path(ge=1, le=2 ** 63 - 1), acc=Depe
                 "clients": w["clients"], "first_seen": iso(w["first_seen"]), "last_seen": iso(w["last_seen"])}
                for w in who]
     clients = [w["clients"] for w in who if w["clients"] is not None]
-    body = dict(item, evidence=r["evidence"], who_saw_it=who_saw, clients=max(clients) if clients else None)
+    body = dict(item, evidence=r["evidence"], who_saw_it=who_saw, clients=max(clients) if clients else None,
+                label_history=[{"at": iso(h["at"]), "from": h["old"], "to": h["new"]} for h in history])
     return deps.respond(privacy.redact(body, allowed), tag)
 
 

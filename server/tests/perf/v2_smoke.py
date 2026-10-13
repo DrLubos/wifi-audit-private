@@ -52,7 +52,8 @@ WRITES = (("POST", "/auth/check"), ("PUT", "/settings/networks"), ("POST", "/set
           ("PUT", "/settings/detectors"), ("POST", "/settings/sensors"), ("PUT", "/settings/sensors/pi-fri"),
           ("POST", "/settings/sensors/pi-fri/hardware-change"), ("POST", "/events/1/status"), ("POST", "/events/status"),
           ("PUT", "/aps/EC:58:EA:55:88:FC/classification"), ("PUT", "/aps/EC:58:EA:55:88:FC/note"),
-          ("POST", "/settings/sensors/new"), ("DELETE", "/settings/sensors/pi-fri?confirm=pi-fri"))
+          ("POST", "/settings/sensors/new"), ("DELETE", "/settings/sensors/pi-fri?confirm=pi-fri"),
+          ("GET", "/events/export/labels.csv"), ("GET", "/events/export/label-history.csv"))   # reads, but token-gated
 
 
 def main(argv):
