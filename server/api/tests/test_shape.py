@@ -287,6 +287,20 @@ class Spectrum(unittest.TestCase):
         self.assertEqual(dst[1] - dst[0], timedelta(hours=5))
 
 
+class EmptySensor(unittest.TestCase):
+    """A sensor added in Settings has no poll yet (phase 5b): every shape helper copes."""
+
+    def test_no_poll_yet(self):
+        empty = {"id": 2, "name": "pi-new", "first_poll": None, "last_poll": None, "last_capture_at": None}
+        now = utc(2026, 10, 13, 12)
+        self.assertEqual(shape.sensor_status(None, None, now, 15), ("no_data", None))
+        self.assertEqual(shape.window_share([], empty, now - timedelta(days=7), now), 0.0)
+        p = periods.period("7d", TZ, now)
+        self.assertEqual(set(shape.coverage(p, [], [empty])["pi-new"]), {0.0})
+        today = shape.day_coverage(periods.local_days(TZ, now, 14), [], empty, now)[-1]
+        self.assertEqual((today["not_installed"], today["ok"], today["outage"]), (1.0, 0.0, 0.0))
+
+
 class Events(unittest.TestCase):
     STATUSES = ("open", "confirmed", "false_positive")
 

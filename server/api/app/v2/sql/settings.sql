@@ -77,3 +77,20 @@ JOIN devices d ON trunc(d.mac) = o AND d.ever_ap AND d.manuf IS NOT NULL
                AND d.sensor_id IN (SELECT s.id FROM sensors s WHERE s.account_id = %(account_id)s)
 WHERE n.account_id = %(account_id)s
 ORDER BY o, d.manuf
+
+-- name: sensor_data_tables
+-- The tables with a sensor_id column (not its configuration: sensor_config,
+-- sensor_annotations, sensor_hardware) and whether one has a row of the sensor;
+-- the guard of "Delete sensor": a sensor with any observation, poll, device
+-- or rollup row is never deleted. Table names come from the catalog and are
+-- quoted as identifiers by format().
+SELECT t.table_name,
+       (xpath('/row/c/text()', query_to_xml(
+          format('SELECT count(*) AS c FROM (SELECT 1 FROM public.%%I WHERE sensor_id = %%s LIMIT 1) x',
+                 t.table_name, %(sensor_id)s::int), false, true, '')))[1]::text::int AS has_rows
+FROM information_schema.tables t
+WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+  AND EXISTS (SELECT 1 FROM information_schema.columns c
+              WHERE c.table_schema = t.table_schema AND c.table_name = t.table_name AND c.column_name = 'sensor_id')
+  AND t.table_name NOT IN ('sensor_config', 'sensor_annotations', 'sensor_hardware')
+ORDER BY t.table_name

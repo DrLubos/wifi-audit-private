@@ -57,10 +57,30 @@ SELECT %(sensor_id)s, coalesce(max(c.version), 0) + 1, %(channel_plan)s, %(chann
 FROM sensor_config c WHERE c.sensor_id = %(sensor_id)s
 RETURNING version
 
--- name: sensor_meta_update
-UPDATE sensors SET location = %(location)s, description = %(description)s
+-- name: sensor_insert
+-- A new, empty sensor of the account (its day boundaries in the account's zone).
+INSERT INTO sensors (account_id, name, location, description, tz)
+VALUES (%(account_id)s, %(name)s, %(location)s, %(description)s, %(tz)s)
+RETURNING id
+
+-- name: sensor_update
+-- Name, location and description; sensor_id is the key everything references,
+-- the name only a unique label (a NULL name keeps it).
+UPDATE sensors SET name = coalesce(%(name)s, name), location = %(location)s, description = %(description)s
 WHERE account_id = %(account_id)s AND id = %(id)s
 RETURNING id
+
+-- name: sensor_delete_config
+-- The configuration rows of a sensor without data, with the sensor (the only
+-- rows that go with it - sensor_data_tables found nothing else)
+WITH h AS (DELETE FROM sensor_hardware WHERE sensor_id = %(id)s RETURNING 1),
+     c AS (DELETE FROM sensor_config WHERE sensor_id = %(id)s RETURNING 1),
+     a AS (DELETE FROM sensor_annotations WHERE sensor_id = %(id)s RETURNING 1)
+SELECT (SELECT count(*) FROM h)::int AS hardware, (SELECT count(*) FROM c)::int AS config,
+       (SELECT count(*) FROM a)::int AS annotations
+
+-- name: sensor_delete
+DELETE FROM sensors WHERE account_id = %(account_id)s AND id = %(id)s RETURNING id
 
 -- name: hardware_insert
 INSERT INTO capture_hardware (account_id, kind, name, gain_dbi, bands, connector, note)

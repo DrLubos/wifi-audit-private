@@ -233,7 +233,21 @@ def parse_detectors(body):
 
 # --- sensors ------------------------------------------------------------------------------------
 
-def parse_sensor_meta(body):
+SENSOR_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
+
+
+def sensor_name(v):
+    """A sensor's name: a short handle (it is in URLs and in the importer's
+    --sensor option), 1 to 40 of letters, digits, . _ -"""
+    if not isinstance(v, str) or not SENSOR_NAME.match(v.strip()):
+        raise Invalid("name: 1 to 40 characters - letters, digits, . _ - (it is used in URLs and by the importer)")
+    return v.strip()
+
+
+def parse_sensor_meta(body, need_name=False):
+    """{name?, location?, description?} -> the fields to store. The name is
+    required for a new sensor, optional for an edit (absent = unchanged; a
+    rename is the same write - sensor_id is the key, the name a unique label)."""
     def text(key, limit):
         v = body.get(key)
         if v is None:
@@ -241,7 +255,10 @@ def parse_sensor_meta(body):
         if not isinstance(v, str) or len(v.strip()) > limit:
             raise Invalid("%s: at most %d characters" % (key, limit))
         return v.strip() or None
-    return {"location": text("location", 120), "description": text("description", 500)}
+    out = {"location": text("location", 120), "description": text("description", 500)}
+    if need_name or body.get("name") is not None:
+        out["name"] = sensor_name(body.get("name"))
+    return out
 
 
 def hop_stride(n):

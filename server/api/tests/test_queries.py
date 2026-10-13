@@ -33,7 +33,7 @@ class SqlFiles(unittest.TestCase):
                     self.assertNotIn("%", bare, "positional or stray % placeholder")
                     self.assertFalse(sql.rstrip().endswith(";"))
                     # writes.sql holds the write statements (phase 5), every other file reads
-                    kinds = r"(INSERT|UPDATE|DELETE)" if g == "writes" else r"(WITH|SELECT)"
+                    kinds = r"(WITH|INSERT|UPDATE|DELETE)" if g == "writes" else r"(WITH|SELECT)"
                     self.assertTrue(re.match(r"^(--[^\n]*\n)*\s*" + kinds + r"\b", sql, re.S),
                                     "a write statement" if g == "writes" else "a read statement")
 

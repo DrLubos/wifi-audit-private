@@ -15,7 +15,7 @@ sensor (a data boundary: RSSI baselines are learned inside one hardware
 period, schema 11).
 """
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
 from psycopg import errors
 
 from .. import deps, queries, shape, writes
@@ -224,7 +224,7 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
             m = meta[s["name"]]
             out.append({"name": s["name"], "current": current, "pending": pending, "versions": mine,
                         "meta": {"location": m["location"], "description": m["description"],
-                                 "hardware": m["hardware"]},
+                                 "hardware": m["hardware"], "has_polls": s["first_poll"] is not None},
                         "capture": hw[0] if hw else None, "capture_history": hw})
         plans = {s["current"]["channel_plan"] for s in out if s["current"]}
         changes = [dict(h, ts=iso(h["ts"]), kind="change") for h in history]
@@ -263,18 +263,80 @@ def post_sensor_config(body: dict = Body(...), acc=Depends(deps.get_account)):
     return deps.written({"sensors": out, "delivered": False})
 
 
+def _sensor_data(conn, sensor_id):
+    """The tables that hold a row of the sensor (its configuration aside)."""
+    return [r["table_name"] for r in deps.run(conn, _Q, "sensor_data_tables", sensor_id=sensor_id) if r["has_rows"]]
+
+
+def _sensor_row(conn, acc, name):
+    s = _sensor_of(acc, name)
+    m = next(x for x in deps.run(conn, _Q, "sensor_meta", account_id=acc["id"]) if x["id"] == s["id"])
+    return s, m
+
+
+@router.post("/sensors/new", status_code=201, dependencies=[Depends(deps.require_write)])
+def post_sensor(body: dict = Body(...), acc=Depends(deps.get_account)):
+    """A new, empty sensor (name, location, description): it shows up in the
+    selectors and lists with their empty states; data arrives with an import
+    under that name (seed/import_snapshot.py --sensor NAME)."""
+    new = deps.invalid(writes.parse_sensor_meta, body, True)
+    try:
+        with deps.write_tx(acc) as (conn, audit):
+            sid = deps.run(conn, _QW, "sensor_insert", account_id=acc["id"], tz=acc["tz"], **new)[0]["id"]
+            audit("sensor.add", "sensor:%s" % new["name"], None, dict(new, id=sid))
+    except errors.UniqueViolation:
+        raise HTTPException(status_code=409, detail="a sensor named %r exists already" % new["name"]) from None
+    return deps.written(dict(new, id=sid), 201)
+
+
 @router.put("/sensors/{name}", dependencies=[Depends(deps.require_write)])
 def put_sensor_meta(name: str = Path(max_length=64), body: dict = Body(...), acc=Depends(deps.get_account)):
-    """A sensor's location and description."""
+    """A sensor's name, location and description. A rename changes only the
+    label (sensor_id is the key); the importer files data under the name, so
+    its --sensor option must follow (the response says so)."""
     new = deps.invalid(writes.parse_sensor_meta, body)
+    try:
+        with deps.write_tx(acc) as (conn, audit):
+            s, m = _sensor_row(conn, acc, name)
+            old = {"name": m["name"], "location": m["location"], "description": m["description"]}
+            new = dict(new, name=new.get("name", name))
+            if old != new:
+                deps.run(conn, _QW, "sensor_update", account_id=acc["id"], id=s["id"], **new)
+                if new["name"] != name:
+                    audit("sensor.rename", "sensor:%s" % new["name"], {"id": s["id"], "name": name},
+                          {"id": s["id"], "name": new["name"]})
+                if (old["location"], old["description"]) != (new["location"], new["description"]):
+                    audit("sensor.meta", "sensor:%s" % new["name"],
+                          {k: old[k] for k in ("location", "description")},
+                          {k: new[k] for k in ("location", "description")})
+    except errors.UniqueViolation:
+        raise HTTPException(status_code=409, detail="a sensor named %r exists already" % new["name"]) from None
+    return deps.written(dict(new, renamed=new["name"] != name))
+
+
+@router.delete("/sensors/{name}", status_code=204, dependencies=[Depends(deps.require_write)])
+def delete_sensor(name: str = Path(max_length=64), confirm: str = Query("", max_length=64),
+                  acc=Depends(deps.get_account)):
+    """Delete a sensor - never one with data, never unconfirmed: the sensor's
+    name must be typed (?confirm=NAME) and no poll, device, observation,
+    alert, event or rollup row may belong to it (409 names the tables); only
+    its configuration (hardware history, capture configurations, notes) goes
+    with it, and the audit row keeps what was there."""
     s = _sensor_of(acc, name)
+    if confirm != name:
+        raise HTTPException(status_code=422, detail="type the sensor's name to confirm the deletion")
     with deps.write_tx(acc) as (conn, audit):
-        old = next(m for m in deps.run(conn, _Q, "sensor_meta", account_id=acc["id"]) if m["id"] == s["id"])
-        old = {k: old[k] for k in new}
-        if old != new:
-            deps.run(conn, _QW, "sensor_meta_update", account_id=acc["id"], id=s["id"], **new)
-            audit("sensor.meta", "sensor:%s" % name, old, new)
-    return deps.written(dict(new, name=name))
+        m = next(x for x in deps.run(conn, _Q, "sensor_meta", account_id=acc["id"]) if x["id"] == s["id"])
+        data = _sensor_data(conn, s["id"])
+        if data:
+            raise HTTPException(status_code=409, detail="%s has data (%s) - a sensor with data is never deleted"
+                                % (name, ", ".join(data)))
+        gone = deps.run(conn, _QW, "sensor_delete_config", id=s["id"])[0]
+        deps.run(conn, _QW, "sensor_delete", account_id=acc["id"], id=s["id"])
+        audit("sensor.delete", "sensor:%s" % name,
+              {"id": s["id"], "name": name, "location": m["location"], "description": m["description"],
+               "configuration_removed": dict(gone)}, None)
+    return deps.written(None, 204)
 
 
 @router.get("/hardware")

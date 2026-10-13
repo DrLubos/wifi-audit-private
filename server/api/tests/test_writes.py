@@ -173,6 +173,16 @@ class Hardware(unittest.TestCase):
         with self.assertRaises(w.Invalid):
             w.parse_sensor_meta({"location": "x" * 121})
 
+    def test_sensor_name_for_add_and_rename(self):
+        # a new sensor needs a name; an edit may leave it out (unchanged) or give a new one
+        self.assertEqual(w.parse_sensor_meta({"name": " pi-lab ", "location": "Lab"}, need_name=True),
+                         {"name": "pi-lab", "location": "Lab", "description": None})
+        self.assertNotIn("name", w.parse_sensor_meta({"location": "x"}))
+        self.assertEqual(w.parse_sensor_meta({"name": "pi-fri2"})["name"], "pi-fri2")
+        for bad in ({}, {"name": ""}, {"name": "-lab"}, {"name": "a b"}, {"name": "x" * 41}, {"name": "../x"}, {"name": 5}):
+            with self.subTest(bad=bad), self.assertRaises(w.Invalid):
+                w.parse_sensor_meta(bad, need_name=True)
+
 
 if __name__ == "__main__":
     unittest.main()
