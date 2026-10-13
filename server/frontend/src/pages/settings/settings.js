@@ -170,7 +170,7 @@ export const POLLS = [15, 30, 60];
 
 const PLAN_TEXT = {
   auto: "Kismet's autodetected list", all_89: "89 settings (20/40/80 MHz)", ht20_37: "37 settings (20 MHz only)",
-  no_empty_dfs_59: "59 settings (without empty DFS)", locked: "locked", custom: "custom list",
+  locked: "locked", custom: "custom list",
 };
 
 // "89 settings (20/40/80 MHz)", "locked to channel 6", "custom list · 14 settings"

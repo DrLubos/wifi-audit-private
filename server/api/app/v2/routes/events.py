@@ -13,14 +13,14 @@ redacted to the account's AP BSSIDs (privacy.redact()).
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
-from .. import cursor, deps, privacy, queries, shape
+from .. import cursor, deps, privacy, queries, shape, writes
 from ..periods import iso
 
 router = APIRouter(prefix="/events", tags=["v2 events"])
 
 _Q = queries.load("events")
 
-STATUSES = ("open", "confirmed", "false_positive")
+STATUSES = writes.STATUSES             # open, confirmed, benign, false_positive (schema 12)
 KINDS = ("detection", "kismet", "config", "sensor")
 SEVERITIES = ("info", "low", "medium", "high", "critical")
 NO_BEFORE = ("infinity", 2 ** 63 - 1)
@@ -65,7 +65,7 @@ def _item(r, members=()):
 
 @router.get("")
 def events(request: Request, acc=Depends(deps.get_account), sensor: str = Depends(deps.sensor_query),
-           status: str | None = Query(None, max_length=64, description="csv: open,confirmed,false_positive"),
+           status: str | None = Query(None, max_length=64, description="csv: open,confirmed,benign,false_positive"),
            kinds: str | None = Query(None, alias="type", max_length=64,
                                      description="csv: detection,kismet,config,sensor"),
            severity: str | None = Query(None, max_length=16,

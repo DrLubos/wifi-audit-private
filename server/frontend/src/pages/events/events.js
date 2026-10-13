@@ -8,7 +8,7 @@
 import { SEVERITY, STATUS } from "../../app/status.js";
 import { fmtDate, fmtDateTime, fmtDuration, fmtInt, fmtTime, partsOf } from "../../format.js";
 
-export const STATUSES = ["open", "confirmed", "false_positive"];
+export const STATUSES = ["open", "confirmed", "benign", "false_positive"];   // schema 12: three outcomes
 export const KINDS = [["detection", "Detection"], ["kismet", "Kismet alert"], ["config", "Configuration change"],
                       ["sensor", "Sensor"]];
 // the "Medium and above" chip: the api's lowest severity

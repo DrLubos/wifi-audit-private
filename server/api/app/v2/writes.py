@@ -18,12 +18,16 @@ class Invalid(ValueError):
 
 # --- event labels -------------------------------------------------------------------------------
 
-# the fixed reasons of a label (schema 11, detections_status_reason): Confirm =
-# the event's condition was real, False positive = it was not
+# the three outcomes of a label and their required reasons (schema 12,
+# detections_status_reason; RQ2 splits by them): confirmed = a real security
+# event, benign = the condition was real but no threat (e.g. NOCLIENTMFP on an
+# open network), false_positive = no real condition or a misattribution
 REASONS = {
-    "confirmed": ("security_relevant", "expected_benign", "staged_test"),
+    "confirmed": ("security_relevant", "staged_test"),
+    "benign": ("expected_behaviour", "accepted_risk"),
     "false_positive": ("rule_defect", "artefact"),
 }
+STATUSES = ("open",) + tuple(REASONS)
 NOTE_MAX = 1000
 BULK_MAX = 500
 
@@ -41,10 +45,10 @@ def _note(v, limit=NOTE_MAX):
 
 def parse_status(body):
     """{status, reason?, note?} -> (status, reason, note). Open clears the
-    reason; confirmed / false_positive need one of their reasons."""
+    reason; each resolved outcome needs one of its reasons."""
     status = body.get("status")
-    if status not in ("open", "confirmed", "false_positive"):
-        raise Invalid("status: open, confirmed or false_positive")
+    if status not in STATUSES:
+        raise Invalid("status: " + ", ".join(STATUSES))
     reason = body.get("reason")
     if status == "open":
         if reason is not None:
@@ -257,7 +261,7 @@ HT20_ALL = tuple(c for c in ALL_89 if c.isdigit())          # 38: a composite le
 # ETSI's 5470-5725 MHz band
 HT20_37 = tuple(c for c in HT20_ALL if c != "144")
 ENTRY = re.compile(r"^(\d{1,3})(HT40[+-]|VHT80|VHT160)?$")
-PLANS = ("all_89", "ht20_37", "locked", "custom")             # no_empty_dfs_59: not offered (PLAN 5)
+PLANS = ("all_89", "ht20_37", "locked", "custom")             # no_empty_dfs_59: dropped (schema 12)
 DWELLS = (0.2, 0.5, 1.0)
 POLLS = (15, 30, 60)
 

@@ -65,7 +65,11 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 --    since when (sensor_hardware) - a hardware change is a data boundary, and
 --    refresh_ap_baselines() learns a baseline inside one hardware period only
 --    (ap_baselines.hw_from, hardware_period()) (ops/migrate_schema11.sh)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '11')
+-- 12: three label outcomes - confirmed, benign, false_positive - each with a
+--    required reason (the schema-11 constraint let a NULL reason through: a
+--    CHECK that evaluates to NULL passes); the 59-entry channel plan dropped;
+--    an antenna's gain within -10 .. 30 dBi (ops/migrate_schema12.sh)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '12')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- accounts and sensors ------------------------------------------------------------
@@ -402,21 +406,28 @@ CREATE TABLE IF NOT EXISTS detections (
   ssid        text,
   summary     text NOT NULL,
   evidence    jsonb NOT NULL DEFAULT '{}',
-  status      text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'confirmed', 'false_positive')),
+  -- the operator's label (schema 12: three outcomes, RQ2 splits by them)
+  status      text NOT NULL DEFAULT 'open'
+              CONSTRAINT detections_status_check CHECK (status IN ('open', 'confirmed', 'benign', 'false_positive')),
   status_at   timestamptz,
   status_note text,
-  -- the operator's fixed reason (schema 11; RQ2 counts by it): Confirm =
-  -- the event's condition was real - security_relevant, expected_benign
-  -- (true, but not a security issue) or staged_test (the developer's own
-  -- attack runs). False positive = it was not - rule_defect (a rule defect or
-  -- misattribution) or artefact (a sensor or environment artefact)
+  -- the label's required reason: confirmed (a real security event) -
+  -- security_relevant, staged_test (the developer's own attack runs). Benign
+  -- (the condition was real but no threat, e.g. NOCLIENTMFP on an open
+  -- network) - expected_behaviour, accepted_risk (a known weakness the
+  -- operator accepts). False_positive (no real condition) - rule_defect (a
+  -- rule defect or misattribution), artefact (a sensor or environment
+  -- artefact). NULL only while open: every branch tests IS NOT NULL, since
+  -- a CHECK that evaluates to NULL passes
   status_reason text,
   created_at  timestamptz NOT NULL DEFAULT now(),
   updated_at  timestamptz NOT NULL DEFAULT now(),   -- last change by a detector or refresh_events() (ETags)
-  CONSTRAINT detections_status_reason CHECK (
-    (status = 'open' AND status_reason IS NULL)
-    OR (status = 'confirmed' AND status_reason IN ('security_relevant', 'expected_benign', 'staged_test'))
-    OR (status = 'false_positive' AND status_reason IN ('rule_defect', 'artefact'))));
+  CONSTRAINT detections_status_reason CHECK (CASE status
+    WHEN 'open' THEN status_reason IS NULL
+    WHEN 'confirmed' THEN status_reason IS NOT NULL AND status_reason IN ('security_relevant', 'staged_test')
+    WHEN 'benign' THEN status_reason IS NOT NULL AND status_reason IN ('expected_behaviour', 'accepted_risk')
+    WHEN 'false_positive' THEN status_reason IS NOT NULL AND status_reason IN ('rule_defect', 'artefact')
+    ELSE false END));
 CREATE INDEX IF NOT EXISTS detections_ts   ON detections (sensor_id, ts);
 CREATE INDEX IF NOT EXISTS detections_open ON detections (sensor_id, severity) WHERE status = 'open';
 CREATE INDEX IF NOT EXISTS detections_feed ON detections (ts DESC, id DESC);   -- keyset paging of the feed
@@ -517,7 +528,8 @@ CREATE TABLE IF NOT EXISTS sensor_annotations (
 CREATE TABLE IF NOT EXISTS sensor_config (
   sensor_id    integer NOT NULL REFERENCES sensors(id),
   version      integer NOT NULL,
-  channel_plan text NOT NULL CHECK (channel_plan IN ('auto', 'all_89', 'ht20_37', 'no_empty_dfs_59', 'locked', 'custom')),
+  channel_plan text NOT NULL
+               CONSTRAINT sensor_config_channel_plan_check CHECK (channel_plan IN ('auto', 'all_89', 'ht20_37', 'locked', 'custom')),
   channels     text[],                         -- explicit Kismet hop entries
   n_channels   integer NOT NULL,
   dwell_s      real NOT NULL,
@@ -536,7 +548,7 @@ CREATE TABLE IF NOT EXISTS capture_hardware (
   account_id integer NOT NULL DEFAULT 1 REFERENCES accounts(id),
   kind       text NOT NULL CHECK (kind IN ('adapter', 'antenna')),
   name       text NOT NULL CHECK (name <> ''),
-  gain_dbi   real,                             -- an antenna's gain; NULL for an adapter or when unknown
+  gain_dbi   real CONSTRAINT capture_hardware_gain_check CHECK (gain_dbi BETWEEN -10 AND 30),  -- NULL: an adapter / unknown
   bands      text[] NOT NULL DEFAULT '{}' CHECK (bands <@ ARRAY['2.4', '5', '6']),
   connector  text,                             -- e.g. 'RP-SMA', 'USB 2.0'
   note       text,

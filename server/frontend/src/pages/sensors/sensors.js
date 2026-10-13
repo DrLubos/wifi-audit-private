@@ -93,7 +93,6 @@ export function apsText(s, nSensors) {
 export const PLANS = {
   all_89: { label: "All channels and widths", note: "" },
   ht20_37: { label: "20 MHz only", note: " (20 MHz only)" },
-  no_empty_dfs_59: { label: "Without empty DFS channels", note: " (without empty DFS)" },
   locked: { label: "Locked to one channel", note: " (locked)" },
   custom: { label: "Custom list", note: " (custom list)" },
 };

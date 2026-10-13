@@ -25,6 +25,7 @@ MIGRATION8 = open(os.path.join(HERE, "..", "ops", "migrate_schema8.sql"), encodi
 MIGRATION9 = open(os.path.join(HERE, "..", "ops", "migrate_schema9.sql"), encoding="utf-8").read()
 MIGRATION10 = open(os.path.join(HERE, "..", "ops", "migrate_schema10.sql"), encoding="utf-8").read()
 MIGRATION11 = open(os.path.join(HERE, "..", "ops", "migrate_schema11.sql"), encoding="utf-8").read()
+MIGRATION12 = open(os.path.join(HERE, "..", "ops", "migrate_schema12.sql"), encoding="utf-8").read()
 SCHEMA9_TABLES = ("accounts", "account_settings", "networks", "aps", "ap_sensors", "sensor_annotations",
                   "sensor_config", "sensor_uploads", "kismet_alert_rules", "audit_log",
                   "ap_security_periods", "sensor_periods")
@@ -66,6 +67,10 @@ class SchemaFiles(unittest.TestCase):
 
     def test_migration9_tables_equal_schema(self):
         for t in SCHEMA9_TABLES:
+            if t == "sensor_config":       # schema 12 changed its plan CHECK (checked here instead)
+                self.assertIn("CONSTRAINT sensor_config_channel_plan_check", table_body(SCHEMA, t))
+                self.assertIn("ADD CONSTRAINT sensor_config_channel_plan_check", MIGRATION12)
+                continue
             self.assertIsNotNone(table_body(SCHEMA, t), t)
             self.assertEqual(table_body(MIGRATION9, t), table_body(SCHEMA, t), t)
 
@@ -89,20 +94,26 @@ class SchemaFiles(unittest.TestCase):
     def test_version(self):
         def version(sql):
             return re.search(r"VALUES \('schema_version', '(\d+)'\)", sql).group(1)
-        self.assertEqual((version(SCHEMA), version(MIGRATION11), version(MIGRATION10), version(MIGRATION9),
-                          version(MIGRATION8), version(MIGRATION)), ("11", "11", "10", "9", "8", "7"))
+        self.assertEqual((version(SCHEMA), version(MIGRATION12), version(MIGRATION11), version(MIGRATION10),
+                          version(MIGRATION9), version(MIGRATION8), version(MIGRATION)),
+                         ("12", "12", "11", "10", "9", "8", "7"))
 
     def test_schema11_reasons_and_hardware(self):
         body = re.sub(r"--[^\n]*", "", table_body(SCHEMA, "detections"))
         self.assertRegex(body, r"\n\s+status_reason\s+text,")
-        constraint = re.search(r"CONSTRAINT detections_status_reason CHECK \((.*?)\)\)\)\);", SCHEMA, re.S)
+        constraint = re.search(r"CONSTRAINT detections_status_reason CHECK \((CASE status.*?END)\)\);", SCHEMA, re.S)
         self.assertIsNotNone(constraint)
-        # the migration adds the same constraint as the fresh definition
+        # schema 12: the migration adds the same constraint as the fresh definition
         norm = lambda t: re.sub(r"\s+", " ", t).strip()
-        migrated = re.search(r"ADD CONSTRAINT detections_status_reason CHECK \((.*?)\)\)\);", MIGRATION11, re.S)
+        migrated = re.search(r"ADD CONSTRAINT detections_status_reason CHECK \((CASE status.*?END)\);", MIGRATION12, re.S)
         self.assertEqual(norm(migrated.group(1)), norm(constraint.group(1)))
-        for reason in ("security_relevant", "expected_benign", "staged_test", "rule_defect", "artefact"):
+        for reason in ("security_relevant", "staged_test", "expected_behaviour", "accepted_risk", "rule_defect", "artefact"):
             self.assertIn(reason, constraint.group(1))
+        # every resolved branch refuses a NULL reason (a NULL CHECK passes)
+        for outcome in ("confirmed", "benign", "false_positive"):
+            self.assertRegex(constraint.group(1), r"WHEN '%s' THEN status_reason IS NOT NULL AND" % outcome)
+        self.assertIn("'open', 'confirmed', 'benign', 'false_positive'", SCHEMA)
+        self.assertNotIn("no_empty_dfs_59", SCHEMA)
         self.assertIn("ADD COLUMN status_reason text;", MIGRATION11)
         self.assertRegex(table_body(SCHEMA, "ap_baselines"), r"\n\s+hw_from\s+timestamptz,")
         self.assertIn("ALTER TABLE ap_baselines ADD COLUMN hw_from timestamptz;", MIGRATION11)

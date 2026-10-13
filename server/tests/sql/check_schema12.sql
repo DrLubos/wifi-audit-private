@@ -1,12 +1,13 @@
--- Read-only check of the schema-11 migration (status reasons, the capture
--- hardware, hardware-bounded baselines, the sensor history corrections).
+-- Read-only check of the schema-11 and schema-12 migrations (the label
+-- outcomes and their reasons, the capture hardware, hardware-bounded
+-- baselines, the sensor history corrections).
 -- Runs as claude_ro:
 --
 --   docker compose exec -T db sh -c 'psql -X -v ON_ERROR_STOP=1 -U claude_ro -d "$POSTGRES_DB"' \
---     < tests/sql/check_schema11.sql
+--     < tests/sql/check_schema12.sql
 --
--- Expected: schema_version 11, the constraint and the trigger present, every
--- labelled event with a reason that fits its status (the constraint), every
+-- Expected: schema_version 12, the constraints and the trigger present, every
+-- labelled event with a reason that fits its outcome (the constraint), every
 -- sensor with a hardware record whose adapter and antenna are of the right
 -- kind, every baseline with statistics learned inside one hardware period
 -- (hw_from set, window_start >= hw_from), the three corrected annotations.
@@ -14,7 +15,8 @@
 \pset pager off
 
 SELECT (SELECT value FROM schema_meta WHERE key = 'schema_version') AS schema_version,
-       (SELECT count(*) FROM pg_constraint WHERE conname = 'detections_status_reason') AS reason_constraint,
+       (SELECT pg_get_constraintdef(oid) LIKE '%benign%' FROM pg_constraint WHERE conname = 'detections_status_reason') AS reason_constraint_12,
+       (SELECT count(*) FROM pg_constraint WHERE conname = 'capture_hardware_gain_check') AS gain_check,
        (SELECT count(*) FROM pg_trigger WHERE tgname = 'sensor_hardware_kinds' AND NOT tgisinternal) AS hw_trigger;
 
 SELECT status, status_reason, count(*) AS events FROM detections GROUP BY 1, 2 ORDER BY 1, 2;

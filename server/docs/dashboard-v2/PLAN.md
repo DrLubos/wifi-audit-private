@@ -1543,8 +1543,43 @@ hardware catalog), each stopped before its deploy:
   events; per network: 159, the largest group 13 episodes on 8 BSSIDs); a
   group shows the number of its BSSIDs, each member its own.
 
+*Schema 12 (2026-10-13, after the first 5a deploy stopped at
+`events_test.sql`).* The schema-11 reason constraint let `confirmed` /
+`false_positive` through with a NULL reason (`NULL IN (...)` is NULL, and a
+CHECK that evaluates to NULL passes); the box was otherwise complete at
+schema 11 (verified read-only). With the developer's decisions of that day,
+`ops/migrate_schema12.sh`: **three outcomes**, each with a required reason -
+confirmed (a real security event: `security_relevant`, `staged_test`),
+benign (the condition was real but no threat, e.g. NOCLIENTMFP on an open
+network: `expected_behaviour`, `accepted_risk`), false_positive (no real
+condition or a misattribution: `rule_defect`, `artefact`); every branch tests
+`IS NOT NULL`. False positive is offered on every event kind (5b). The
+59-entry plan is dropped from the CHECK. An antenna's gain must lie within
+-10 .. 30 dBi (the schema-11 seed stored a placeholder name and 106 dBi; the
+migration corrects it from `ANTENNA_NAME` / `ANTENNA_GAIN_DBI`).
+
+*Capture hardware in the upload phase (11.1, decided 2026-10-13, not built):*
+the sensor reports its **adapter** itself - USB VID:PID and MAC address as
+the identity, driver and interface as the display - and a change of it is
+recorded automatically as a hardware boundary. The **antenna** stays
+entered by a person as structured fields (name, gain_dbi, connector) in
+Settings > Sensors, never parsed from a free-text name. 5a's Settings and
+seed are the right approach until then.
+
 Deploy 5a (the migration before the api - the new api reads the new
-tables; the antenna of pi-fri goes into the migration):
+tables; the antenna of pi-fri goes into the migration). Schema 11 is on the
+box since 2026-10-13; what remains:
+
+```sh
+cd ~/wifi-audit && git pull && cd server
+ANTENNA_NAME='<name>' ANTENNA_GAIN_DBI=<dBi> \
+  sh ops/migrate_schema12.sh 2>&1 | tee ~/migrate12-$(date -u +%Y%m%dT%H%MZ).log
+echo "WRITE_TOKEN=$(openssl rand -hex 32)" >> .env     # copy it into the password manager
+docker compose build api && docker compose up -d api
+docker compose build frontend && docker compose up -d frontend
+```
+
+The first deploy, for the record:
 
 ```sh
 cd ~/wifi-audit && git pull && cd server
@@ -1570,6 +1605,11 @@ with config delivery, ranges beyond 30 days, live updates, login.
 ## 11. Later phases (designed now, built later)
 
 ### 11.1 Upload after every poll + config delivery
+
+Capture hardware (decided 2026-10-13): the upload reports the adapter (USB
+VID:PID + MAC as identity, driver / interface for display) and records an
+adapter change as a `sensor_hardware` boundary itself; the antenna stays
+human-entered (structured name, gain_dbi, connector).
 
 `POST /api/ingest/{polls,observations,devices,…,ap_load_hourly}` with a
 per-sensor token (`sensor_tokens(sensor_id, token_hash)`); idempotent on the

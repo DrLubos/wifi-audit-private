@@ -16,15 +16,18 @@ NOW = datetime(2026, 10, 12, 18, 0, tzinfo=timezone.utc)
 
 
 class Labels(unittest.TestCase):
-    def test_reasons_fit_the_status(self):
-        self.assertEqual(w.parse_status({"status": "confirmed", "reason": "expected_benign", "note": " open net "}),
-                         ("confirmed", "expected_benign", "open net"))
+    def test_three_outcomes_each_with_its_reason(self):
+        self.assertEqual(w.parse_status({"status": "benign", "reason": "expected_behaviour", "note": " open net "}),
+                         ("benign", "expected_behaviour", "open net"))
+        self.assertEqual(w.parse_status({"status": "confirmed", "reason": "staged_test"}),
+                         ("confirmed", "staged_test", None))
         self.assertEqual(w.parse_status({"status": "false_positive", "reason": "artefact"}),
                          ("false_positive", "artefact", None))
         self.assertEqual(w.parse_status({"status": "open"}), ("open", None, None))
-        for bad in ({"status": "confirmed"}, {"status": "confirmed", "reason": "rule_defect"},
+        for bad in ({"status": "confirmed"}, {"status": "benign"}, {"status": "false_positive", "reason": None},
+                    {"status": "confirmed", "reason": "expected_behaviour"}, {"status": "benign", "reason": "rule_defect"},
                     {"status": "false_positive", "reason": "staged_test"}, {"status": "open", "reason": "artefact"},
-                    {"status": "closed"}, {"status": "confirmed", "reason": "staged_test", "note": "x" * 1001}):
+                    {"status": "closed"}, {"status": "benign", "reason": "accepted_risk", "note": "x" * 1001}):
             with self.subTest(bad=bad), self.assertRaises(w.Invalid):
                 w.parse_status(bad)
 

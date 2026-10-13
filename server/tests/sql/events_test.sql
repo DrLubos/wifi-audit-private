@@ -33,8 +33,9 @@
 --      duplicates stored before schema 10 keeps the labels and notes (an
 --      operator's label wins over open, the later of two labels), logs each
 --      merge, leaves an ambiguous row alone and finds nothing the second time;
---   6. schema 11: a label needs a reason that fits it (the constraint), and
---      the merge carries the winning label's reason.
+--   6. schemas 11-12: each of the three outcomes (confirmed, benign,
+--      false_positive) needs a reason of its own, never NULL (the
+--      constraint), and the merge carries the winning label's reason.
 
 \set ON_ERROR_STOP on
 BEGIN;
@@ -138,9 +139,10 @@ VALUES
 
 -- a detector's row: never touched by refresh_events()
 INSERT INTO detections (id, sensor_id, kind, ts, type, severity, device_key, mac, summary, evidence,
-                        status, status_at, status_note, updated_at)
+                        status, status_at, status_reason, status_note, updated_at)
 VALUES (1000, 1, 'detection', '2026-09-20 10:00+00', 'deauth_flood', 'low', 'A1', 'A8:00:00:00:00:01',
-        'detector row', '{}', 'confirmed', '2026-09-21 08:00+00', 'checked by hand', '2026-09-21 08:00+00');
+        'detector row', '{}', 'confirmed', '2026-09-21 08:00+00', 'staged_test', 'checked by hand',
+        '2026-09-21 08:00+00');
 
 CREATE FUNCTION pg_temp.check_rows(label text, got text, want text) RETURNS void
 LANGUAGE plpgsql AS $$
@@ -239,13 +241,16 @@ END $$;
 UPDATE detections SET status = 'false_positive', status_at = '2026-09-21 09:00+00', status_reason = 'rule_defect',
                       status_note = 'lab test'
 WHERE type = 'NOCLIENTMFP' AND ts = '2026-09-20 10:05+00';
-UPDATE detections SET status = 'confirmed', status_at = '2026-09-21 09:00+00', status_reason = 'expected_benign',
+UPDATE detections SET status = 'benign', status_at = '2026-09-21 09:00+00', status_reason = 'expected_behaviour',
                       status_note = 'known outage'
 WHERE type = 'sensor_outage' AND ts = '2026-09-20 11:10:30+00';
--- schema 11: a label needs a reason that fits it
+-- schema 12: every outcome needs a reason of its own (a NULL reason too is refused)
 DO $$
-DECLARE bad text[][] := ARRAY[['confirmed', NULL], ['confirmed', 'rule_defect'], ['false_positive', 'staged_test'],
-                              ['open', 'artefact']];
+DECLARE bad text[][] := ARRAY[['confirmed', NULL], ['benign', NULL], ['false_positive', NULL],
+                              ['confirmed', 'rule_defect'], ['confirmed', 'expected_behaviour'],
+                              ['benign', 'security_relevant'], ['benign', 'artefact'],
+                              ['false_positive', 'staged_test'], ['false_positive', 'accepted_risk'],
+                              ['open', 'artefact'], ['closed', NULL]];
   i int;
 BEGIN
   FOR i IN 1 .. array_length(bad, 1) LOOP
@@ -281,7 +286,7 @@ SELECT pg_temp.check_rows('labels kept', $$
   WHERE d.status <> 'open'$$, $$
   VALUES ('deauth_flood', '10:00:00', NULL, 'detector row', 'confirmed', 'checked by hand', true),
          ('NOCLIENTMFP', '10:05:00', '10:50:00', 'Client without MFP (3 alerts)', 'false_positive', 'lab test', true),
-         ('sensor_outage', '11:10:30', '11:31:00', 'Sensor not collecting', 'confirmed', 'known outage', true) $$);
+         ('sensor_outage', '11:10:30', '11:31:00', 'Sensor not collecting', 'benign', 'known outage', true) $$);
 DO $$ BEGIN
   IF (SELECT count(*) FROM detections) <> 11 THEN
     RAISE EXCEPTION 'events: FAIL (% rows after the changes, expected 11)', (SELECT count(*) FROM detections);
@@ -309,7 +314,7 @@ BEGIN
     RAISE EXCEPTION 'events: FAIL (the client''s alert returned %)', r;
   END IF;
 END $$;
-UPDATE detections SET status = 'confirmed', status_at = '2026-09-21 10:00+00', status_reason = 'expected_benign',
+UPDATE detections SET status = 'benign', status_at = '2026-09-21 10:00+00', status_reason = 'expected_behaviour',
                       status_note = 'seen as a client'
 WHERE type = 'NOCLIENTMFP' AND ts = '2026-09-20 13:10+00' AND mac IS NULL AND device_key IS NULL;
 CREATE TEMP TABLE c2_row AS SELECT id FROM detections WHERE type = 'NOCLIENTMFP' AND ts = '2026-09-20 13:10+00';
@@ -337,7 +342,7 @@ SELECT pg_temp.check_rows('the AP''s episode adopted the row without a subject',
   SELECT d.type, d.device_key, d.mac::text, to_char(d.ts AT TIME ZONE 'UTC', 'HH24:MI'), d.status, d.status_note,
          d.id = (SELECT id FROM c2_row) AS same_row
   FROM detections d WHERE d.type = 'NOCLIENTMFP' AND d.ts >= '2026-09-20 13:00+00'$$, $$
-  VALUES ('NOCLIENTMFP', 'C2', '33:00:00:00:00:03', '13:10', 'confirmed', 'seen as a client', true) $$);
+  VALUES ('NOCLIENTMFP', 'C2', '33:00:00:00:00:03', '13:10', 'benign', 'seen as a client', true) $$);
 SELECT pg_temp.check_rows('A1 re-typed as a client keeps its episodes', $$
   SELECT device_key, to_char(ts AT TIME ZONE 'UTC', 'HH24:MI') FROM detections
   WHERE kind = 'kismet' AND device_key = 'A1'$$, $$
@@ -393,7 +398,7 @@ DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM merge_duplicate_kismet_events(1)) THEN
     RAISE EXCEPTION 'events: FAIL (a second merge found more)';
   END IF;
-  RAISE NOTICE 'events: PASS (security and sensor periods; Kismet, config, sensor and rule events; no client MAC; idempotent; labels survive; schema 10: re-typed devices, adoption, the merge of old duplicates; schema 11: reasons fit their status and survive a merge)';
+  RAISE NOTICE 'events: PASS (security and sensor periods; Kismet, config, sensor and rule events; no client MAC; idempotent; labels survive; schema 10: re-typed devices, adoption, the merge of old duplicates; schema 12: three outcomes, each with a required reason that survives a merge)';
 END $$;
 
 ROLLBACK;

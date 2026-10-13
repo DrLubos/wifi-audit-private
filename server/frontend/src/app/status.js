@@ -39,6 +39,7 @@ export const SEVERITY = {
 export const STATUS = {
   open: { label: "Open", cls: "neu" },
   confirmed: { label: "Confirmed", cls: "ok" },
+  benign: { label: "Benign", cls: "neu" },
   false_positive: { label: "False positive", cls: "info" },
 };
 

@@ -20,8 +20,8 @@ test("feed cells", () => {
   eq(timeTitle({ ts: "2026-10-06T19:33:15Z", ts_end: "2026-10-10T21:53:47Z" }, TZ), "6 Oct 21:33 – 10 Oct 23:53");
   eq(timeTitle({ ts: "2026-10-05T05:03:50Z", ts_end: null }, TZ), undefined);
   eq(headText({ open: 271, total: 271 }), "271 open · 271 in total · newest first");
-  eq(statusChips({ open: 3, confirmed: 241, false_positive: 68 }).map((c) => c.label),
-     ["Open 3", "Confirmed 241", "False positive 68"]);
+  eq(statusChips({ open: 3, confirmed: 241, benign: 12, false_positive: 68 }).map((c) => c.label),
+     ["Open 3", "Confirmed 241", "Benign 12", "False positive 68"]);
   eq(pagerText(2, 50, 50, 38, 38), "51–100 of 38 · only the newest are loaded, older ones on request");
   eq(pagerText(1, 50, 50, 159, 271), "1–50 of 159 rows · 271 events, repeated low ones grouped per network and day");
   eq(pagerText(1, 50, 0, 0, 0), "no event matches the filters");
