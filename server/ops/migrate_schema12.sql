@@ -4,7 +4,8 @@
 --   1. checks: schema 11, no labelled event yet (none exists: the write
 --      endpoints are not deployed); lock_timeout 10 s
 --   2. the antenna of the migration-11 seed, corrected with the values given
---      (psql variables antenna_name, antenna_gain_dbi; '' = keep)
+--      (psql variables antenna_name, antenna_gain_dbi; '' = keep, 'unknown' =
+--      NULL - the gain is not known)
 --   3. detections: status gains 'benign'; the reason constraint becomes
 --      NULL-safe (schema 11 let confirmed / false_positive pass with a NULL
 --      reason - a CHECK that evaluates to NULL passes) with the three
@@ -33,14 +34,15 @@ END $$;
 
 UPDATE capture_hardware h
 SET name = coalesce(nullif(:'antenna_name', ''), h.name),
-    gain_dbi = coalesce(nullif(:'antenna_gain_dbi', '')::real, h.gain_dbi)
+    gain_dbi = CASE WHEN :'antenna_gain_dbi' = 'unknown' THEN NULL
+                    ELSE coalesce(nullif(:'antenna_gain_dbi', '')::real, h.gain_dbi) END
 WHERE h.id IN (SELECT x.antenna_id FROM sensor_hardware x WHERE x.created_by = 'seed');
 DO $$
 DECLARE r record;
 BEGIN
   SELECT id, name, gain_dbi INTO r FROM capture_hardware WHERE NOT (gain_dbi BETWEEN -10 AND 30) LIMIT 1;
   IF FOUND THEN
-    RAISE EXCEPTION 'migrate_schema12: catalog row % (%) has a gain of % dBi - give ANTENNA_GAIN_DBI (and ANTENNA_NAME)',
+    RAISE EXCEPTION 'migrate_schema12: catalog row % (%) has a gain of % dBi - give its real ANTENNA_GAIN_DBI (-10 .. 30), or unknown',
       r.id, r.name, r.gain_dbi;
   END IF;
 END $$;

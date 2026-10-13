@@ -5,7 +5,8 @@
 #     sh ops/migrate_schema12.sh 2>&1 | tee ~/migrate12-$(date -u +%Y%m%dT%H%MZ).log
 #
 # ANTENNA_NAME / ANTENNA_GAIN_DBI correct the antenna the schema-11 seed
-# stored (empty = keep; the gain must end within -10 .. 30 dBi).
+# stored (empty = keep; the gain must end within -10 .. 30 dBi, or
+# ANTENNA_GAIN_DBI=unknown when it is not known - stored as NULL).
 #   1. checks schema_version 11
 #   2. ops/migrate_schema12.sql - ONE transaction (the antenna, the three
 #      label outcomes with NULL-safe reasons, the plan and gain checks)
