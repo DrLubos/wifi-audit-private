@@ -60,6 +60,17 @@ class SqlFiles(unittest.TestCase):
                     self.assertIn(name, queries.load(loads[var]))
         self.assertGreater(used, 0)
 
+    def test_no_route_module_defines_a_name_twice(self):
+        # a second def silently replaces the first (the events feed called the export's _csv and 500ed)
+        import ast
+        for path in glob.glob(os.path.join(ROUTES, "routes", "*.py")):
+            with open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read())
+            names = [n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef))]
+            dup = sorted({n for n in names if names.count(n) > 1})
+            with self.subTest(route=os.path.basename(path)):
+                self.assertEqual(dup, [])
+
     def test_parse_and_to_psql(self):
         qs = queries.parse("-- file comment\n-- name: a\nSELECT %(x)s::int, '%%' AS p;\n\n-- name: b_2\nSELECT 1\n")
         self.assertEqual(list(qs), ["a", "b_2"])

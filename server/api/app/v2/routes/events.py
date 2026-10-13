@@ -124,7 +124,7 @@ def events(request: Request, acc=Depends(deps.get_account), sensor: str = Depend
     return deps.respond(body, tag)
 
 
-def _csv(name, query, build, acc):
+def _csv_response(name, query, build, acc):
     with deps.connection() as conn:
         rows = deps.run(conn, _Q, query, account_id=acc["id"])
     return Response(content=build(rows).encode("utf-8"), media_type="text/csv; charset=utf-8",
@@ -136,14 +136,14 @@ def _csv(name, query, build, acc):
 def export_labels(acc=Depends(deps.get_account)):
     """The RQ2 dataset: every event with its current outcome and reason (open =
     not judged yet). Behind the write token (the labels are research data)."""
-    return _csv("labels", "export_labels", export.labels_csv, acc)
+    return _csv_response("labels", "export_labels", export.labels_csv, acc)
 
 
 @router.get("/export/label-history.csv", dependencies=[Depends(deps.require_write)])
 def export_label_history(acc=Depends(deps.get_account)):
     """Every change of a label, one row per change (old and new outcome, reason
     and note) - the history behind labels.csv."""
-    return _csv("label-history", "export_history", export.history_csv, acc)
+    return _csv_response("label-history", "export_history", export.history_csv, acc)
 
 
 @router.get("/{event_id}")
