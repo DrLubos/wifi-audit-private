@@ -32,3 +32,7 @@
 .v2 .empty { margin: 0; padding: 4px 18px 14px; font-size: 14px; }
 .v2 .na { display: block; margin-top: 2px; }
 .v2 .sib { display: block; font-weight: 400; white-space: normal; max-width: 230px; }   /* wraps in a nowrap table */
+.v2 .managed-ask { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; white-space: normal; }
+.v2 .managed-ask .sel-sm { height: 36px; width: auto; }
+.v2 .rogue .allow-sm { height: 28px; padding: 0 10px; font-size: 12px; margin-left: 6px; }
+.v2 .table-card .bad-text, .v2 .rogue .bad-text { color: var(--bad-fg); }

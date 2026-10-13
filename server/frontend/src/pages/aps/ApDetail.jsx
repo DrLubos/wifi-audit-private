@@ -5,7 +5,7 @@
 // channel (7 days), the configuration history, its events and the note.
 // A Kismet device key of the previous pages (/aps/<key>) redirects here.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import Heatmap from "../../charts/Heatmap.jsx";
 import { RAMP_COLORS, rampIndex, rampLabels } from "../../charts/ramp.js";
@@ -14,6 +14,7 @@ import ErrorBox from "../../components/ErrorBox.jsx";
 import Skeleton from "../../components/Skeleton.jsx";
 import { ep } from "../../data/keys.js";
 import { useQuery } from "../../data/query.js";
+import { useWrite } from "../../data/write.js";
 import { useAccount } from "../../hooks/useAccount.js";
 import { useNow } from "../../hooks/useNow.js";
 import { fmtDateTime, fmtInt, fmtPct } from "../../format.js";
@@ -29,7 +30,9 @@ import UtilColumns from "./UtilColumns.jsx";
 import "./aps.css";
 
 const COLORS = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)"];
-const LOCKED = "Write actions need the write token (dashboard phase 5)";
+const LOCKED = "Unlock with the write token in Settings first";
+// after a classification: the rule events and every AP list change
+const REFETCH_CLASS = ["ap|", "aps", "events", "event|", "networks", "overview"];
 const HISTORY_SHOWN = 12;
 const EVENTS_SHOWN = 5;
 const AXIS = ["00:00", "06:00", "12:00", "18:00", "23:00"];
@@ -88,21 +91,7 @@ function ApPage({ bssid }) {
           </span>
           {id.sibling && <span className="muted small">{siblingText(id.sibling)} – a hint, the BSSIDs stay separate APs</span>}
         </div>
-        <div role="group" aria-label="AP classification" className="fl">
-          <span>Classification in this account</span>
-          <div className="seg seg-lg" title={LOCKED}>
-            {CLASSES.map((c) => (
-              <button key={c} type="button" aria-pressed={d.classification.value === c} aria-disabled="true"
-                      className={d.classification.value === c && c === "suspicious" ? "sus" : undefined}>
-                {classBadge(c).text}
-              </button>
-            ))}
-          </div>
-          <span className="muted tiny">
-            {d.classification.by === "manual" ? `set by hand ${fmtDateTime(d.classification.at, tz)}` : "set by the rules"}
-            {" · changing it needs the write token"}
-          </span>
-        </div>
+        <Classification bssid={bssid} c={d.classification} tz={tz} />
       </div>
 
       <div className="row-wrap">
@@ -123,16 +112,7 @@ function ApPage({ bssid }) {
         <Events events={d.events} bssid={bssid} tz={tz} />
       </div>
 
-      <section className="card panel" aria-labelledby="note-h" style={{ gap: 10 }}>
-        <h2 id="note-h">Note</h2>
-        <label htmlFor="ap-note" className="muted tiny">Internal note about this AP (visible in the account)</label>
-        <textarea id="ap-note" rows={2} className="note" defaultValue={d.note.text ?? ""} readOnly title={LOCKED}
-                  placeholder="No note yet" />
-        <div className="note-foot">
-          <button type="button" className="btn" disabled title={LOCKED}>Save</button>
-          <span className="muted tiny">Saving requires the write token until login exists.</span>
-        </div>
-      </section>
+      <Note bssid={bssid} note={d.note} tz={tz} />
     </main>
   );
 }
@@ -379,6 +359,80 @@ function Events({ events, bssid, tz }) {
           </button>
         )}
         <Link to={`/events?q=${encodeURIComponent(bssid)}&status=all`} className="small">All events of this AP</Link>
+      </div>
+    </section>
+  );
+}
+
+// the manual classification (PUT /aps/{bssid}/classification): a class, or
+// back to the rules; the rule events are re-derived by the api
+function Classification({ bssid, c, tz }) {
+  const w = useWrite();
+  const [state, setState] = useState({ busy: false, error: null });
+  const put = async (value) => {
+    setState({ busy: true, error: null });
+    try {
+      await w.send("PUT", `/api/v2/aps/${bssid}/classification`, { classification: value }, REFETCH_CLASS);
+      setState({ busy: false, error: null });
+    } catch (e) {
+      setState({ busy: false, error: e.message });
+    }
+  };
+  const locked = !w.unlocked || state.busy;
+  return (
+    <div role="group" aria-label="AP classification" className="fl">
+      <span>Classification in this account</span>
+      <div className="seg seg-lg" title={!w.unlocked ? LOCKED : undefined}>
+        {CLASSES.map((k) => (
+          <button key={k} type="button" aria-pressed={c.value === k} aria-disabled={locked ? "true" : undefined}
+                  className={c.value === k && k === "suspicious" ? "sus" : undefined}
+                  onClick={() => { if (!locked && !(c.by === "manual" && c.value === k)) put(k); }}>
+            {classBadge(k).text}
+          </button>
+        ))}
+      </div>
+      <span className="muted tiny">
+        {c.by === "manual" ? `set by hand ${fmtDateTime(c.at, tz)}` : "set by the rules"}
+        {c.by === "manual" && w.unlocked && (
+          <> · <button type="button" className="link-btn" disabled={state.busy} onClick={() => put(null)}>back to the rules</button></>
+        )}
+        {!w.unlocked && " · changing it needs the write token"}
+      </span>
+      {state.error && <span className="bad-text tiny" role="alert">{state.error}</span>}
+    </div>
+  );
+}
+
+function Note({ bssid, note, tz }) {
+  const w = useWrite();
+  const [text, setText] = useState(note.text ?? "");
+  const [state, setState] = useState({ busy: false, ok: null, error: null });
+  useEffect(() => { setText(note.text ?? ""); }, [note.text]);
+  const changed = text.trim() !== (note.text ?? "");
+  const save = async () => {
+    setState({ busy: true, ok: null, error: null });
+    try {
+      await w.send("PUT", `/api/v2/aps/${bssid}/note`, { note: text }, ["ap|"]);
+      setState({ busy: false, ok: "Saved.", error: null });
+    } catch (e) {
+      setState({ busy: false, ok: null, error: e.message });
+    }
+  };
+  const why = !w.unlocked ? LOCKED : !changed ? "Nothing changed" : undefined;
+  return (
+    <section className="card panel" aria-labelledby="note-h" style={{ gap: 10 }}>
+      <h2 id="note-h">Note</h2>
+      <label htmlFor="ap-note" className="muted tiny">Internal note about this AP (visible in the account)</label>
+      <textarea id="ap-note" rows={2} className="note" value={text} maxLength={2000} readOnly={!w.unlocked}
+                title={!w.unlocked ? LOCKED : undefined} placeholder="No note yet" onChange={(e) => setText(e.target.value)} />
+      <div className="note-foot">
+        <button type="button" className="btn" disabled={Boolean(why) || state.busy} title={why} onClick={save}>
+          {state.busy ? "Saving…" : "Save"}
+        </button>
+        <span className="muted tiny">
+          {state.error ? <span className="bad-text">{state.error}</span> : state.ok
+            ?? (note.at ? `last saved ${fmtDateTime(note.at, tz)}` : !w.unlocked ? "Saving requires the write token until login exists." : "")}
+        </span>
       </div>
     </section>
   );

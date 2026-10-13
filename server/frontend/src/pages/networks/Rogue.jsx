@@ -1,9 +1,10 @@
 // The rogue banner (Networks board): unknown BSSIDs that broadcast a managed
 // SSID (classification suspicious), with the open event; "Add to allowed
-// BSSIDs" needs the write token (phase 5).
+// BSSIDs" per BSSID (the write token; the same action as on the event).
 
 import { Link } from "react-router-dom";
 import { fmtDateTime, fmtDbm } from "../../format.js";
+import AllowButton from "../../components/AllowButton.jsx";
 
 const SHOWN = 3;
 
@@ -31,16 +32,14 @@ export default function Rogue({ rogue, tz }) {
         </h2>
         {rogue.slice(0, SHOWN).map((r) => (
           <span className="line" key={r.bssid}>
-            <b>{r.ssid}</b> from <span className="mono">{r.bssid}</span> · {line(r, tz)}
+            <b>{r.ssid}</b> from <span className="mono">{r.bssid}</span> · {line(r, tz)}{" "}
+            <AllowButton bssid={r.bssid} ssid={r.ssid} className="btn2 allow-sm" />
           </span>
         ))}
         {rogue.length > SHOWN && <span className="line">+ {rogue.length - SHOWN} more</span>}
       </div>
       <div className="actions">
         {first && <Link to={`/events?id=${first.event_id}`} className="btn">Open event</Link>}
-        <button type="button" className="btn2" disabled title="Write actions need the write token (dashboard phase 5)">
-          Add to allowed BSSIDs
-        </button>
       </div>
     </section>
   );

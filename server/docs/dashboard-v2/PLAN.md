@@ -1597,6 +1597,29 @@ docker compose build frontend && docker compose up -d frontend
 read-only): `tests/sql/check_schema11.sql`, the smoke test (every write
 refuses a missing or wrong token), the live check of /settings.
 
+**5b as built (2026-10-13).** Labels: one "Label" button per row (a group row:
+"Label all", every event of the row; the checkboxes and "Select every row of
+this page": the bulk bar), the form below the row - Confirmed / Benign /
+False positive with the outcome's two reasons (required) and an optional
+note (the same for a bulk; an empty note keeps the stored one), "Open
+again" when relabelling; on every event kind. `POST /events/{id}/status`,
+`POST /events/status` (one audit row per event). Three buttons per row
+pushed the table past 1440 px, hence one button and the outcome in the
+form. The AP page: the classification control (a click sets it, "back to
+the rules" clears it; the rule events are re-derived) and the note. Networks:
+"Friendly" adds the network; "Managed" asks for the expected security and
+allows the BSSIDs seen in the period (without them every BSSID of the SSID
+would be classified suspicious). "Add to allowed BSSIDs" on the rule event
+and per BSSID on the rogue banner (`components/AllowButton.jsx`).
+
+Deploy 5b (no schema change):
+
+```sh
+cd ~/wifi-audit && git pull && cd server
+docker compose build api && docker compose up -d api
+docker compose build frontend && docker compose up -d frontend
+```
+
 Out of scope for now (designed in 11, not built): upload after every poll
 with config delivery, ranges beyond 30 days, live updates, login.
 

@@ -110,16 +110,54 @@ export function pagerText(page, limit, shown, rows, events) {
   return `${range} of ${fmtInt(rows)} rows · ${fmtInt(events)} events, repeated low ones grouped per network and day`;
 }
 
-// the actions an event offers (locked until the write token, phase 5): an open
-// detection or Kismet alert can be confirmed or marked a false positive, an
-// open configuration change or sensor event only confirmed
-export function actionsFor(e) {
-  if (e.status !== "open") return [];
-  return e.kind === "detection" || e.kind === "kismet" ? ["Confirm", "False positive"] : ["Confirm"];
+// The three outcomes of a label and their reasons (schema 12; RQ2 splits by
+// them) - the same lists as api/app/v2/writes.py REASONS.
+export const OUTCOMES = [
+  { key: "confirmed", action: "Confirm", label: "Confirmed", hint: "a real security event",
+    reasons: [["security_relevant", "Security-relevant"], ["staged_test", "Staged test (own attack run)"]] },
+  { key: "benign", action: "Benign", label: "Benign", hint: "the condition was real, but no threat",
+    reasons: [["expected_behaviour", "Expected behaviour"], ["accepted_risk", "Accepted risk"]] },
+  { key: "false_positive", action: "False positive", label: "False positive", hint: "no real condition, or misattributed",
+    reasons: [["rule_defect", "Rule defect or misattribution"], ["artefact", "Sensor or environment artefact"]] },
+];
+const REASON_TEXT = Object.fromEntries(OUTCOMES.flatMap((o) => o.reasons));
+
+export function reasonText(reason) {
+  return REASON_TEXT[reason] ?? reason ?? "";
 }
-// a group's row: the same, for every event in it (a later bulk label)
-export function groupActions(e) {
-  return actionsFor(e).map((a) => (a === "Confirm" ? "Confirm all" : "All false positive"));
+
+// "Benign · Expected behaviour · open guest network"
+export function labelText(e) {
+  if (!e.status || e.status === "open") return null;
+  const o = OUTCOMES.find((x) => x.key === e.status);
+  return [o?.label ?? e.status, reasonText(e.status_reason), e.status_note].filter(Boolean).join(" · ");
+}
+
+// the action of a row: Label (any of the three outcomes, on every kind -
+// decided 2026-10-13; chosen in the form) or, once labelled, Relabel; one
+// button keeps the table within the page
+export function actionsFor(e) {
+  return e.status === "open" ? ["label"] : ["relabel"];
+}
+export function actionText(key, group = false) {
+  if (key === "relabel") return group ? "Relabel all" : "Relabel";
+  if (key === "label") return group ? "Label all" : "Label";
+  const o = OUTCOMES.find((x) => x.key === key);
+  return group ? `${o.action} all` : o.action;
+}
+
+// the label body: {status, reason, note}, or {error}
+export function labelBody(outcome, reason, note) {
+  if (outcome === "open") return { status: "open", reason: null, note: note?.trim() || null };
+  const o = OUTCOMES.find((x) => x.key === outcome);
+  if (!o) return { error: "pick an outcome" };
+  if (!o.reasons.some(([k]) => k === reason)) return { error: `pick why it is ${o.label.toLowerCase()}` };
+  return { status: outcome, reason, note: note?.trim() || null };
+}
+
+// the events a selection or a group row labels
+export function idsOf(rows) {
+  return [...new Set(rows.flatMap((e) => (e.group ? e.group.members.map((m) => m.id) : [e.id])))].sort((a, b) => a - b);
 }
 
 const pct = (v) => `${Math.round(v * 10) / 10}`;

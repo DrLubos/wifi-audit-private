@@ -1,6 +1,6 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
-  actionsFor, apCell, bssidCell, groupActions, groupText, headText, pagerText, parseStatus, rowOf, selected, severityBadge,
+  actionText, actionsFor, apCell, bssidCell, groupText, idsOf, labelBody, labelText, reasonText, headText, pagerText, parseStatus, rowOf, selected, severityBadge,
   statusBadge, statusChips, statusParam, timeTitle, typeText, whoRows, whyRows,
 } from "./events.js";
 
@@ -25,11 +25,26 @@ test("feed cells", () => {
   eq(pagerText(2, 50, 50, 38, 38), "51–100 of 38 · only the newest are loaded, older ones on request");
   eq(pagerText(1, 50, 50, 159, 271), "1–50 of 159 rows · 271 events, repeated low ones grouped per network and day");
   eq(pagerText(1, 50, 0, 0, 0), "no event matches the filters");
-  eq(actionsFor({ status: "open", kind: "kismet" }), ["Confirm", "False positive"]);
-  eq(actionsFor({ status: "open", kind: "sensor" }), ["Confirm"]);
-  eq(actionsFor({ status: "confirmed", kind: "detection" }), []);
-  eq(groupActions({ status: "open", kind: "kismet" }), ["Confirm all", "All false positive"]);
-  eq(groupActions({ status: "open", kind: "config" }), ["Confirm all"]);
+  // every kind gets all three outcomes (decided 2026-10-13); a labelled event is relabelled
+  eq(actionsFor({ status: "open", kind: "sensor" }), ["label"]);
+  eq(actionsFor({ status: "benign", kind: "kismet" }), ["relabel"]);
+  eq(["label", "relabel", "confirmed", "benign", "false_positive"].map((k) => actionText(k)),
+     ["Label", "Relabel", "Confirm", "Benign", "False positive"]);
+  eq([actionText("label", true), actionText("benign", true)], ["Label all", "Benign all"]);
+});
+
+test("labels: three outcomes, each with its own reason", () => {
+  eq(labelBody("benign", "expected_behaviour", " open guest network "),
+     { status: "benign", reason: "expected_behaviour", note: "open guest network" });
+  eq(labelBody("confirmed", "expected_behaviour", "").error, "pick why it is confirmed");
+  eq(labelBody("false_positive", null, "").error, "pick why it is false positive");
+  eq(labelBody("open", null, ""), { status: "open", reason: null, note: null });
+  eq(labelText({ status: "benign", status_reason: "expected_behaviour", status_note: "open network" }),
+     "Benign · Expected behaviour · open network");
+  eq(labelText({ status: "open" }), null);
+  eq(reasonText("artefact"), "Sensor or environment artefact");
+  // a group row labels all its events
+  eq(idsOf([{ id: 9, group: { members: [{ id: 9 }, { id: 7 }] } }, { id: 3 }, { id: 7 }]), [3, 7, 9]);
 });
 
 test("status filter: Open by default, all, a list", () => {

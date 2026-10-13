@@ -24,3 +24,24 @@
 .v2 .events-table .ev-span { display: block; padding: 2px 0 0 14px; }
 .v2 .events-table tr.ev-member { background: #FAFAF8; }               /* an open one: its severity's, inline */
 .v2 .events-table tr.ev-member td:first-child { padding-left: 24px; box-shadow: inset 3px 0 0 var(--border); }
+.v2 .events-table .pick { width: 18px; height: 18px; margin: 0; }
+.v2 .bulk-bar { padding: 12px 18px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.v2 .label-form { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: flex-start; flex-basis: 100%; }
+.v2 .label-outcomes, .v2 .label-reasons { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.v2 .label-outcomes legend, .v2 .label-reasons legend { padding: 0 0 4px; }
+.v2 .label-outcomes { flex: 1 1 320px; }
+.v2 .label-form .plan {
+  display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); cursor: pointer;
+}
+.v2 .label-form .plan.on { border-color: #9db6d8; background: #f3f7fc; }
+.v2 .label-form .plan input { width: 18px; height: 18px; margin: 2px 0 0; }
+.v2 .label-form .stack { display: flex; flex-direction: column; gap: 2px; }
+.v2 .label-form .check { display: inline-flex; gap: 8px; align-items: center; min-height: 36px; cursor: pointer; }
+.v2 .label-form .check input { width: 18px; height: 18px; margin: 0; }
+.v2 .label-note { flex: 1 1 280px; }
+.v2 .label-note .in { height: 40px; }
+.v2 .label-foot { flex-basis: 100%; display: flex; gap: 10px; justify-content: flex-end; align-items: center; }
+.v2 .events-table .bad-text, .v2 .bulk-bar .bad-text, .v2 .ev-actions .bad-text { color: var(--bad-fg); }
+.v2 .btn2.btn-lg { height: 40px; padding: 0 16px; font-size: 14px; }
+.v2 .events-table .label-form { max-width: 1060px; }
