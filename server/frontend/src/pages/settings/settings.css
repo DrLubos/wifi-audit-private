@@ -1,6 +1,5 @@
 /* Settings (boards/Settings.dc.html, SettingsSensors.dc.html) and the
    write-token box (also on other pages later). */
-.v2.settings { max-width: 1100px; }
 .v2 .set-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--border); }
 .v2 .set-tabs a, .v2 .set-tab-later {
   display: inline-flex; align-items: center; height: 44px; padding: 0 14px; border-bottom: 2px solid transparent;
@@ -44,11 +43,10 @@
 .v2 .add-allowed { display: flex; gap: 6px; padding-top: 6px; }
 .v2 .in-sm { height: 36px; width: 200px; font-size: 13px; }
 .v2 .new-tag { margin-left: 8px; }
-.v2 .add-net, .v2 .hw-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
-.v2 .add-net .in, .v2 .hw-form .in { height: 40px; }
+.v2 .add-net { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.v2 .add-net .in { height: 40px; }
 .v2 .btn2.btn-lg { height: 40px; padding: 0 16px; font-size: 14px; }
 .v2 .add-btn { border-color: var(--link); color: var(--link); font-weight: 500; }
-.v2 .hw-title { flex-basis: 100%; }
 .v2 .bands { border: 0; margin: 0; padding: 0; display: flex; gap: 10px; align-items: center; }
 .v2 .bands legend { padding: 0 0 4px; }
 .v2 .num { width: 90px; height: 40px; }
@@ -85,7 +83,17 @@
 .v2 .plan-extra { padding-left: 42px; }
 .v2 .cfg-side { flex: 1 1 300px; display: flex; flex-direction: column; gap: 14px; }
 .v2 .cfg-side .fl { color: var(--text); font-size: 13px; }
-.v2 .meta-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; padding: 6px 0; }
-.v2 .meta-row .in { height: 40px; }
-.v2 .meta-name { width: 80px; padding-bottom: 10px; }
 .v2.settings .nowrap { white-space: nowrap; }
+
+/* sensor list, capture hardware, modals */
+.v2 .set-head-row { flex-direction: row; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.v2 .set-head-row .stack { display: flex; flex-direction: column; gap: 4px; flex: 1 1 360px; min-width: 0; }
+.v2 .small-btn { height: 32px; padding: 0 12px; font-size: 13px; }
+.v2 .hw-lines { display: flex; flex-direction: column; }
+.v2 .hw-line { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border-soft); }
+.v2 .hw-line:last-child { border-bottom: 0; }
+.v2 .hw-line.picked { background: #f3f7fc; }
+.v2 .hw-sensor { min-width: 80px; }
+.v2 .hw-now { flex: 1 1 300px; min-width: 0; }
+.v2 .modal-form { display: flex; flex-direction: column; gap: 14px; }
+.v2 .antenna-fields { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }

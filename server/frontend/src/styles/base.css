@@ -49,9 +49,14 @@ body {
 .dot.d-neu { background: var(--dot-neu); }
 
 .main { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; }
+/* The page column: at most --page-max wide, centred, 32 px gutters below the cap
+   (the top bar's content follows it; its background and rule stay edge to edge).
+   One rule for every page - none sets its own width. */
+.app { --page-max: 1280px; --gutter: 32px; }
 .top {
   display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; justify-content: space-between;
-  padding: 14px 32px; background: var(--surface); border-bottom: 1px solid var(--border); min-height: 44px;
+  padding: 14px max(var(--gutter), calc((100% - (var(--page-max) - 2 * var(--gutter))) / 2));
+  background: var(--surface); border-bottom: 1px solid var(--border); min-height: 44px;
 }
 .top .filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
 .fl { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
@@ -74,8 +79,8 @@ body {
 .v2 .small { font-size: 13px; }
 .v2 .tiny { font-size: 12px; }
 .content {
-  padding: 28px 32px 40px; display: flex; flex-direction: column; gap: 20px; max-width: 1280px;
-  box-sizing: border-box; width: 100%;
+  padding: 28px var(--gutter) 40px; display: flex; flex-direction: column; gap: 20px; max-width: var(--page-max);
+  box-sizing: border-box; width: 100%; margin-inline: auto;
 }
 .v2 .sec {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; padding-bottom: 6px;
@@ -139,7 +144,7 @@ body {
 .v2 .seg button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .v2 .seg-lg button { height: 44px; }
 .v2 .in {
-  height: 44px; width: 100%; padding: 0 10px; border: 1px solid var(--control); border-radius: 8px;
+  height: 44px; width: 100%; max-width: 480px; padding: 0 10px; border: 1px solid var(--control); border-radius: 8px;
   background: var(--surface); font: inherit; font-size: 14px; color: var(--text); box-sizing: border-box;
 }
 .v2 .in:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
@@ -178,3 +183,39 @@ body {
   text-align: left;
 }
 .v2 .row-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+
+/* modal dialog (components/Modal.jsx) */
+.v2 .modal, dialog.modal {
+  width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--border);
+  border-radius: 12px; background: var(--surface); color: var(--text); box-shadow: 0 16px 48px rgba(28, 32, 36, 0.28);
+  overflow: auto;
+}
+dialog.modal.wide { width: min(860px, calc(100vw - 32px)); }
+dialog.modal::backdrop { background: rgba(28, 32, 36, 0.45); }
+dialog.modal .modal-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 20px;
+  border-bottom: 1px solid var(--border-soft); position: sticky; top: 0; background: var(--surface);
+}
+dialog.modal .modal-head h2 { font-size: 17px; margin: 0; font-weight: 600; }
+dialog.modal .modal-x { height: 32px; width: 32px; padding: 0; justify-content: center; font-size: 18px; line-height: 1; }
+dialog.modal .modal-body { padding: 18px 20px 20px; display: flex; flex-direction: column; gap: 14px; }
+dialog.modal .in { max-width: none; height: 40px; }
+dialog.modal .fl { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+dialog.modal .modal-foot { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; align-items: center; }
+dialog.modal .modal-foot .grow { flex: 1 1 auto; }
+dialog.modal .btn, dialog.modal .btn2 { cursor: pointer; }
+dialog.modal .btn { height: 40px; padding: 0 16px; border: 0; border-radius: 8px; background: var(--link); color: #fff; font: inherit; font-weight: 500; }
+dialog.modal .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+dialog.modal .btn2 { height: 40px; padding: 0 14px; border: 1px solid var(--control); border-radius: 8px; background: var(--surface); font: inherit; font-size: 14px; color: var(--text); }
+dialog.modal .btn2.danger { border-color: #e0a8a3; color: var(--bad-fg); }
+dialog.modal .btn2.danger:hover:not(:disabled) { background: var(--bad-bg); }
+dialog.modal .btn2:disabled { opacity: 0.55; cursor: not-allowed; }
+dialog.modal .danger-zone { border-top: 1px solid var(--border-soft); padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+dialog.modal .bad-text { color: var(--bad-fg); font-size: 13px; }
+dialog.modal .ok-text { color: var(--ok-fg); font-size: 13px; }
+dialog.modal .warn-box { padding: 10px 12px; border-radius: 8px; background: #fdf8f1; border: 1px solid #f0d9b5; font-size: 13px; color: #6b3a00; }
+dialog.modal .check { display: inline-flex; gap: 8px; align-items: center; min-height: 36px; cursor: pointer; }
+dialog.modal .check input { width: 18px; height: 18px; margin: 0; }
+dialog.modal table { width: 100%; border-collapse: collapse; }
+dialog.modal th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+dialog.modal td { padding: 8px 10px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
