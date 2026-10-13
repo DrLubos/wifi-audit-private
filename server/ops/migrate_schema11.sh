@@ -23,6 +23,8 @@
 #      fills hw_from, the statistics stay those of one hardware period)
 #   7. the SQL fixture tests (scratch schemas, rolled back)
 # Steps 3-7 run only after step 2 committed; each is safe to re-run.
+# (historical: ops/seed_capture_hardware.sql was removed with schema 13 - a re-run of
+# this script no longer applies; a fresh install is schema.sql)
 set -eu
 cd "$(dirname "$0")/.."
 [ -f .env ] || { echo "migrate_schema11: no .env next to docker-compose.yml" >&2; exit 1; }

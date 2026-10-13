@@ -50,8 +50,7 @@ def send(method, path, token=None):
 WRITES = (("POST", "/auth/check"), ("PUT", "/settings/networks"), ("POST", "/settings/networks"),
           ("POST", "/settings/networks/1/allowed"), ("PUT", "/settings/classification"),
           ("PUT", "/settings/detectors"), ("POST", "/settings/sensors"), ("PUT", "/settings/sensors/pi-fri"),
-          ("POST", "/settings/hardware"), ("PUT", "/settings/hardware/1"), ("DELETE", "/settings/hardware/1"),
-          ("POST", "/settings/sensors/pi-fri/hardware"), ("POST", "/events/1/status"), ("POST", "/events/status"),
+          ("POST", "/settings/sensors/pi-fri/hardware-change"), ("POST", "/events/1/status"), ("POST", "/events/status"),
           ("PUT", "/aps/EC:58:EA:55:88:FC/classification"), ("PUT", "/aps/EC:58:EA:55:88:FC/note"),
           ("POST", "/settings/sensors/new"), ("DELETE", "/settings/sensors/pi-fri?confirm=pi-fri"))
 
@@ -141,7 +140,7 @@ def main(argv):
         check("/sensors/%s/coverage?days=14" % urllib.parse.quote(s["name"]))
         check("/sensors/%s/outages" % urllib.parse.quote(s["name"]))
     check("/sensors/no-such-sensor/outages", 404)
-    for t in ("networks", "classification", "detectors", "sensors", "hardware"):
+    for t in ("networks", "classification", "detectors", "sensors"):
         check("/settings/%s" % t)
     for method, path in WRITES:
         for token in (None, "not-the-write-token-0000"):

@@ -69,7 +69,14 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 --    required reason (the schema-11 constraint let a NULL reason through: a
 --    CHECK that evaluates to NULL passes); the 59-entry channel plan dropped;
 --    an antenna's gain within -10 .. 30 dBi (ops/migrate_schema12.sh)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '12')
+-- 13: no antenna catalog - the antenna is passive and undetectable, its gain
+--    is used by nothing, so a change of hardware is only a dated entry of the
+--    configuration history (sensor_annotations kind 'hardware_change', a
+--    data boundary); the adapter stays as one read-only record per sensor
+--    (sensor_adapters, auto-reported by the sensor in the live-upload phase);
+--    capture_hardware and sensor_hardware are gone, hardware_period() reads
+--    the annotations (ops/migrate_schema13.sh)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '13')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- accounts and sensors ------------------------------------------------------------
@@ -515,8 +522,10 @@ CREATE TABLE IF NOT EXISTS sensor_annotations (
   sensor_id integer NOT NULL REFERENCES sensors(id),
   starts_at timestamptz NOT NULL,
   ends_at   timestamptz,                       -- NULL = a point in time (a restart, a change)
-  kind      text NOT NULL CHECK (kind IN ('gap', 'no_frames', 'coverage', 'restart', 'change')),
-  boundary  boolean NOT NULL DEFAULT false,    -- a data boundary (a channel-plan change)
+  kind      text NOT NULL
+            CONSTRAINT sensor_annotations_kind_check
+            CHECK (kind IN ('gap', 'no_frames', 'coverage', 'restart', 'change', 'hardware_change')),
+  boundary  boolean NOT NULL DEFAULT false,    -- a data boundary (a channel-plan or hardware change)
   label     text NOT NULL,
   ref       text,                              -- e.g. 'findings.md section 6'
   PRIMARY KEY (sensor_id, starts_at, kind));
@@ -540,57 +549,25 @@ CREATE TABLE IF NOT EXISTS sensor_config (
   note         text,
   PRIMARY KEY (sensor_id, version));
 
--- The capture hardware catalog (schema 11): adapters and antennas the
--- account's sensors can carry. Extended by adding rows (Settings > Sensors or
--- an INSERT), never by a schema change. bands: '2.4', '5', '6'.
-CREATE TABLE IF NOT EXISTS capture_hardware (
-  id         serial PRIMARY KEY,
-  account_id integer NOT NULL DEFAULT 1 REFERENCES accounts(id),
-  kind       text NOT NULL CHECK (kind IN ('adapter', 'antenna')),
-  name       text NOT NULL CHECK (name <> ''),
-  gain_dbi   real CONSTRAINT capture_hardware_gain_check CHECK (gain_dbi BETWEEN -10 AND 30),  -- NULL: an adapter / unknown
-  bands      text[] NOT NULL DEFAULT '{}' CHECK (bands <@ ARRAY['2.4', '5', '6']),
-  connector  text,                             -- e.g. 'RP-SMA', 'USB 2.0'
-  note       text,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (account_id, kind, name));
-
--- What a sensor has attached since when (schema 11). Every row is a data
--- boundary: an antenna's gain and pattern shift every RSSI the sensor
--- measures, so an RSSI baseline never spans two rows (hardware_period(),
--- refresh_ap_baselines()). Hardware is physical - it is in effect from
--- valid_from, nothing is delivered to the sensor (unlike sensor_config).
--- antenna_id NULL = the adapter's own antenna / none recorded.
-CREATE TABLE IF NOT EXISTS sensor_hardware (
-  sensor_id  integer NOT NULL REFERENCES sensors(id),
-  valid_from timestamptz NOT NULL,
-  adapter_id integer NOT NULL REFERENCES capture_hardware(id),
-  antenna_id integer REFERENCES capture_hardware(id),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  created_by text NOT NULL DEFAULT 'operator',     -- 'seed' for the rows of the migration
-  note       text,
-  PRIMARY KEY (sensor_id, valid_from));
-
--- adapter_id must name an adapter, antenna_id an antenna, both of the
--- sensor's account
-CREATE OR REPLACE FUNCTION sensor_hardware_kinds() RETURNS trigger
-LANGUAGE plpgsql AS $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM capture_hardware h JOIN sensors s ON s.account_id = h.account_id
-                 WHERE h.id = NEW.adapter_id AND h.kind = 'adapter' AND s.id = NEW.sensor_id) THEN
-    RAISE EXCEPTION 'sensor_hardware: % is not an adapter of the sensor''s account', NEW.adapter_id;
-  END IF;
-  IF NEW.antenna_id IS NOT NULL AND NOT EXISTS (
-      SELECT 1 FROM capture_hardware h JOIN sensors s ON s.account_id = h.account_id
-      WHERE h.id = NEW.antenna_id AND h.kind = 'antenna' AND s.id = NEW.sensor_id) THEN
-    RAISE EXCEPTION 'sensor_hardware: % is not an antenna of the sensor''s account', NEW.antenna_id;
-  END IF;
-  RETURN NEW;
-END
-$$;
-DROP TRIGGER IF EXISTS sensor_hardware_kinds ON sensor_hardware;
-CREATE TRIGGER sensor_hardware_kinds BEFORE INSERT OR UPDATE ON sensor_hardware
-  FOR EACH ROW EXECUTE FUNCTION sensor_hardware_kinds();
+-- The capture adapter of a sensor (schema 13): one read-only record, seeded
+-- now and reported by the sensor itself in the live-upload phase (identity =
+-- usb_id VID:PID + mac; interface and driver are for display - interface names
+-- like wlan1 are not stable). Its RSSI floors follow from the chipset
+-- (rssi_valid() knows the RTL8821CU's). The antenna is not recorded: it is
+-- passive and nothing on the sensor can detect it, its gain feeds no
+-- computation; a change of antenna (or anything else that shifts the RSSI) is
+-- a 'hardware_change' entry of sensor_annotations.
+CREATE TABLE IF NOT EXISTS sensor_adapters (
+  sensor_id   integer PRIMARY KEY REFERENCES sensors(id),
+  name        text NOT NULL,                   -- e.g. 'RTL8821CU USB adapter'
+  usb_id      text CHECK (usb_id ~ '^[0-9a-f]{4}:[0-9a-f]{4}$'),   -- VID:PID, lower case
+  mac         macaddr,
+  chipset     text,
+  driver      text,
+  interface   text,                            -- display only (wlan1)
+  bands       text[] NOT NULL DEFAULT '{}' CHECK (bands <@ ARRAY['2.4', '5', '6']),
+  reported_by text NOT NULL DEFAULT 'seed' CHECK (reported_by IN ('seed', 'sensor')),
+  updated_at  timestamptz NOT NULL DEFAULT now());
 
 -- One row per snapshot import (and, later, per ingest batch).
 CREATE TABLE IF NOT EXISTS sensor_uploads (
@@ -1024,18 +1001,19 @@ LANGUAGE sql STABLE AS $$
       OR coalesce(p_last - p_first < interval '2 hours' AND p_last < p_latest - interval '1 hour', false)
 $$;
 
--- The capture-hardware period of a sensor that contains p_ts (schema 11):
--- [the newest sensor_hardware.valid_from <= p_ts, the next one), '-infinity'
--- before the first record and 'infinity' after the last. With no record at
--- all the whole time line is one period.
+-- The capture-hardware period of a sensor that contains p_ts (schema 11, 13):
+-- [the newest 'hardware_change' entry of sensor_annotations <= p_ts, the next
+-- one), '-infinity' before the first entry and 'infinity' after the last.
+-- With no entry the whole time line is one period (the first, the hardware of
+-- the first poll).
 CREATE OR REPLACE FUNCTION hardware_period(p_sensor_id integer, p_ts timestamptz)
 RETURNS tstzrange
 LANGUAGE sql STABLE AS $$
   SELECT tstzrange(
-    coalesce((SELECT max(h.valid_from) FROM sensor_hardware h
-              WHERE h.sensor_id = p_sensor_id AND h.valid_from <= p_ts), '-infinity'),
-    coalesce((SELECT min(h.valid_from) FROM sensor_hardware h
-              WHERE h.sensor_id = p_sensor_id AND h.valid_from > p_ts), 'infinity'),
+    coalesce((SELECT max(a.starts_at) FROM sensor_annotations a
+              WHERE a.sensor_id = p_sensor_id AND a.kind = 'hardware_change' AND a.starts_at <= p_ts), '-infinity'),
+    coalesce((SELECT min(a.starts_at) FROM sensor_annotations a
+              WHERE a.sensor_id = p_sensor_id AND a.kind = 'hardware_change' AND a.starts_at > p_ts), 'infinity'),
     '[)')
 $$;
 

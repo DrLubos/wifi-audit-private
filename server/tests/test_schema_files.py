@@ -1,4 +1,4 @@
-"""Static checks of schema.sql and the schema-7/8/9/10/11 migrations (standard
+"""Static checks of schema.sql and the schema-7/8/9/10/11/12/13 migrations (standard
 library, no database):
 
   cd server && python3 -m unittest discover -s tests -p 'test_*.py'
@@ -26,6 +26,7 @@ MIGRATION9 = open(os.path.join(HERE, "..", "ops", "migrate_schema9.sql"), encodi
 MIGRATION10 = open(os.path.join(HERE, "..", "ops", "migrate_schema10.sql"), encoding="utf-8").read()
 MIGRATION11 = open(os.path.join(HERE, "..", "ops", "migrate_schema11.sql"), encoding="utf-8").read()
 MIGRATION12 = open(os.path.join(HERE, "..", "ops", "migrate_schema12.sql"), encoding="utf-8").read()
+MIGRATION13 = open(os.path.join(HERE, "..", "ops", "migrate_schema13.sql"), encoding="utf-8").read()
 SCHEMA9_TABLES = ("accounts", "account_settings", "networks", "aps", "ap_sensors", "sensor_annotations",
                   "sensor_config", "sensor_uploads", "kismet_alert_rules", "audit_log",
                   "ap_security_periods", "sensor_periods")
@@ -71,6 +72,10 @@ class SchemaFiles(unittest.TestCase):
                 self.assertIn("CONSTRAINT sensor_config_channel_plan_check", table_body(SCHEMA, t))
                 self.assertIn("ADD CONSTRAINT sensor_config_channel_plan_check", MIGRATION12)
                 continue
+            if t == "sensor_annotations":  # schema 13 added the entry kind 'hardware_change'
+                self.assertIn("CONSTRAINT sensor_annotations_kind_check", table_body(SCHEMA, t))
+                self.assertIn("ADD CONSTRAINT sensor_annotations_kind_check", MIGRATION13)
+                continue
             self.assertIsNotNone(table_body(SCHEMA, t), t)
             self.assertEqual(table_body(MIGRATION9, t), table_body(SCHEMA, t), t)
 
@@ -94,9 +99,9 @@ class SchemaFiles(unittest.TestCase):
     def test_version(self):
         def version(sql):
             return re.search(r"VALUES \('schema_version', '(\d+)'\)", sql).group(1)
-        self.assertEqual((version(SCHEMA), version(MIGRATION12), version(MIGRATION11), version(MIGRATION10),
-                          version(MIGRATION9), version(MIGRATION8), version(MIGRATION)),
-                         ("12", "12", "11", "10", "9", "8", "7"))
+        self.assertEqual((version(SCHEMA), version(MIGRATION13), version(MIGRATION12), version(MIGRATION11),
+                          version(MIGRATION10), version(MIGRATION9), version(MIGRATION8), version(MIGRATION)),
+                         ("13", "13", "12", "11", "10", "9", "8", "7"))
 
     def test_schema11_reasons_and_hardware(self):
         body = re.sub(r"--[^\n]*", "", table_body(SCHEMA, "detections"))
@@ -117,13 +122,30 @@ class SchemaFiles(unittest.TestCase):
         self.assertIn("ADD COLUMN status_reason text;", MIGRATION11)
         self.assertRegex(table_body(SCHEMA, "ap_baselines"), r"\n\s+hw_from\s+timestamptz,")
         self.assertIn("ALTER TABLE ap_baselines ADD COLUMN hw_from timestamptz;", MIGRATION11)
-        for t in ("capture_hardware", "sensor_hardware"):
-            self.assertIsNotNone(table_body(SCHEMA, t), t)
-        self.assertIn("CREATE TRIGGER sensor_hardware_kinds", SCHEMA)
         # a baseline is learned inside one hardware period; the merge keeps the reason
         rab = function(SCHEMA, "refresh_ap_baselines")
         self.assertIn("o.ts >= lower(v_hw) AND o.ts < upper(v_hw)", rab)
         self.assertIn("status_reason = v_reason", function(SCHEMA, "merge_duplicate_kismet_events"))
+
+    def test_schema13_no_antenna_catalog(self):
+        code = re.sub(r"--[^\n]*", "", SCHEMA)
+        # the catalog and the attachment history are gone from the fresh definition ...
+        for gone in ("capture_hardware", "sensor_hardware", "antenna"):
+            self.assertNotIn(gone, code, gone)
+        # ... and the migration drops them
+        for stmt in ("DROP TABLE sensor_hardware;", "DROP TABLE capture_hardware;", "DROP FUNCTION sensor_hardware_kinds();"):
+            self.assertIn(stmt, MIGRATION13)
+        # the adapter record: the same table as in the fresh definition
+        self.assertIsNotNone(table_body(SCHEMA, "sensor_adapters"))
+        self.assertEqual(table_body(MIGRATION13, "sensor_adapters"), table_body(SCHEMA, "sensor_adapters"))
+        # the boundary is the history entry kind, in the table and in the migration
+        self.assertIn("'hardware_change'", table_body(SCHEMA, "sensor_annotations"))
+        self.assertIn("'hardware_change'", MIGRATION13)
+        # hardware_period() is the same function in both and reads the entries
+        hp = function(SCHEMA, "hardware_period")
+        self.assertEqual(hp, function(MIGRATION13, "hardware_period"))
+        self.assertIn("a.kind = 'hardware_change'", hp)
+        self.assertNotIn("sensor_hardware", hp)
 
     def test_schema10_ever_ap(self):
         body = re.sub(r"--[^\n]*", "", table_body(SCHEMA, "devices"))
