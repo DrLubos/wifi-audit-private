@@ -221,9 +221,11 @@ with tooltip. Outages and limited periods table.
   selected sensor (channel plan: 89 / 20 MHz 37 / locked channel / custom
   list with the coprime-stride check; dwell; poll interval - the "without
   empty DFS 59" plan is not offered: every DFS channel 52-136 carried APs,
-  PLAN 5a). A sensor's location and description. Capture hardware
+  PLAN 5a). Sensors are added (empty), edited and renamed in modals, and deleted only
+  when they never collected anything, with the name typed (PLAN 5b follow-up). Capture hardware
   (decided 2026-10-12): a catalog of adapters and antennas (name, kind, gain
-  dBi, bands, connector, note) extended by adding rows; each sensor records
+  dBi - optional -, bands, connector, note; only the antenna is typed, the adapter will
+  be detected from the sensor) extended by adding rows; each sensor records
   which adapter and antenna are attached since when; a hardware change is a
   dated data boundary in the configuration history, and RSSI baselines never
   span two hardware periods (evil twin (b) would fire after a swap). Mixed current plans → warning. Upload is **not** a setting

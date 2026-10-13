@@ -1620,6 +1620,55 @@ docker compose build api && docker compose up -d api
 docker compose build frontend && docker compose up -d frontend
 ```
 
+**5b follow-up after the live check (2026-10-13).**
+
+- *Width, once, in the shell:* the page column is at most 1280 px, centred,
+  32 px gutters below the cap (`.content`, and the top bar's content follows
+  it; its background and rule stay edge to edge); no page sets its own width
+  (the Settings 1100 px cap is gone). A form control is at most 480 px wide
+  (`.in`), a modal's fields fill the modal. Measured at 2560, 1920, 1512
+  (14" scaled), 1280 and 390 px.
+- *Capture hardware, lighter:* the section shows one line per sensor (what
+  is attached, since when) with "Edit / record change" - a modal: the
+  antenna (or "+ a new antenna…" with name, optional gain, connector,
+  bands), when it was attached, a note; the adapter is shown, not typed.
+  The catalog is behind a small "Manage catalog" (antennas: add / edit /
+  delete an unused one; adapters read-only). **The gain is optional** - the
+  data boundary needs only that a change happened and which antenna. The
+  data model is unchanged.
+- *Adapter auto-detection (planned for the live-upload phase, 11.1, not
+  built):* the adapter is fully detectable, so it is never typed - the
+  sensor reports its USB VID:PID, chipset, driver, MAC and interface, a
+  change is recorded as a boundary by itself, and its RSSI floors follow from
+  the chipset (`rssi_valid()`'s list per chipset instead of the RTL8821CU's
+  alone). Until then the seeded adapter stands. The antenna is passive -
+  nothing on the sensor can detect it - and stays the one human-entered
+  item.
+- *Sensor management:* "Add sensor" (a modal: name, location, description)
+  creates an empty sensor - it appears in the selectors, the sidebar and the
+  lists with their empty states ("No data", "not installed yet"). "Edit"
+  (a modal) changes name, location and description; **a rename changes only
+  the label** (`sensor_id` is the key), but the importer files data under
+  the name (`--sensor NAME`, `detection/degraded_windows.csv`), so the next
+  import must use the new name or it creates a sensor with the old one - the
+  modal and the result say so. **Delete is guarded:** the api refuses (409,
+  naming the tables) while any poll, device, observation, alert, event or
+  rollup row belongs to the sensor (`settings.sensor_data_tables`: every
+  table with a `sensor_id` column but the configuration ones - found from the
+  catalog, so a table added later is covered), and even for an empty sensor
+  the name must be typed (`?confirm=NAME`); only its configuration goes with
+  it. Audit rows: `sensor.add`, `sensor.rename`, `sensor.meta`,
+  `sensor.delete` (the deleted row and the configuration removed). No
+  schema change.
+
+Deploy the follow-up (api and frontend, no schema change):
+
+```sh
+cd ~/wifi-audit && git pull && cd server
+docker compose build api && docker compose up -d api
+docker compose build frontend && docker compose up -d frontend
+```
+
 Out of scope for now (designed in 11, not built): upload after every poll
 with config delivery, ranges beyond 30 days, live updates, login.
 
@@ -1630,9 +1679,11 @@ with config delivery, ranges beyond 30 days, live updates, login.
 ### 11.1 Upload after every poll + config delivery
 
 Capture hardware (decided 2026-10-13): the upload reports the adapter (USB
-VID:PID + MAC as identity, driver / interface for display) and records an
-adapter change as a `sensor_hardware` boundary itself; the antenna stays
-human-entered (structured name, gain_dbi, connector).
+VID:PID + MAC as identity, driver / interface / chipset for display) and
+records an adapter change as a `sensor_hardware` boundary itself, the RSSI
+floors following from the chipset; the antenna stays human-entered
+(structured name, optional gain_dbi, connector, bands) - nothing on the
+sensor can detect it.
 
 `POST /api/ingest/{polls,observations,devices,…,ap_load_hourly}` with a
 per-sensor token (`sensor_tokens(sensor_id, token_hash)`); idempotent on the

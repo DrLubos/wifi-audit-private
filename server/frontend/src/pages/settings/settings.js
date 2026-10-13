@@ -258,6 +258,61 @@ export function utcToZoned(v, tz) {
   return `${p.year}-${pad(MONTHS.indexOf(p.month) + 1)}-${pad(p.day)}T${p.hour}:${p.minute}`;
 }
 
+// --- sensors: add, edit, rename, delete -------------------------------------------------------------
+
+// a sensor's name: a short handle (URLs, the importer's --sensor), as api writes.py sensor_name()
+export function sensorNameProblem(name, sensors, current = null) {
+  const n = (name ?? "").trim();
+  if (!n) return "give the sensor a name";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(n)) return "1 to 40 characters: letters, digits, . _ - (not first)";
+  if (sensors.some((x) => x.name === n && x.name !== current)) return `a sensor named ${n} exists already`;
+  return null;
+}
+
+// the body of add / edit: a blank location or description clears it
+export function sensorBody(draft) {
+  return { name: draft.name.trim(), location: draft.location.trim() || null, description: draft.description.trim() || null };
+}
+
+// the importer files data under the sensor's name (--sensor NAME): a rename
+// must be followed there, or the next import creates a sensor with the old name
+export function renameNote(oldName, newName) {
+  return `Renamed ${oldName} to ${newName}. The importer files data under the name: use --sensor ${newName} from now on, `
+    + `or the next import creates a new sensor ${oldName}.`;
+}
+
+// Delete: never a sensor with data, and the name typed to confirm
+export function deleteGuard(meta, name, typed) {
+  if (meta?.has_polls) return { allowed: false, why: `${name} has collected data - a sensor with data is never deleted` };
+  if (typed.trim() !== name) return { allowed: false, why: `type ${name} to confirm`, ask: true };
+  return { allowed: true, ask: true };
+}
+
+// --- capture hardware: the antenna is the only thing entered by hand --------------------------------
+
+export const EMPTY_ANTENNA = { id: null, name: "", gain_dbi: "", bands: ["2.4", "5"], connector: "", note: "" };
+
+export function antennaDraft(h) {
+  return { id: h.id, name: h.name, gain_dbi: h.gain_dbi ?? "", bands: [...(h.bands ?? [])], connector: h.connector ?? "",
+           note: h.note ?? "" };
+}
+
+// the gain is optional - a change of antenna is the data boundary, whatever its gain
+export function antennaProblem(a) {
+  if (!a.name.trim()) return "give the antenna a name";
+  if (!a.bands.length) return "pick its bands";
+  if (a.gain_dbi !== "" && a.gain_dbi != null) {
+    const g = Number(a.gain_dbi);
+    if (Number.isNaN(g) || g < -10 || g > 30) return "the gain is a number from −10 to 30 dBi, or leave it empty";
+  }
+  return null;
+}
+
+export function antennaBody(a) {
+  return { kind: "antenna", name: a.name.trim(), gain_dbi: a.gain_dbi === "" || a.gain_dbi == null ? null : Number(a.gain_dbi),
+           bands: a.bands, connector: a.connector.trim() || null, note: a.note.trim() || null };
+}
+
 // --- the history --------------------------------------------------------------------------------
 
 // rows of the configuration history: valid from, sensor, change, effect on the data

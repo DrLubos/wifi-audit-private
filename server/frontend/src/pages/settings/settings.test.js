@@ -1,5 +1,6 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
+  antennaBody, antennaDraft, antennaProblem, deleteGuard, renameNote, sensorBody, sensorNameProblem, EMPTY_ANTENNA,
   addAllowed, captureText, classificationBody, classificationDraft, classificationProblem, configState, cycleText,
   detectorsBody, detectorsDraft, detectorsProblem, historyRows, hopStride, hwDetail, hwText, networkDraft,
   networksBody, ouiText, parseAllowed, planList, planText, removeAllowed, sameBody, ssidProblem, utcToZoned, utf8Length,
@@ -98,6 +99,36 @@ test("history rows", () => {
     { sensor: "pi-fri", ts: "2026-09-27T14:15:50Z", boundary: false, kind: "change", label: "Hop guard" }], TZ);
   eq(rows.map((r) => [r.ts, r.effect]), [["12 Oct 18:00", "RSSI baselines start again"], ["27 Sep 15:04", "evaluated apart"],
                                          ["27 Sep 16:15", "no boundary"]]);
+});
+
+test("sensors: names, the body, rename and the guarded delete", () => {
+  const sensors = [{ name: "pi-fri" }, { name: "pi-lab" }];
+  eq(sensorNameProblem("pi-new", sensors), null);
+  eq(sensorNameProblem(" pi-fri ", sensors), "a sensor named pi-fri exists already");
+  eq(sensorNameProblem("pi-fri", sensors, "pi-fri"), null);                       // its own name when editing
+  eq(sensorNameProblem("", sensors), "give the sensor a name");
+  eq(sensorNameProblem("-x", sensors), "1 to 40 characters: letters, digits, . _ - (not first)");
+  eq(sensorNameProblem("a b", sensors) != null, true);
+  eq(sensorBody({ name: " pi-lab ", location: " Lab ", description: "  " }), { name: "pi-lab", location: "Lab", description: null });
+  eq(renameNote("pi-fri", "pi-dorm"),
+     "Renamed pi-fri to pi-dorm. The importer files data under the name: use --sensor pi-dorm from now on, or the next import creates a new sensor pi-fri.");
+  // a sensor with data is never deletable; an empty one needs its name typed
+  eq(deleteGuard({ has_polls: true }, "pi-fri", "pi-fri").allowed, false);
+  eq(deleteGuard({ has_polls: false }, "pi-new", "").why, "type pi-new to confirm");
+  eq(deleteGuard({ has_polls: false }, "pi-new", "pi-ne").allowed, false);
+  eq(deleteGuard({ has_polls: false }, "pi-new", " pi-new ").allowed, true);
+});
+
+test("antenna: the gain is optional", () => {
+  const a = { ...EMPTY_ANTENNA, name: " Dipole " };
+  eq(antennaProblem(a), null);                                                    // no gain is fine
+  eq(antennaBody(a), { kind: "antenna", name: "Dipole", gain_dbi: null, bands: ["2.4", "5"], connector: null, note: null });
+  eq(antennaBody({ ...a, gain_dbi: "5", connector: "RP-SMA" }).gain_dbi, 5);
+  eq(antennaProblem({ ...a, gain_dbi: "105" }), "the gain is a number from −10 to 30 dBi, or leave it empty");
+  eq(antennaProblem({ ...a, gain_dbi: "x" }) != null, true);
+  eq(antennaProblem({ ...a, name: "" }), "give the antenna a name");
+  eq(antennaProblem({ ...a, bands: [] }), "pick its bands");
+  eq(antennaDraft({ id: 2, name: "Dipole", gain_dbi: null, bands: ["5"], connector: null, note: null }).gain_dbi, "");
 });
 
 done();
