@@ -78,7 +78,8 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
                             "max_recovery_s": r["max_recovery_s"], "restarts": r["restarts"] or 0},
             "aps_7d": r["aps_7d"] or 0, "aps_only_here_7d": r["aps_only_here_7d"] or 0,
             "config": _config(r["config"]), "pending": _config(r["pending"]),
-            "capture": None if r["capture"] is None else dict(r["capture"], since=_ts(r["capture"]["since"])),
+            # the adapter (read-only, schema 13) and the last hand-entered hardware change
+            "adapter": r["adapter"], "last_hardware_change": iso(r["last_hardware_change"]),
         })
     last_polls = [s["last_poll"] for s in acc["sensors"] if s["last_poll"]]
     body = {

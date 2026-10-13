@@ -4,15 +4,15 @@ deps.require_write; one transaction with audit_log rows and
 accounts.write_version + 1, deps.write_tx).
 
 Reads: networks, classification, detectors, sensors (capture
-configuration versions, details, attached hardware, the history with its
-data boundaries), hardware (the catalog).
+configuration versions, details, the adapter, the history with its data
+boundaries).
 Writes: the networks (the whole list from the Networks tab; one new network;
 "Add to allowed"), the classification rules and the detector parameters -
 each followed by refresh_events() for every sensor of the account -, a
 sensor's capture configuration (a new version, not delivered: Q10), its
-location / description, the hardware catalog, and a hardware change of a
-sensor (a data boundary: RSSI baselines are learned inside one hardware
-period, schema 11).
+name / location / description (add, edit, rename, guarded delete), and a
+hardware change of a sensor (a dated history entry that is a data boundary:
+RSSI baselines are learned inside one hardware period, schema 11 / 13).
 """
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
@@ -31,7 +31,6 @@ CLASSIFICATION = ("ignore_random_bssid", "suspicious_unallowed", "managed_by_ven
 DETECTORS = ("deauth_min_bursts", "deauth_window_s", "evil_twin_k", "evil_twin_min_db", "evil_twin_guard_s",
              "sensor_offline_min")
 NETWORK_FIELDS = ("ssid", "kind", "expected_security", "require_mfp", "allowed_bssids", "allowed_ouis", "note")
-HARDWARE_FIELDS = ("kind", "name", "gain_dbi", "bands", "connector", "note")
 
 
 def _read(request, acc, build):
@@ -187,55 +186,38 @@ def put_detectors(body: dict = Body(...), acc=Depends(deps.get_account)):
     return _put_settings(acc, body, writes.parse_detectors, DETECTORS, "detectors_update", "settings.detectors")
 
 
-def _hardware(conn, acc):
-    return [dict(r, created_at=iso(r["created_at"])) for r in deps.run(conn, _Q, "hardware", account_id=acc["id"])]
-
-
-def _hardware_text(item):
-    if item is None:
-        return "none recorded"
-    gain = "" if item["gain_dbi"] is None else " (%g dBi)" % item["gain_dbi"]
-    return item["name"] + gain
-
-
 @router.get("/sensors")
 def sensors(request: Request, acc=Depends(deps.get_account)):
     """Per sensor the applied (confirmed) configuration, a pending one (newer,
     not confirmed - delivery to the sensor does not exist yet, Q10), every
-    version, its details and its capture hardware (current and history); the
-    catalog; the documented changes and the hardware changes with their data
+    version, its details and its adapter (read-only: seeded now, reported by
+    the sensor in the live-upload phase); the documented changes, the
+    hardware changes entered by hand among them, with their data
     boundaries."""
     def build(conn):
         versions = deps.run(conn, _Q, "sensor_config", account_id=acc["id"])
         history = deps.run(conn, _Q, "sensor_history", account_id=acc["id"])
         meta = {m["name"]: m for m in deps.run(conn, _Q, "sensor_meta", account_id=acc["id"])}
-        catalog = _hardware(conn, acc)
-        by_id = {h["id"]: h for h in catalog}
-        attached = deps.run(conn, _Q, "sensor_hardware", account_id=acc["id"])
+        adapters = {a["sensor"]: a for a in deps.run(conn, _Q, "sensor_adapters", account_id=acc["id"])}
         out = []
         for s in acc["sensors"]:
             mine = [dict(v, created_at=iso(v["created_at"]), confirmed_at=iso(v["confirmed_at"]))
                     for v in versions if v["sensor"] == s["name"]]
             current = next((v for v in mine if v["confirmed_at"]), None)
             pending = mine[0] if mine and not mine[0]["confirmed_at"] else None
-            hw = [{"valid_from": iso(x["valid_from"]), "adapter_id": x["adapter_id"], "antenna_id": x["antenna_id"],
-                   "created_by": x["created_by"], "note": x["note"]}
-                  for x in attached if x["sensor"] == s["name"]]
             m = meta[s["name"]]
+            ad = adapters.get(s["name"])
             out.append({"name": s["name"], "current": current, "pending": pending, "versions": mine,
                         "meta": {"location": m["location"], "description": m["description"],
                                  "hardware": m["hardware"], "has_polls": s["first_poll"] is not None},
-                        "capture": hw[0] if hw else None, "capture_history": hw})
+                        "adapter": None if ad is None else dict(
+                            {k: ad[k] for k in ("name", "usb_id", "chipset", "driver", "interface", "bands", "reported_by")},
+                            # the adapter's MAC stays in the database: no MAC but an account AP's
+                            # BSSID in a response (the privacy scan), the page only needs to know it
+                            mac_known=ad["mac"] is not None)})
         plans = {s["current"]["channel_plan"] for s in out if s["current"]}
-        changes = [dict(h, ts=iso(h["ts"]), kind="change") for h in history]
-        for x in attached:
-            changes.append({"sensor": x["sensor"], "ts": iso(x["valid_from"]), "boundary": True, "kind": "hardware",
-                            "label": "Capture hardware: %s + %s" % (
-                                _hardware_text(by_id.get(x["adapter_id"])),
-                                "its own antenna" if x["antenna_id"] is None else _hardware_text(by_id.get(x["antenna_id"]))),
-                            "ref": None})
-        changes.sort(key=lambda h: h["ts"], reverse=True)
-        return {"sensors": out, "mixed_plans": len(plans) > 1, "catalog": catalog, "history": changes,
+        changes = [dict(h, ts=iso(h["ts"])) for h in history]
+        return {"sensors": out, "mixed_plans": len(plans) > 1, "history": changes,
                 "plans": {"all_89": writes.ALL_89, "ht20_37": list(writes.HT20_37), "lock": list(writes.HT20_ALL)}}
     return _read(request, acc, build)
 
@@ -320,7 +302,7 @@ def delete_sensor(name: str = Path(max_length=64), confirm: str = Query("", max_
     """Delete a sensor - never one with data, never unconfirmed: the sensor's
     name must be typed (?confirm=NAME) and no poll, device, observation,
     alert, event or rollup row may belong to it (409 names the tables); only
-    its configuration (hardware history, capture configurations, notes) goes
+    its configuration (adapter record, capture configurations, history) goes
     with it, and the audit row keeps what was there."""
     s = _sensor_of(acc, name)
     if confirm != name:
@@ -339,87 +321,22 @@ def delete_sensor(name: str = Path(max_length=64), confirm: str = Query("", max_
     return deps.written(None, 204)
 
 
-@router.get("/hardware")
-def hardware(request: Request, acc=Depends(deps.get_account)):
-    return _read(request, acc, lambda conn: {"hardware": _hardware(conn, acc)})
-
-
-def _stored_hw(h):
-    return {k: h[k] for k in HARDWARE_FIELDS}
-
-
-@router.post("/hardware", status_code=201, dependencies=[Depends(deps.require_write)])
-def post_hardware(body: dict = Body(...), acc=Depends(deps.get_account)):
-    """A new catalog row (an adapter or an antenna)."""
-    h = deps.invalid(writes.parse_hardware, body)
-    try:
-        with deps.write_tx(acc) as (conn, audit):
-            hid = deps.run(conn, _QW, "hardware_insert", account_id=acc["id"], **h)[0]["id"]
-            audit("hardware.create", "hardware:%d" % hid, None, h)
-    except errors.UniqueViolation:
-        raise HTTPException(status_code=409, detail="the catalog has a %s %r already" % (h["kind"], h["name"])) from None
-    with deps.connection() as conn:
-        return deps.written({"item": next(x for x in _hardware(conn, acc) if x["id"] == hid)}, 201)
-
-
-def _catalog_item(conn, acc, hid):
-    item = next((x for x in _hardware(conn, acc) if x["id"] == hid), None)
-    if item is None:
-        raise HTTPException(status_code=404, detail="unknown catalog id")
-    return item
-
-
-@router.put("/hardware/{hid}", dependencies=[Depends(deps.require_write)])
-def put_hardware(hid: int = Path(ge=1, le=2 ** 31 - 1), body: dict = Body(...), acc=Depends(deps.get_account)):
-    """A catalog row's name, gain, bands, connector or note (its kind stays)."""
-    try:
-        with deps.write_tx(acc) as (conn, audit):
-            old = _catalog_item(conn, acc, hid)
-            h = deps.invalid(writes.parse_hardware, body, kind_fixed=old["kind"])
-            if _stored_hw(old) != h:
-                deps.run(conn, _QW, "hardware_update", account_id=acc["id"], id=hid, **h)
-                audit("hardware.update", "hardware:%d" % hid, _stored_hw(old), h)
-    except errors.UniqueViolation:
-        raise HTTPException(status_code=409, detail="the catalog has that name already") from None
-    with deps.connection() as conn:
-        return deps.written({"item": _catalog_item(conn, acc, hid)})
-
-
-@router.delete("/hardware/{hid}", status_code=204, dependencies=[Depends(deps.require_write)])
-def delete_hardware(hid: int = Path(ge=1, le=2 ** 31 - 1), acc=Depends(deps.get_account)):
-    """An unused catalog row (one a sensor had attached stays: the history names it)."""
-    with deps.write_tx(acc) as (conn, audit):
-        old = _catalog_item(conn, acc, hid)
-        if old["used"]:
-            raise HTTPException(status_code=409, detail="in a sensor's hardware history - it stays")
-        deps.run(conn, _QW, "hardware_delete", account_id=acc["id"], id=hid)
-        audit("hardware.delete", "hardware:%d" % hid, _stored_hw(old), None)
-    return deps.written(None, 204)
-
-
-@router.post("/sensors/{name}/hardware", status_code=201, dependencies=[Depends(deps.require_write)])
-def post_sensor_hardware(name: str = Path(max_length=64), body: dict = Body(...), acc=Depends(deps.get_account)):
-    """A hardware change of a sensor from valid_from (default now): a data
-    boundary. RSSI baselines are learned inside one hardware period
-    (refresh_ap_baselines(), schema 11), so right after a change evil_twin (b)
-    has no baseline until the new hardware has enough readings; the next
-    import recomputes them."""
+@router.post("/sensors/{name}/hardware-change", status_code=201, dependencies=[Depends(deps.require_write)])
+def post_hardware_change(name: str = Path(max_length=64), body: dict = Body(...), acc=Depends(deps.get_account)):
+    """A hardware change of a sensor, entered by hand ({valid_from?, note?}: the
+    antenna swapped, the sensor moved - anything that shifts every RSSI): a
+    dated entry of the configuration history that is a data boundary. RSSI
+    baselines are learned inside one hardware period (refresh_ap_baselines(),
+    schema 11), so right after one evil twin (b) has no baseline until the new
+    hardware has enough readings; the next import recomputes them."""
     s = _sensor_of(acc, name)
-    with deps.write_tx(acc) as (conn, audit):
-        hist = [x for x in deps.run(conn, _Q, "sensor_hardware", account_id=acc["id"]) if x["sensor"] == name]
-        last = hist[0] if hist else None
-        a = deps.invalid(writes.parse_attach, body, shape.utc_now(), last["valid_from"] if last else None)
-        catalog = {h["id"]: h for h in _hardware(conn, acc)}
-        if catalog.get(a["adapter_id"], {}).get("kind") != "adapter":
-            raise HTTPException(status_code=422, detail="adapter_id: not an adapter of the catalog")
-        if a["antenna_id"] is not None and catalog.get(a["antenna_id"], {}).get("kind") != "antenna":
-            raise HTTPException(status_code=422, detail="antenna_id: not an antenna of the catalog")
-        if last and (last["adapter_id"], last["antenna_id"]) == (a["adapter_id"], a["antenna_id"]):
-            raise HTTPException(status_code=409, detail="that is the hardware attached now")
-        deps.run(conn, _QW, "sensor_hardware_insert", sensor_id=s["id"], **a)
-        audit("sensor.hardware", "sensor:%s" % name,
-              None if last is None else {"adapter_id": last["adapter_id"], "antenna_id": last["antenna_id"],
-                                         "valid_from": iso(last["valid_from"])},
-              {"adapter_id": a["adapter_id"], "antenna_id": a["antenna_id"], "valid_from": iso(a["valid_from"])})
-    return deps.written({"sensor": name, "valid_from": iso(a["valid_from"]), "adapter_id": a["adapter_id"],
-                         "antenna_id": a["antenna_id"]}, 201)
+    a = deps.invalid(writes.parse_hardware_change, body, shape.utc_now())
+    label = writes.hardware_change_label(a["note"])
+    try:
+        with deps.write_tx(acc) as (conn, audit):
+            deps.run(conn, _QW, "hardware_change_insert", sensor_id=s["id"], valid_from=a["valid_from"], label=label)
+            audit("sensor.hardware_change", "sensor:%s" % name, None,
+                  {"id": s["id"], "valid_from": iso(a["valid_from"]), "note": a["note"]})
+    except errors.UniqueViolation:
+        raise HTTPException(status_code=409, detail="%s has a hardware change at that very time already" % name) from None
+    return deps.written({"sensor": name, "valid_from": iso(a["valid_from"]), "label": label}, 201)

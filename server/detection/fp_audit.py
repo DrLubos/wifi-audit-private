@@ -81,12 +81,13 @@ WHERE o.sensor_id = %(sid)s AND d.ever_ap AND (o.rssi IS NOT NULL OR o.rssi_floo
   AND o.ts >= %(from_)s AND o.ts < %(to)s
 ORDER BY o.device_key"""
 
-# schema 11: a hardware change inside the window - split baselines and
-# readings would mix antennas, so the audit refuses (one period at a time)
+# schema 11 / 13: a hardware change (the 'hardware_change' entries of the
+# configuration history, entered by hand) inside the window - split baselines
+# and readings would mix hardware, so the audit refuses (one period at a time)
 HARDWARE_CHANGES_SQL = """
-SELECT valid_from FROM sensor_hardware
-WHERE sensor_id = %(sid)s AND valid_from > %(from_)s AND valid_from < %(to)s
-ORDER BY valid_from"""
+SELECT starts_at AS valid_from FROM sensor_annotations
+WHERE sensor_id = %(sid)s AND kind = 'hardware_change' AND starts_at > %(from_)s AND starts_at < %(to)s
+ORDER BY starts_at"""
 
 AP_KIND_SQL = """
 SELECT device_key, trunc(mac)::text AS oui,

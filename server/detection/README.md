@@ -347,16 +347,19 @@ counted in the report's eligibility line and in `info`:
   on the seeded data, 5 of them high), and its recall cost cannot be measured
   before a staged evil twin; decide after the staged evaluation. No per-channel
   baseline for now.
-- **One capture-hardware period (schema 11).** A swapped antenna (or adapter)
-  shifts every RSSI the sensor measures, so a baseline is learned inside one
-  period of `sensor_hardware` only (`refresh_ap_baselines()`, `hardware_period()`,
-  `ap_baselines.hw_from`) and a reading is compared only with a baseline of the
-  same period: readings outside `[hw_from, the next change)` are not scanned and
-  counted in `info.readings_other_hardware`. Right after a swap every baseline
-  is cleared until the new hardware has 200 readings on 2 days - (b) is blind
-  for that time rather than firing on the gain step. Not a suppression rule:
-  the readings are not comparable at all. `fp-audit` refuses a window that
-  contains a hardware change (audit each period on its own).
+- **One capture-hardware period (schema 11, 13).** A swapped antenna (or anything
+  else that shifts every RSSI the sensor measures) is entered by hand as a
+  'hardware_change' entry of the sensor's configuration history
+  (`sensor_annotations`, a data boundary - the antenna itself is not recorded: it
+  is passive, undetectable, and its gain feeds no computation). A baseline is
+  learned inside one period between such entries only (`refresh_ap_baselines()`,
+  `hardware_period()`, `ap_baselines.hw_from`) and a reading is compared only with
+  a baseline of the same period: readings outside `[hw_from, the next change)` are
+  not scanned and counted in `info.readings_other_hardware`. Right after an entry
+  every baseline is cleared until the new hardware has 200 readings on 2 days -
+  (b) is blind for that time rather than firing on the gain step. Not a
+  suppression rule: the readings are not comparable at all. `fp-audit` refuses a
+  window that contains a hardware change (audit each period on its own).
 
 ### Signal (a) algorithm
 

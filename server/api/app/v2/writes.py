@@ -358,46 +358,14 @@ def parse_capture_config(body):
                                 "note": _note(body.get("note"), 500)}
 
 
-# --- capture hardware ---------------------------------------------------------------------------
+# --- hardware change ----------------------------------------------------------------------------
 
-BANDS = ("2.4", "5", "6")
-
-
-def parse_hardware(body, kind_fixed=None):
-    """A catalog row -> {kind, name, gain_dbi, bands, connector, note}.
-    kind_fixed: an update keeps the stored kind."""
-    kind = kind_fixed or body.get("kind")
-    if kind not in ("adapter", "antenna"):
-        raise Invalid("kind: adapter or antenna")
-    name = body.get("name")
-    if not isinstance(name, str) or not 0 < len(name.strip()) <= 80:
-        raise Invalid("name: 1 to 80 characters")
-    gain = body.get("gain_dbi")
-    if gain is not None and (not isinstance(gain, (int, float)) or isinstance(gain, bool) or not -10 <= gain <= 30):
-        raise Invalid("gain_dbi: a number -10 to 30, or null")
-    bands = body.get("bands") or []
-    if not isinstance(bands, list) or not bands or not set(bands) <= set(BANDS):
-        raise Invalid("bands: one or more of " + ", ".join(BANDS))
-    connector = body.get("connector")
-    if connector is not None and (not isinstance(connector, str) or len(connector.strip()) > 40):
-        raise Invalid("connector: at most 40 characters")
-    return {"kind": kind, "name": name.strip(), "gain_dbi": None if gain is None else float(gain),
-            "bands": [b for b in BANDS if b in bands], "connector": (connector or "").strip() or None,
-            "note": _note(body.get("note"), 500)}
-
-
-def parse_attach(body, now, last_from=None):
-    """'Attached since': {adapter_id, antenna_id?, valid_from?, note?} ->
-    {adapter_id, antenna_id, valid_from, note}. valid_from defaults to now,
-    may lie in the past (a swap recorded later) but after the sensor's last
-    record, and not in the future (5 min of clock skew allowed)."""
-    def ident(key, allow_none):
-        v = body.get(key)
-        if v is None and allow_none:
-            return None
-        if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
-            raise Invalid("%s: a catalog id" % key)
-        return v
+def parse_hardware_change(body, now):
+    """{valid_from?, note?} -> {valid_from, note}: a hardware change entered by
+    hand (the antenna swapped, the sensor moved - anything that shifts every
+    RSSI); valid_from defaults to now, may lie in the past (recorded later), not
+    in the future (5 min of clock skew allowed). It is a data boundary of the
+    history - RSSI baselines never span it."""
     at = body.get("valid_from")
     if at is None:
         t = now
@@ -410,8 +378,10 @@ def parse_attach(body, now, last_from=None):
             raise Invalid("valid_from: with a time zone (e.g. 2026-10-12T18:00:00Z)")
     if t > now + timedelta(minutes=5):
         raise Invalid("valid_from: not in the future")
-    if last_from is not None and t <= last_from:
-        raise Invalid("valid_from: after the sensor's last hardware change (%s)"
-                      % last_from.astimezone(timezone.utc).isoformat())
-    return {"adapter_id": ident("adapter_id", False), "antenna_id": ident("antenna_id", True),
-            "valid_from": t, "note": _note(body.get("note"), 500)}
+    t = t.astimezone(timezone.utc).replace(microsecond=0)
+    return {"valid_from": t, "note": _note(body.get("note"), 500)}
+
+
+def hardware_change_label(note):
+    """The history label of a hardware change."""
+    return "Hardware change" + (": " + note if note else "")

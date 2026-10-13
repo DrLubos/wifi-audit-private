@@ -97,8 +97,9 @@ SELECT d.device_key,
        b.n_floor AS base_n_floor,
        b.window_start AS base_from, b.window_end AS base_to,
        coalesce(b.trusted, false) AS trusted,
-       -- schema 11: the capture-hardware period the baseline was learned in;
-       -- readings outside it came through other hardware and are not compared
+       -- schema 11 / 13: the capture-hardware period the baseline was learned in
+       -- (between 'hardware_change' entries of the history); readings outside it
+       -- came through other hardware and are not compared
        -- (NULL bounds are open: psycopg cannot load an infinite time)
        b.hw_from, nullif(upper(hardware_period(d.sensor_id, coalesce(b.hw_from, '-infinity'))), 'infinity') AS hw_to
 FROM devices d

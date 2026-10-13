@@ -72,36 +72,23 @@ RETURNING id
 
 -- name: sensor_delete_config
 -- The configuration rows of a sensor without data, with the sensor (the only
--- rows that go with it - sensor_data_tables found nothing else)
-WITH h AS (DELETE FROM sensor_hardware WHERE sensor_id = %(id)s RETURNING 1),
+-- rows that go with it - sensor_data_tables found nothing else); the history
+-- entries include its hardware changes
+WITH d AS (DELETE FROM sensor_adapters WHERE sensor_id = %(id)s RETURNING 1),
      c AS (DELETE FROM sensor_config WHERE sensor_id = %(id)s RETURNING 1),
      a AS (DELETE FROM sensor_annotations WHERE sensor_id = %(id)s RETURNING 1)
-SELECT (SELECT count(*) FROM h)::int AS hardware, (SELECT count(*) FROM c)::int AS config,
-       (SELECT count(*) FROM a)::int AS annotations
+SELECT (SELECT count(*) FROM d)::int AS adapter, (SELECT count(*) FROM c)::int AS config,
+       (SELECT count(*) FROM a)::int AS history
 
 -- name: sensor_delete
 DELETE FROM sensors WHERE account_id = %(account_id)s AND id = %(id)s RETURNING id
 
--- name: hardware_insert
-INSERT INTO capture_hardware (account_id, kind, name, gain_dbi, bands, connector, note)
-VALUES (%(account_id)s, %(kind)s, %(name)s, %(gain_dbi)s, %(bands)s::text[], %(connector)s, %(note)s)
-RETURNING id
-
--- name: hardware_update
-UPDATE capture_hardware SET name = %(name)s, gain_dbi = %(gain_dbi)s, bands = %(bands)s::text[],
-       connector = %(connector)s, note = %(note)s
-WHERE account_id = %(account_id)s AND id = %(id)s
-RETURNING id
-
--- name: hardware_delete
--- only an unused catalog row (the route checks; the foreign keys refuse too)
-DELETE FROM capture_hardware WHERE account_id = %(account_id)s AND id = %(id)s RETURNING id
-
--- name: sensor_hardware_insert
--- a hardware change of a sensor: a data boundary from valid_from
-INSERT INTO sensor_hardware (sensor_id, valid_from, adapter_id, antenna_id, created_by, note)
-VALUES (%(sensor_id)s, %(valid_from)s, %(adapter_id)s, %(antenna_id)s, 'operator', %(note)s)
-RETURNING valid_from
+-- name: hardware_change_insert
+-- A hardware change of a sensor, entered by hand: a dated history entry that is
+-- a data boundary (RSSI baselines never span it)
+INSERT INTO sensor_annotations (sensor_id, starts_at, kind, boundary, label, ref)
+VALUES (%(sensor_id)s, %(valid_from)s, 'hardware_change', true, %(label)s, NULL)
+RETURNING starts_at
 
 -- name: event_status
 -- The operator's label of events of the account (schema 12: open, or one of

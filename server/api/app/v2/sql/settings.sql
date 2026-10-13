@@ -28,11 +28,12 @@ ORDER BY se.id, c.version DESC
 
 -- name: sensor_history
 -- The documented changes of the account's sensors, newest first; boundary =
--- a data boundary (a channel-plan change splits measurements for analysis).
-SELECT se.name AS sensor, a.starts_at AS ts, a.boundary, a.label, a.ref
+-- a data boundary (a channel-plan change splits measurements for analysis,
+-- a hardware_change - entered by hand - splits the RSSI baselines).
+SELECT se.name AS sensor, a.starts_at AS ts, a.boundary, a.label, a.ref, a.kind
 FROM sensor_annotations a
 JOIN sensors se ON se.id = a.sensor_id AND se.account_id = %(account_id)s
-WHERE a.kind = 'change'
+WHERE a.kind IN ('change', 'hardware_change')
 ORDER BY a.starts_at DESC
 
 -- name: sensor_meta
@@ -42,21 +43,14 @@ FROM sensors se
 WHERE se.account_id = %(account_id)s
 ORDER BY se.id
 
--- name: hardware
--- The capture hardware catalog; used = rows of sensor_hardware naming it (a
--- used row cannot be deleted).
-SELECT h.id, h.kind, h.name, h.gain_dbi, h.bands, h.connector, h.note, h.created_at,
-       (SELECT count(*) FROM sensor_hardware x WHERE x.adapter_id = h.id OR x.antenna_id = h.id)::int AS used
-FROM capture_hardware h
-WHERE h.account_id = %(account_id)s
-ORDER BY h.kind, h.name
-
--- name: sensor_hardware
--- What the account's sensors had attached since when, newest first.
-SELECT se.name AS sensor, x.valid_from, x.adapter_id, x.antenna_id, x.created_by, x.note, x.created_at
-FROM sensor_hardware x
-JOIN sensors se ON se.id = x.sensor_id AND se.account_id = %(account_id)s
-ORDER BY se.id, x.valid_from DESC
+-- name: sensor_adapters
+-- The adapter of each sensor of the account (read-only: seeded now, reported by
+-- the sensor in the live-upload phase).
+SELECT se.name AS sensor, a.name, a.usb_id, a.mac, a.chipset, a.driver, a.interface, a.bands, a.reported_by,
+       a.updated_at
+FROM sensor_adapters a
+JOIN sensors se ON se.id = a.sensor_id AND se.account_id = %(account_id)s
+ORDER BY se.id
 
 -- name: classification_affected
 -- What the rules act on today: the account's APs, of them with a randomized
@@ -80,7 +74,7 @@ ORDER BY o, d.manuf
 
 -- name: sensor_data_tables
 -- The tables with a sensor_id column (not its configuration: sensor_config,
--- sensor_annotations, sensor_hardware) and whether one has a row of the sensor;
+-- sensor_annotations, sensor_adapters) and whether one has a row of the sensor;
 -- the guard of "Delete sensor": a sensor with any observation, poll, device
 -- or rollup row is never deleted. Table names come from the catalog and are
 -- quoted as identifiers by format().
@@ -92,5 +86,5 @@ FROM information_schema.tables t
 WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
   AND EXISTS (SELECT 1 FROM information_schema.columns c
               WHERE c.table_schema = t.table_schema AND c.table_name = t.table_name AND c.column_name = 'sensor_id')
-  AND t.table_name NOT IN ('sensor_config', 'sensor_annotations', 'sensor_hardware')
+  AND t.table_name NOT IN ('sensor_config', 'sensor_annotations', 'sensor_adapters')
 ORDER BY t.table_name

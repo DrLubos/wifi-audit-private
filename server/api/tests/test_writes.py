@@ -143,29 +143,19 @@ class ChannelPlans(unittest.TestCase):
 
 
 class Hardware(unittest.TestCase):
-    def test_catalog_row(self):
-        h = w.parse_hardware({"kind": "antenna", "name": " Dipole ", "gain_dbi": 5, "bands": ["5", "2.4"], "connector": "RP-SMA"})
-        self.assertEqual((h["name"], h["gain_dbi"], h["bands"], h["connector"]), ("Dipole", 5.0, ["2.4", "5"], "RP-SMA"))
-        self.assertEqual(w.parse_hardware({"kind": "x", "name": "a", "bands": ["5"]}, kind_fixed="adapter")["kind"], "adapter")
-        for bad in ({"kind": "cable", "name": "a", "bands": ["5"]}, {"kind": "antenna", "name": "", "bands": ["5"]},
-                    {"kind": "antenna", "name": "a", "bands": []}, {"kind": "antenna", "name": "a", "bands": ["60"]},
-                    {"kind": "antenna", "name": "a", "bands": ["5"], "gain_dbi": 40}):
-            with self.subTest(bad=bad), self.assertRaises(w.Invalid):
-                w.parse_hardware(bad)
-
-    def test_attach(self):
-        a = w.parse_attach({"adapter_id": 1, "antenna_id": 2}, NOW)
-        self.assertEqual((a["valid_from"], a["antenna_id"]), (NOW, 2))
-        past = w.parse_attach({"adapter_id": 1, "valid_from": "2026-10-12T10:00:00Z"}, NOW,
-                              last_from=datetime(2026, 9, 15, tzinfo=timezone.utc))
-        self.assertEqual((past["valid_from"].hour, past["antenna_id"]), (10, None))
-        for body, last in (({"adapter_id": 1, "valid_from": "2026-10-12T19:00:00Z"}, None),     # the future
-                           ({"adapter_id": 1, "valid_from": "2026-09-01T00:00:00Z"}, datetime(2026, 9, 15, tzinfo=timezone.utc)),
-                           ({"adapter_id": 1, "valid_from": "2026-10-12T10:00:00"}, None),      # no zone
-                           ({"antenna_id": 2}, None)):
+    def test_hardware_change(self):
+        a = w.parse_hardware_change({}, NOW)
+        self.assertEqual((a["valid_from"], a["note"]), (NOW, None))
+        past = w.parse_hardware_change({"valid_from": "2026-10-12T10:00:00+02:00", "note": " swapped antenna "}, NOW)
+        self.assertEqual((past["valid_from"], past["note"]), (datetime(2026, 10, 12, 8, 0, tzinfo=timezone.utc), "swapped antenna"))
+        self.assertEqual(w.parse_hardware_change({"valid_from": (NOW + timedelta(minutes=3)).isoformat()}, NOW)["note"], None)
+        for body in ({"valid_from": "2026-10-12T19:00:00Z"},                       # the future
+                     {"valid_from": "2026-10-12T10:00:00"},                        # no zone
+                     {"valid_from": "yesterday"}, {"note": "x" * 501}, {"note": 5}):
             with self.subTest(body=body), self.assertRaises(w.Invalid):
-                w.parse_attach(body, NOW, last)
-        self.assertEqual(w.parse_attach({"adapter_id": 1, "valid_from": (NOW + timedelta(minutes=3)).isoformat()}, NOW)["adapter_id"], 1)
+                w.parse_hardware_change(body, NOW)
+        self.assertEqual(w.hardware_change_label("swapped antenna"), "Hardware change: swapped antenna")
+        self.assertEqual(w.hardware_change_label(None), "Hardware change")
 
     def test_sensor_meta(self):
         self.assertEqual(w.parse_sensor_meta({"location": " Dorm DF, 3rd floor ", "description": ""}),
