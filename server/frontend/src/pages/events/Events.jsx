@@ -23,12 +23,12 @@ import ErrorBox from "../../components/ErrorBox.jsx";
 import Skeleton from "../../components/Skeleton.jsx";
 import { ep } from "../../data/keys.js";
 import { useQuery } from "../../data/query.js";
-import { useWrite } from "../../data/write.js";
+import { saveFile, useWrite } from "../../data/write.js";
 import { useAccount } from "../../hooks/useAccount.js";
 import { useFilters } from "../../hooks/useFilters.js";
 import { fmtDateTime, fmtInt } from "../../format.js";
 import {
-  actionText, actionsFor, apCell, bssidCell, groupText, headText, idsOf, KINDS, labelBody, labelText, OUTCOMES,
+  actionText, actionsFor, apCell, bssidCell, groupText, headText, historyLine, idsOf, KINDS, labelBody, labelText, OUTCOMES,
   pagerText, parseStatus, rowOf, selected, SEVERITY_MIN, severityBadge, statusBadge, statusChips, statusParam,
   timeText, timeTitle, typeText, whoRows, whyRows,
 } from "./events.js";
@@ -117,6 +117,7 @@ export default function Events() {
         <h1>Events</h1>
         <span className="muted">{d ? headText(d.counts) : "…"}</span>
       </div>
+      <ExportBar />
 
       <section className="card events-filters" aria-label="Filters">
         <span className="muted tiny">Status</span>
@@ -384,6 +385,37 @@ function EventDetail({ id, tz }) {
   return <DetailBody e={q.data} tz={tz} />;
 }
 
+// the RQ2 export: every event with its outcome and every change of a label as
+// CSV, behind the write token (fetched with it, handed to the browser as a file)
+function ExportBar() {
+  const w = useWrite();
+  const [state, setState] = useState({ busy: null, error: null });
+  const get = async (what, path) => {
+    setState({ busy: what, error: null });
+    try {
+      saveFile(await w.download(path));
+      setState({ busy: null, error: null });
+    } catch (e) {
+      setState({ busy: null, error: e.message });
+    }
+  };
+  const why = w.unlocked ? undefined : LOCKED;
+  return (
+    <div className="export-bar">
+      <span className="muted small">Export for the false-positive analysis (CSV):</span>
+      <button type="button" className="btn2" disabled={!w.unlocked || Boolean(state.busy)} title={why ?? "every event with its outcome and reason - open ones too"}
+              onClick={() => get("labels", "/api/v2/events/export/labels.csv")}>
+        {state.busy === "labels" ? "Preparing…" : "Labels"}
+      </button>
+      <button type="button" className="btn2" disabled={!w.unlocked || Boolean(state.busy)} title={why ?? "every change of a label, one row per change"}
+              onClick={() => get("history", "/api/v2/events/export/label-history.csv")}>
+        {state.busy === "history" ? "Preparing…" : "Label history"}
+      </button>
+      {state.error && <span className="bad-text small" role="alert">{state.error}</span>}
+    </div>
+  );
+}
+
 function DetailBody({ e, tz }) {
   const why = whyRows(e, tz);
   const who = whoRows(e, tz);
@@ -398,6 +430,12 @@ function DetailBody({ e, tz }) {
           ))}
         </dl>
         {label && <span className="muted tiny">Marked: {label}{e.status_at ? ` (${fmtDateTime(e.status_at, tz)})` : ""}</span>}
+        {e.label_history?.length > 0 && (
+          <div className="label-history">
+            <span className="ev-label">Label history</span>
+            <ul>{e.label_history.map((entry) => <li key={entry.at} className="small">{historyLine(entry, tz)}</li>)}</ul>
+          </div>
+        )}
       </div>
       {e.kind !== "sensor" && (
         <div className="ev-col">

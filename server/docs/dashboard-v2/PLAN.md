@@ -1722,6 +1722,41 @@ ADAPTER_USB_ID='<vid:pid>' ADAPTER_MAC='<mac>' \
 docker compose up -d api frontend
 ```
 
+**5b completed: the label export and the label history (2026-10-13).** Items
+1 and 2 of the 5b request (three outcomes with a required reason - single and
+bulk, any event kind -, the AP's classification and note, Managed / Friendly,
+Add to allowed) were built earlier in 5b and deployed; an outcome can be
+changed with a new reason, and `audit_log` keeps the old value next to the new
+one for every change. Added:
+
+- *Label history:* `GET /events/{id}` carries `label_history` (newest first:
+  when, from {outcome, reason, note}, to {...}, from `audit_log`
+  'event.status'); the event's detail lists it ("13 Oct 14:05 · Open → Benign ·
+  Expected behaviour · open guest network").
+- *The RQ2 dataset as CSV*, behind the write token (decided 2026-10-13: the
+  labels are research data; the page fetches with the token and hands the file
+  to the browser): `GET /events/export/labels.csv` - **every event, open ones
+  too** (so the false-positive and confirmation rates have their denominators),
+  one row each: event_id, ts_utc, ts_end_utc, sensor, kind, type, type_label,
+  severity, bssid, ssid, outcome (open | confirmed | benign | false_positive),
+  reason, note, labelled_at_utc - and `GET /events/export/label-history.csv`
+  (long format, one row per change: event_id, at_utc, kind, type, old / new
+  outcome, reason and note). No summary or evidence (they can name client
+  MACs); the BSSID is blank unless it is an account AP (checked on the 271
+  real events: 101 distinct MACs in the file, all account BSSIDs); the notes are
+  the operator's own; a cell that starts like a spreadsheet formula gets a
+  leading apostrophe (`= + - @`) so opening the file runs nothing. Buttons
+  "Labels" and "Label history" on the Events page, enabled while unlocked.
+  Stdlib `app/v2/export.py`, tested first (`test_export.py`).
+
+Deploy (api and frontend, no schema change):
+
+```sh
+cd ~/wifi-audit && git pull && cd server
+docker compose build api && docker compose up -d api
+docker compose build frontend && docker compose up -d frontend
+```
+
 Out of scope for now (designed in 11, not built): upload after every poll
 with config delivery, ranges beyond 30 days, live updates, login.
 

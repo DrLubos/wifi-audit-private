@@ -45,3 +45,6 @@
 .v2 .events-table .bad-text, .v2 .bulk-bar .bad-text, .v2 .ev-actions .bad-text { color: var(--bad-fg); }
 .v2 .btn2.btn-lg { height: 40px; padding: 0 16px; font-size: 14px; }
 .v2 .events-table .label-form { max-width: 1060px; }
+.v2 .export-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: -8px; }
+.v2 .label-history { display: flex; flex-direction: column; gap: 4px; padding-top: 6px; }
+.v2 .label-history ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }

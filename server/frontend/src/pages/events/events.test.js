@@ -1,6 +1,6 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
-  actionText, actionsFor, apCell, bssidCell, groupText, idsOf, labelBody, labelText, reasonText, headText, pagerText, parseStatus, rowOf, selected, severityBadge,
+  actionText, actionsFor, apCell, bssidCell, groupText, historyLine, idsOf, labelBody, labelText, reasonText, headText, pagerText, parseStatus, rowOf, selected, severityBadge,
   statusBadge, statusChips, statusParam, timeTitle, typeText, whoRows, whyRows,
 } from "./events.js";
 
@@ -45,6 +45,15 @@ test("labels: three outcomes, each with its own reason", () => {
   eq(reasonText("artefact"), "Sensor or environment artefact");
   // a group row labels all its events
   eq(idsOf([{ id: 9, group: { members: [{ id: 9 }, { id: 7 }] } }, { id: 3 }, { id: 7 }]), [3, 7, 9]);
+});
+
+test("label history: every change keeps the old value", () => {
+  const first = { at: "2026-10-13T12:05:00Z", from: { status: "open", reason: null, note: null },
+                  to: { status: "benign", reason: "expected_behaviour", note: "open guest network" } };
+  const later = { at: "2026-10-14T08:00:00Z", from: first.to, to: { status: "false_positive", reason: "rule_defect", note: null } };
+  eq(historyLine(first, "Europe/Bratislava"), "13 Oct 14:05 · Open → Benign · Expected behaviour · open guest network");
+  eq(historyLine(later, "Europe/Bratislava"), "14 Oct 10:00 · Benign · Expected behaviour → False positive · Rule defect or misattribution");
+  eq(historyLine({ at: "2026-10-14T08:00:00Z", from: null, to: first.to }, "Europe/Bratislava").includes("– →"), true);
 });
 
 test("status filter: Open by default, all, a list", () => {

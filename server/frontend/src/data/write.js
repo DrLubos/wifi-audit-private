@@ -83,13 +83,26 @@ export function createWriteState(storage, fetchImpl, cache) {
     return data;
   }
 
+  // a GET behind the token (the label export): the blob and the file the api names
+  async function download(url) {
+    if (!token) throw new WriteError(401, "locked - unlock with the write token first");
+    const res = await fetchImpl(url, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
+    if (res.status === 401) {
+      remember(null);
+      throw new WriteError(401, "the write token was refused - unlock again");
+    }
+    if (!res.ok) throw new WriteError(res.status, await detail(res));
+    const m = /filename="([^"]+)"/.exec(res.headers?.get?.("Content-Disposition") ?? "");
+    return { blob: await res.blob(), filename: m ? m[1] : "export.csv" };
+  }
+
   return {
     get: () => snapshot,
     subscribe: (fn) => {
       listeners.add(fn);
       return () => listeners.delete(fn);
     },
-    unlock, send, lock: () => remember(null),
+    unlock, send, download, lock: () => remember(null),
   };
 }
 
@@ -107,8 +120,20 @@ export const writer = createWriteState(
   store,
 );
 
-// {unlocked, unlock(token), lock(), send(method, url, body, refetchPrefixes)}
+// hand a downloaded blob to the browser as a file
+export function saveFile({ blob, filename }) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+// {unlocked, unlock(token), lock(), send(method, url, body, refetchPrefixes), download(url)}
 export function useWrite() {
   const s = useSyncExternalStore(writer.subscribe, writer.get);
-  return { unlocked: s.unlocked, unlock: writer.unlock, lock: writer.lock, send: writer.send };
+  return { unlocked: s.unlocked, unlock: writer.unlock, lock: writer.lock, send: writer.send, download: writer.download };
 }

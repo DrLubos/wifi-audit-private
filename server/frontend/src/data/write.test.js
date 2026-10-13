@@ -61,6 +61,22 @@ await atest("send: the token, the body, stale reads, refetched keys; 401 locks",
   eq(cache.stale, 1);                                   // failed writes leave the cache alone
 });
 
+await atest("download: the token, the blob and the file name; 401 locks", async () => {
+  const csvRes = { status: 200, ok: true, blob: async () => "BLOB", headers: { get: (k) => (k === "Content-Disposition" ? 'attachment; filename="wifi-audit-labels-20261013.csv"' : null) } };
+  const f = fakeFetch(csvRes, respond(401, {}), { ...csvRes, headers: { get: () => null } });
+  const w = createWriteState(memory({ "wifi-audit.write-token": "t" }), f, null);
+  eq(await w.download("/api/v2/events/export/labels.csv"), { blob: "BLOB", filename: "wifi-audit-labels-20261013.csv" });
+  eq(f.calls[0], ["/api/v2/events/export/labels.csv", "GET", "Bearer t", null]);
+  let err = null;
+  await w.download("/x").catch((e) => { err = e; });
+  eq([err.status, w.get().unlocked], [401, false]);
+  await createWriteState(memory({ "wifi-audit.write-token": "t" }), f, null).download("/y").then((r) => { err = r; });
+  eq(err.filename, "export.csv");                                      // no header: a plain name
+  const locked = fakeFetch();
+  await createWriteState(memory(), locked, null).download("/z").catch((e) => { err = e; });
+  eq([err.status, locked.calls.length], [401, 0]);
+});
+
 await atest("locked: no request", async () => {
   const f = fakeFetch();
   const w = createWriteState(memory(), f, null);

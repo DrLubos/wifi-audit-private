@@ -133,6 +133,14 @@ export function labelText(e) {
   return [o?.label ?? e.status, reasonText(e.status_reason), e.status_note].filter(Boolean).join(" · ");
 }
 
+// "13 Oct 14:05 · Open → Benign · Expected behaviour · open guest network": a change of a
+// label (audit_log keeps the old value next to the new one); the note is the new one's
+export function historyLine(h, tz) {
+  const name = (x) => (x.status === "open" ? "Open" : OUTCOMES.find((o) => o.key === x.status)?.label ?? x.status);
+  const side = (x, note) => (x ? [name(x), reasonText(x.reason), note ? x.note : null].filter(Boolean).join(" · ") : "–");
+  return `${fmtDateTime(h.at, tz)} · ${side(h.from, false)} → ${side(h.to, true)}`;
+}
+
 // the action of a row: Label (any of the three outcomes, on every kind -
 // decided 2026-10-13; chosen in the form) or, once labelled, Relabel; one
 // button keeps the table within the page

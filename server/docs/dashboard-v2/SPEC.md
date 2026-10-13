@@ -162,6 +162,9 @@ Each card states whether it follows the period. "Now" cards ignore it.
   expected / benign (true, but not a security issue), staged test (the
   developer's own attack runs); False positive - rule defect or
   misattribution, sensor or environment artefact.
+- Export for RQ2 (behind the write token): every event with its outcome and reason
+  (open ones too) and every change of a label, as CSV - "Labels" and "Label history"
+  on the Events page; the detail of an event lists its label history.
 - Bulk action (phase 5): select several rows → Confirm / False positive with
   one note for all of them; each row gets its own status change in the audit
   log.
