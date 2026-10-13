@@ -111,18 +111,18 @@ def main(argv):
     th.start()
     time.sleep(0.1)
     if mode == "http":
-        for p in ("/api/health", "/api/overview", "/api/overview",
-                  "/api/aps/%s" % key, "/api/aps/%s" % key, "/api/aps"):
+        for p in ("/api/health", "/api/v2/overview/status", "/api/v2/overview/status",
+                  "/api/v2/aps?range=7d", "/api/v2/aps?range=7d", "/api/v2/sensors"):
             timed("GET " + p, lambda p=p: get(p))
     else:
         src = base64.b64decode(argv[2])
 
         def harness():
             r = subprocess.run(["docker", "compose", "exec", "-T", "api", "python", "-",
-                                "cold", "/api/health", "/api/overview"], input=src, capture_output=True)
+                                "cold", "/api/health", "/api/v2/overview/status"], input=src, capture_output=True)
             return r.stdout.decode().strip().replace("\n", " | ")
         timed("docker compose exec api python (whole)", harness)
-        timed("GET /api/overview (right after)", lambda: get("/api/overview"))
+        timed("GET /api/v2/overview/status (right after)", lambda: get("/api/v2/overview/status"))
     _stop.set()
     th.join()
 

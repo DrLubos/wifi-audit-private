@@ -12,23 +12,21 @@
 # the host page cache (sudo -n), so the dashboard answers 503 for ~10 s, ten
 # times in all. NO_COLD=1 skips the cold runs (warm numbers only).
 #
-# Per endpoint: HTTP cold (right after a restart: /api/health first - it pays
-# the api's reconnect to the restarted database - then the endpoint), EXPLAIN
-# (ANALYZE, BUFFERS) cold (after another restart) and warm (the second of two
-# runs), then HTTP warm p50/p95/max over N requests (default 20). HTTP goes to
-# the api container directly (127.0.0.1:8000, like its healthcheck), not
-# through Caddy. The AP endpoints use the AP with the most readings. Schema 6
-# queries (ep_*.sql); the schema-5 run is ~/perf-before.txt (2026-09-29).
 # Back-to-back warm requests run the e2-micro out of CPU burst credit after
 # ~12 s, then the whole VM is paused ~85 % of the time in ~220 ms slices
 # (docs/performance.md): warm p95/max include that, p50 mostly not.
 #
-# MODE=v2 measures the dashboard v2 endpoints (/api/v2, PLAN.md 7.4): per
+# MODE=v2 (the default) measures the dashboard endpoints (/api/v2, PLAN.md 7.4): per
 # statement group of app/v2/sql the EXPLAIN (ANALYZE, BUFFERS) cold and warm
 # (ep_v2.py: the api's own SQL, RANGE=30d by default), HTTP warm timings,
 # then v2_smoke.py in the api container: every endpoint 200 (and its 404 /
 # 422 cases), the ETag 304 round trip, event paging back and forth, and the
 # privacy scan (every MAC in every response a BSSID of the account's APs).
+# The first dashboard's endpoints (/api/overview ...) and their measurement
+# (the old default mode) were removed in phase 5c; their numbers stay in
+# docs/performance.md.
+#
+# MODE=detectors measures the batch detectors' time-window scans (ep_detectors.py).
 #
 # MODE=coldstart measures only what the first requests after a cold start
 # cost and why (coldstart_probe.py, on the box): four variants, each after
@@ -41,7 +39,7 @@ set -eu
 HOST="${HOST:-google}"
 REMOTE_DIR="${REMOTE_DIR:-wifi-audit/server}"
 N="${N:-20}"
-MODE="${MODE:-full}"
+MODE="${MODE:-v2}"
 here=$(cd "$(dirname "$0")" && pwd)
 
 on_box() { ssh -o BatchMode=yes "$HOST" "cd $REMOTE_DIR && set -a && . ./.env && set +a && $1"; }
@@ -65,12 +63,13 @@ http() {
   for a in "$@"; do args="$args '$a'"; done
   on_box "docker compose exec -T api python -$args" < "$here/http_timing.py"
 }
-endpoint_sql() { cat "$here/common.sql" "$here/ep_$1.sql"; }
 
 if [ "$MODE" = v2 ]; then
   R="${RANGE:-30d}"
   echo "# v2 measurement $(date -u +%Y-%m-%dT%H:%M:%SZ), host $HOST, N=$N, range $R, cold runs: $([ -n "${NO_COLD:-}" ] && echo no || echo yes)"
-  on_box 'git log --oneline -1'
+  on_box 'git log --oneline -1; nproc; df -h / | tail -1; free -m | sed -n 2,3p; du -sh backups 2>/dev/null || true'
+  echo "== sizes"
+  psql_ro < "$here/sizes.sql"
   for g in context sensors overview events networks aps spectrum settings; do
     echo
     echo "=================== v2 $g"
@@ -101,7 +100,6 @@ fi
 
 if [ "$MODE" = coldstart ]; then
   echo "# cold-start breakdown $(date -u +%Y-%m-%dT%H:%M:%SZ), host $HOST"
-  KEY=$({ cat "$here/common.sql"; echo '\echo :key'; } | psql_ro)
   B64=$(base64 < "$here/http_timing.py" | tr -d '\n')
   for v in ${VARIANTS:-restart drop both harness}; do
     sleep 60                      # idle: the CPU burst credit refills
@@ -111,63 +109,21 @@ if [ "$MODE" = coldstart ]; then
       drop)    drop_cache ;;
       both|harness) make_cold ;;
     esac
-    if [ "$v" = harness ]; then probe harness "$KEY" "$B64"; else probe http "$KEY"; fi
+    if [ "$v" = harness ]; then probe harness - "$B64"; else probe http -; fi
   done
   echo "# done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   exit 0
 fi
 
-echo "# perf measurement $(date -u +%Y-%m-%dT%H:%M:%SZ), host $HOST, N=$N, cold runs: $([ -n "${NO_COLD:-}" ] && echo no || echo yes)"
-echo "== box"
-on_box 'git log --oneline -1; nproc; df -h / | tail -1; free -m | sed -n 2,3p; du -sh backups 2>/dev/null || true'
+if [ "$MODE" = detectors ]; then
+  echo "# detector scans $(date -u +%Y-%m-%dT%H:%M:%SZ), host $HOST"
+  on_box 'git log --oneline -1'
+  # the scans are heavy enough to spend the e2-micro's CPU burst credit: nothing is timed after them
+  echo "=================== detectors: deauth_flood / evil_twin time-window scans (EXPLAIN, first + warm run)"
+  python3 "$here/ep_detectors.py" | cat "$here/common.sql" - | psql_ro
+  echo "# done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  exit 0
+fi
 
-echo "== sizes"
-psql_ro < "$here/sizes.sql"
-
-KEY=$({ cat "$here/common.sql"; echo '\echo :key'; } | psql_ro)
-echo "== busiest AP: $KEY"
-# the AP page's 15-minute view: the last 48 h of the AP's data
-RAWQ=$({ cat "$here/common.sql"; cat <<'SQL'
-SELECT 'bucket=900&from=' || to_char((last_obs + interval '1 second' - interval '48 hours') AT TIME ZONE 'UTC',
-                                     'YYYY-MM-DD"T"HH24:MI:SS"Z"')
-       || '&to=' || to_char((last_obs + interval '1 second') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS rawq
-FROM ap_summary WHERE sensor_id = :sid AND device_key = :'key' \gset
-\echo :rawq
-SQL
-} | psql_ro)
-
-for ep in overview aps ap ap_rssi detections; do
-  case $ep in
-    overview)   set -- "/api/overview" ;;
-    aps)        set -- "/api/aps" ;;
-    ap)         set -- "/api/aps/$KEY" ;;
-    ap_rssi)    set -- "/api/aps/$KEY/rssi" ;;
-    detections) set -- "/api/detections" ;;
-  esac
-  echo
-  echo "=================== $ep"
-  if [ -z "${NO_COLD:-}" ]; then
-    make_cold
-    http cold /api/health "$@"
-    make_cold
-    echo "-- EXPLAIN cold"
-    endpoint_sql $ep | psql_ro
-  fi
-  endpoint_sql $ep | psql_ro >/dev/null
-  echo "-- EXPLAIN warm"
-  endpoint_sql $ep | psql_ro
-  http warm "$N" "$@"
-done
-
-echo
-echo "=================== AP page, the 15-minute view; Overview page, its other requests (warm)"
-http warm "$N" "/api/aps/$KEY/rssi?$RAWQ" "/api/findings" "/api/alerts?limit=50"
-
-# Last: the detector scans are heavy enough to spend the e2-micro's CPU burst
-# credit, and HTTP timings taken right after them carry ~220 ms throttle
-# slices (measured 2026-10-03: the 15-min view 242 ms p50 after them, 20 ms
-# after 90 s of idle).
-echo
-echo "=================== detectors: deauth_flood / evil_twin time-window scans (EXPLAIN, first + warm run)"
-python3 "$here/ep_detectors.py" | cat "$here/common.sql" - | psql_ro
-echo "# done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "measure.sh: unknown MODE '$MODE' (v2, coldstart, detectors)" >&2
+exit 2
