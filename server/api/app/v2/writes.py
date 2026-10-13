@@ -67,6 +67,27 @@ def parse_ids(body):
     return sorted(set(ids))
 
 
+# --- AP classification and note ------------------------------------------------------------------
+
+CLASSES = ("managed", "friendly", "unknown", "suspicious", "ignored")
+
+
+def parse_ap_classification(body):
+    """{classification} -> a class, or None = back to the rules."""
+    if "classification" not in body:
+        raise Invalid("classification: a class or null")
+    c = body["classification"]
+    if c is not None and c not in CLASSES:
+        raise Invalid("classification: " + ", ".join(CLASSES) + " or null")
+    return c
+
+
+def parse_ap_note(body):
+    if "note" not in body:
+        raise Invalid("note: a string or null")
+    return _note(body["note"], 2000)
+
+
 # --- networks -----------------------------------------------------------------------------------
 
 EXPECTED = ("enterprise", "psk_or_better", "wpa3", "open_allowed")

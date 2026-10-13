@@ -13,15 +13,16 @@ load charts (utilization per bucket, clients as an average week).
 
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
 
-from .. import apcache, deps, periods, privacy, queries, shape
+from .. import apcache, deps, periods, privacy, queries, shape, writes
 from ..periods import iso
 
 router = APIRouter(prefix="/aps", tags=["v2 access points"])
 
 _Q = queries.load("aps")
 _QC = queries.load("context")
+_QW = queries.load("writes")
 
 BSSID_RE = r"^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$"
 CLASSES = ("managed", "friendly", "unknown", "suspicious", "ignored")
@@ -320,3 +321,30 @@ def ap_load(request: Request, bssid: str = Path(pattern=BSSID_RE),
         thresholds, top = shape.ramp(peak["value"]) if peak["value"] else (AP_RAMP, None)
         body.update({"weeks": weeks, "rows": rows, "peak": peak, "ramp": list(thresholds), "scale": {"top": top}})
     return deps.respond(body, tag)
+
+
+def _write_ap(acc, bssid, stmt, field, value, action, refresh):
+    with deps.write_tx(acc) as (conn, audit):
+        a = _find(conn, acc, bssid)
+        old = {"classification": a.get("manual_classification"), "note": a.get("note")}[field]
+        if old != value:
+            deps.run(conn, _QW, stmt, account_id=acc["id"], bssid=bssid, **{field: value})
+            audit(action, "ap:%s" % a["bssid"], {field: old}, {field: value})
+            if refresh:
+                deps.refresh_events_all(conn, acc)
+    return deps.written({"bssid": a["bssid"], field: value})
+
+
+@router.put("/{bssid}/classification", dependencies=[Depends(deps.require_write)])
+def put_classification(bssid: str = Path(pattern=BSSID_RE), body: dict = Body(...), acc=Depends(deps.get_account)):
+    """The manual classification of the AP ({classification}: a class, or null
+    = back to the rules); the events are re-derived (the rule event)."""
+    c = deps.invalid(writes.parse_ap_classification, body)
+    return _write_ap(acc, bssid, "ap_classification", "classification", c, "ap.classification", True)
+
+
+@router.put("/{bssid}/note", dependencies=[Depends(deps.require_write)])
+def put_note(bssid: str = Path(pattern=BSSID_RE), body: dict = Body(...), acc=Depends(deps.get_account)):
+    """The operator's note about the AP ({note}, null clears it)."""
+    note = deps.invalid(writes.parse_ap_note, body)
+    return _write_ap(acc, bssid, "ap_note", "note", note, "ap.note", False)

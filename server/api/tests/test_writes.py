@@ -38,6 +38,19 @@ class Labels(unittest.TestCase):
                 w.parse_ids(bad)
 
 
+class Aps(unittest.TestCase):
+    def test_classification_and_note(self):
+        self.assertEqual(w.parse_ap_classification({"classification": "managed"}), "managed")
+        self.assertIsNone(w.parse_ap_classification({"classification": None}))     # back to the rules
+        for bad in ({}, {"classification": "evil"}):
+            with self.subTest(bad=bad), self.assertRaises(w.Invalid):
+                w.parse_ap_classification(bad)
+        self.assertEqual(w.parse_ap_note({"note": " lab AP "}), "lab AP")
+        self.assertIsNone(w.parse_ap_note({"note": ""}))
+        with self.assertRaises(w.Invalid):
+            w.parse_ap_note({})
+
+
 class Networks(unittest.TestCase):
     def test_network(self):
         n = w.parse_network({"ssid": "IK-WIFI", "kind": "managed", "expected_security": "open_allowed",

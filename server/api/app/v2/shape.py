@@ -546,7 +546,8 @@ def event_group(row, members):
     return {"n": len(row["members"]), "day": row["day"].isoformat(), "ts_first": iso(row["ts_first"]),
             "ts_last": iso(last), "bssids": len(bssids),
             "members": [{"id": m["id"], "ts": iso(m["ts"]), "ts_end": iso(m["ts_end"]), "summary": m["summary"],
-                         "status_at": iso(m["status_at"]), "bssid": m.get("bssid")} for m in ms]}
+                         "status_at": iso(m["status_at"]), "status_reason": m.get("status_reason"),
+                         "bssid": m.get("bssid")} for m in ms]}
 
 
 def utc_now():

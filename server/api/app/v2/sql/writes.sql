@@ -82,3 +82,26 @@ DELETE FROM capture_hardware WHERE account_id = %(account_id)s AND id = %(id)s R
 INSERT INTO sensor_hardware (sensor_id, valid_from, adapter_id, antenna_id, created_by, note)
 VALUES (%(sensor_id)s, %(valid_from)s, %(adapter_id)s, %(antenna_id)s, 'operator', %(note)s)
 RETURNING valid_from
+
+-- name: event_status
+-- The operator's label of events of the account (schema 12: open, or one of
+-- the three outcomes with its reason - the constraint refuses a mismatch).
+-- A NULL note keeps the stored one; detectors' columns (updated_at) stay.
+UPDATE detections d
+SET status = %(status)s, status_reason = %(reason)s, status_at = now(),
+    status_note = coalesce(%(note)s, d.status_note)
+FROM sensors se
+WHERE se.id = d.sensor_id AND se.account_id = %(account_id)s AND d.id = ANY (%(ids)s::bigint[])
+RETURNING d.id
+
+-- name: ap_classification
+-- The manual classification of an account AP (NULL = back to the rules).
+UPDATE aps SET classification = %(classification)s, classified_at = CASE WHEN %(classification)s::text IS NULL
+                                                                         THEN NULL ELSE now() END
+WHERE account_id = %(account_id)s AND bssid = %(bssid)s::macaddr
+RETURNING id
+
+-- name: ap_note
+UPDATE aps SET note = %(note)s, note_at = CASE WHEN %(note)s::text IS NULL THEN NULL ELSE now() END
+WHERE account_id = %(account_id)s AND bssid = %(bssid)s::macaddr
+RETURNING id

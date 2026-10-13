@@ -51,7 +51,8 @@ WRITES = (("POST", "/auth/check"), ("PUT", "/settings/networks"), ("POST", "/set
           ("POST", "/settings/networks/1/allowed"), ("PUT", "/settings/classification"),
           ("PUT", "/settings/detectors"), ("POST", "/settings/sensors"), ("PUT", "/settings/sensors/pi-fri"),
           ("POST", "/settings/hardware"), ("PUT", "/settings/hardware/1"), ("DELETE", "/settings/hardware/1"),
-          ("POST", "/settings/sensors/pi-fri/hardware"))
+          ("POST", "/settings/sensors/pi-fri/hardware"), ("POST", "/events/1/status"), ("POST", "/events/status"),
+          ("PUT", "/aps/EC:58:EA:55:88:FC/classification"), ("PUT", "/aps/EC:58:EA:55:88:FC/note"))
 
 
 def main(argv):

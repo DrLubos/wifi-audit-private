@@ -76,7 +76,8 @@ WITH ev AS MATERIALIZED (
   LIMIT %(limit)s::int
 ), page AS MATERIALIZED (
   SELECT d.id, d.ts, d.ts_end, d.severity, d.kind, d.type, d.summary, d.mac, d.ssid, d.status, d.status_at,
-         d.sensor_id, coalesce(nullif(su.ssid, ''), su.name_seen, d.ssid) AS network, t.ts_first, t.members
+         d.status_reason, d.sensor_id, coalesce(nullif(su.ssid, ''), su.name_seen, d.ssid) AS network,
+         t.ts_first, t.members
   FROM top t
   JOIN detections d ON d.id = t.id
   LEFT JOIN ap_summary su ON su.sensor_id = d.sensor_id AND su.device_key = d.device_key
@@ -87,7 +88,7 @@ WITH ev AS MATERIALIZED (
 )
 SELECT p.id, p.ts, p.ts_end, p.severity, p.kind, p.type, {{_label}} AS type_label, p.summary,
        upper(p.mac::text) AS bssid, p.ssid, p.network, c.classification, s.name AS sensor, p.status, p.status_at,
-       p.ts_first, p.members, (p.ts AT TIME ZONE %(tz)s::text)::date AS day
+       p.status_reason, p.ts_first, p.members, (p.ts AT TIME ZONE %(tz)s::text)::date AS day
 FROM page p
 JOIN sensors s ON s.id = p.sensor_id
 LEFT JOIN kismet_alert_rules r ON p.kind = 'kismet' AND r.header = p.type
@@ -97,7 +98,7 @@ ORDER BY p.ts DESC, p.id DESC
 -- name: members
 -- The events of the page's grouped rows (feed.members) with their BSSIDs
 -- (the APs of one network).
-SELECT d.id, d.ts, d.ts_end, d.summary, d.status_at, upper(d.mac::text) AS bssid
+SELECT d.id, d.ts, d.ts_end, d.summary, d.status_at, d.status_reason, upper(d.mac::text) AS bssid
 FROM detections d
 WHERE d.id = ANY (%(ids)s::bigint[])
 ORDER BY d.ts DESC, d.id DESC
@@ -105,7 +106,7 @@ ORDER BY d.ts DESC, d.id DESC
 -- name: event
 SELECT p.id, p.ts, p.ts_end, p.severity, p.kind, p.type, {{_label}} AS type_label, p.summary,
        upper(p.mac::text) AS bssid, p.ssid, coalesce(nullif(su.ssid, ''), su.name_seen, p.ssid) AS network,
-       s.name AS sensor, p.status, p.status_at, p.status_note, p.evidence, p.created_at, p.updated_at,
+       s.name AS sensor, p.status, p.status_at, p.status_reason, p.status_note, p.evidence, p.created_at, p.updated_at,
        a.id AS ap_id, (SELECT v.classification FROM account_aps v WHERE v.ap_id = a.id) AS classification
 FROM detections p
 JOIN sensors s ON s.id = p.sensor_id AND s.account_id = %(account_id)s
@@ -135,3 +136,12 @@ LEFT JOIN ap_rssi_hourly h ON h.sensor_id = x.sensor_id AND h.device_key = x.dev
 WHERE x.ap_id = %(ap_id)s::bigint
 GROUP BY se.id, se.name, su.first_seen, su.last_seen, x.sensor_id, x.device_key
 ORDER BY se.id
+
+-- name: labels
+-- The current labels of the given events of the account (the old values
+-- of a status write, audit_log).
+SELECT d.id, d.status, d.status_reason, d.status_note, d.status_at
+FROM detections d
+JOIN sensors se ON se.id = d.sensor_id AND se.account_id = %(account_id)s
+WHERE d.id = ANY (%(ids)s::bigint[])
+ORDER BY d.id

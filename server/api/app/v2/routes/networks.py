@@ -173,6 +173,8 @@ def networks(request: Request, acc=Depends(deps.get_account), sensor: str = Depe
             "total_rows": len(listed), "page": other_page, "page_size": OTHER_PAGE,
             "rows": [{"network": None if n["hidden"] else n["network_key"], "key": n["network_key"],
                       "hidden": n["hidden"], "bssids": n["bssids"], "vendors": n["vendors"] or [],
+                      # the BSSIDs seen in the period: "Managed" offers them as its allowed list
+                      "bssid_list": n["bssid_list"] if not n["randomized"] else [],
                       "sibling": siblings.get(n["network_key"][7:]) if n["network_key"].startswith("hidden:") else None,
                       "security": {"labels": n["labels"], "weakest": n["weakest"]}, "mobile": n["mobile"],
                       "presence": n["presence"], "hours": n["hours"],

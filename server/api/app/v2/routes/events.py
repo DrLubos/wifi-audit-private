@@ -11,7 +11,7 @@ under every filter but status. No client MAC: summaries and evidence are
 redacted to the account's AP BSSIDs (privacy.redact()).
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
 
 from .. import cursor, deps, privacy, queries, shape, writes
 from ..periods import iso
@@ -19,6 +19,7 @@ from ..periods import iso
 router = APIRouter(prefix="/events", tags=["v2 events"])
 
 _Q = queries.load("events")
+_QW = queries.load("writes")
 
 STATUSES = writes.STATUSES             # open, confirmed, benign, false_positive (schema 12)
 KINDS = ("detection", "kismet", "config", "sensor")
@@ -57,6 +58,7 @@ def _item(r, members=()):
                {"bssid": r["bssid"], "ssid": r["ssid"], "network": r["network"],
                 "classification": r["classification"]}),
         "sensors": [r["sensor"]], "status": r["status"], "status_at": iso(r["status_at"]),
+        "status_reason": r["status_reason"],
     }
     if "members" in r:
         item["group"] = shape.event_group(r, members)
@@ -149,3 +151,35 @@ def event(request: Request, event_id: int = Path(ge=1, le=2 ** 63 - 1), acc=Depe
     clients = [w["clients"] for w in who if w["clients"] is not None]
     body = dict(item, evidence=r["evidence"], who_saw_it=who_saw, clients=max(clients) if clients else None)
     return deps.respond(privacy.redact(body, allowed), tag)
+
+
+def _label(acc, ids, body):
+    """One label for the given events, one transaction, one audit row per event."""
+    status, reason, note = deps.invalid(writes.parse_status, body)
+    with deps.write_tx(acc) as (conn, audit):
+        old = {r["id"]: r for r in deps.run(conn, _Q, "labels", account_id=acc["id"], ids=ids)}
+        missing = [i for i in ids if i not in old]
+        if missing:
+            raise HTTPException(status_code=404, detail="unknown event(s) %s" % missing[:10])
+        deps.run(conn, _QW, "event_status", account_id=acc["id"], ids=ids, status=status, reason=reason, note=note)
+        for i in ids:
+            o = old[i]
+            audit("event.status", "event:%d" % i,
+                  {"status": o["status"], "reason": o["status_reason"], "note": o["status_note"]},
+                  {"status": status, "reason": reason, "note": note if note is not None else o["status_note"]})
+    return deps.written({"ids": ids, "status": status, "reason": reason})
+
+
+@router.post("/{event_id}/status", dependencies=[Depends(deps.require_write)])
+def post_status(event_id: int = Path(ge=1, le=2 ** 63 - 1), body: dict = Body(...), acc=Depends(deps.get_account)):
+    """Label one event: {status, reason, note?} - open, or confirmed / benign /
+    false_positive with one of its reasons (schema 12; any event kind)."""
+    return _label(acc, [event_id], body)
+
+
+@router.post("/status", dependencies=[Depends(deps.require_write)])
+def post_status_bulk(body: dict = Body(...), acc=Depends(deps.get_account)):
+    """Label several events at once (a selection, or a group row): {ids,
+    status, reason, note?}; each event gets its own audit row."""
+    ids = deps.invalid(writes.parse_ids, body)
+    return _label(acc, ids, body)

@@ -53,14 +53,15 @@ WITH {{_ap}}, nk AS MATERIALIZED (       -- networks numbered: integer keys hash
          array_agg(DISTINCT ap.manuf) FILTER (WHERE ap.manuf IS NOT NULL) AS vendors,
          array_agg(DISTINCT ap.security_label) AS labels,
          (array_agg(ap.security ORDER BY coalesce(security_rank(ap.security), 99)))[1] AS weakest,
-         array_agg(ap.id ORDER BY ap.id) AS ap_ids, max(ap.last_seen) AS last_seen
+         array_agg(ap.id ORDER BY ap.id) AS ap_ids, max(ap.last_seen) AS last_seen,
+         array_agg(upper(ap.bssid::text) ORDER BY ap.bssid) AS bssid_list   -- "Managed": the allowed list
   FROM ap
   JOIN nk ON nk.id = ap.id
   JOIN (SELECT DISTINCT ap_id FROM seen) s ON s.ap_id = ap.id
   GROUP BY nk.net, ap.network_key
 )
 SELECT p.network_key, p.hidden, p.bssids, p.mobile, p.randomized, p.vendors, p.labels, p.weakest, p.ap_ids,
-       p.last_seen, pr.hours, pr.day_hours, pr.days, n.id AS network_id, n.kind, n.expected_security,
+       p.last_seen, p.bssid_list, pr.hours, pr.day_hours, pr.days, n.id AS network_id, n.kind, n.expected_security,
        n.require_mfp, n.note
 FROM per_net p
 JOIN presence pr ON pr.net = p.net
