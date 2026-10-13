@@ -1,6 +1,5 @@
-// The layout of every page: sidebar, top bar, the page (new pages render
-// <main className="content v2">, the previous dashboard's pages their own
-// <main> inside .legacy). The tab title comes from the route handle.
+// The layout of every page: sidebar, top bar, the page (<main className="content v2">).
+// The tab title comes from the route handle.
 
 import { useEffect } from "react";
 import { Outlet, useMatches } from "react-router-dom";

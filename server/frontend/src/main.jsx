@@ -1,8 +1,6 @@
-// Routes (PLAN.md 8.1). Dashboard v2 replaces the previous pages one by one:
-// every page is rebuilt (phase 5: Settings); the previous
-// Overview (/legacy) and Detections (/detections) stay reachable under
-// "Previous dashboard" until phase 5 (their AP links, /aps/<device key>,
-// redirect to the new AP page). The route handle names the global filters a
+// Routes (PLAN.md 8.1). Every page is the new dashboard's; the first dashboard
+// (src/legacy, /api/overview ...) was removed in phase 5c and its addresses
+// (/detections, /legacy) redirect. The route handle names the global filters a
 // page uses.
 
 import { StrictMode } from "react";
@@ -22,9 +20,6 @@ import ApDetail from "./pages/aps/ApDetail.jsx";
 import Events from "./pages/events/Events.jsx";
 import Sensors from "./pages/sensors/Sensors.jsx";
 import Settings from "./pages/settings/Settings.jsx";
-import Legacy from "./legacy/Legacy.jsx";
-import OldOverview from "./legacy/pages/Overview.jsx";
-import Detections from "./legacy/pages/Detections.jsx";
 
 const PERIOD = ["sensor", "range"];
 
@@ -39,11 +34,12 @@ const router = createBrowserRouter([
       { path: "sensors", element: <Sensors />, handle: { title: "Sensors" } },
       { path: "settings", element: <Navigate to="/settings/networks" replace />, handle: { title: "Settings" } },
       { path: "settings/:tab", element: <Settings />, handle: { title: "Settings" } },
-      // the previous dashboard, until phase 4d (access points) and 4e (events)
       { path: "aps", element: <ApList />, handle: { filters: PERIOD, title: "Access points" } },
+      // /aps/<a Kismet device key> (the first dashboard's links) is redirected to the BSSID by ApDetail
       { path: "aps/:id", element: <ApDetail />, handle: { title: "Access point" } },
-      { path: "detections", element: <Legacy><Detections /></Legacy>, handle: { title: "Detections" } },
-      { path: "legacy", element: <Legacy><OldOverview /></Legacy>, handle: { title: "Previous overview" } },
+      // the first dashboard's pages are gone (phase 5c): their addresses lead to the new ones
+      { path: "detections", element: <Navigate to="/events" replace /> },
+      { path: "legacy", element: <Navigate to="/" replace /> },
       { path: "*", element: <NotFound />, handle: { title: "Not found" } },
     ],
   },

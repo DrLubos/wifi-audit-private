@@ -1,7 +1,6 @@
-/* The shell and the components of the v2 pages, as boards/Main.dc.html.
+/* The shell and the components of the pages, as boards/Main.dc.html.
    Shell classes (.app .side .main .top ...) are unique; everything a page
-   uses is scoped to .v2, so the legacy pages (.legacy, legacy/legacy.css)
-   inside the same shell keep their own look until they are replaced. */
+   uses is scoped to .v2. */
 
 body {
   margin: 0;

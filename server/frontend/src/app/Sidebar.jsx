@@ -2,7 +2,7 @@
 // (every link keeps ?sensor=…&range=…), the sensors with a status dot, the
 // system status from /api/health (re-checked every 60 s).
 
-import { Link, NavLink } from "react-router-dom";
+import { NavLink } from "react-router-dom";
 import { useAccount, useHealth } from "../hooks/useAccount.js";
 import { useFilters } from "../hooks/useFilters.js";
 import { useNow } from "../hooks/useNow.js";
@@ -50,10 +50,6 @@ export default function Sidebar() {
         <span className="sbh">System</span>
         <span className="sbi" title="GET /api/health"><span className={`dot ${health.tone}`} />{health.text}</span>
         {health.schema && <span className="sbi indent">schema v{health.schema}</span>}
-      </div>
-      <div className="sb">
-        <span className="sbh">Previous dashboard</span>
-        <Link to="/legacy">Overview, detections</Link>
       </div>
     </nav>
   );
