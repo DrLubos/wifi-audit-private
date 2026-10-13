@@ -222,13 +222,13 @@ with tooltip. Outages and limited periods table.
   list with the coprime-stride check; dwell; poll interval - the "without
   empty DFS 59" plan is not offered: every DFS channel 52-136 carried APs,
   PLAN 5a). Sensors are added (empty), edited and renamed in modals, and deleted only
-  when they never collected anything, with the name typed (PLAN 5b follow-up). Capture hardware
-  (decided 2026-10-12): a catalog of adapters and antennas (name, kind, gain
-  dBi - optional -, bands, connector, note; only the antenna is typed, the adapter will
-  be detected from the sensor) extended by adding rows; each sensor records
-  which adapter and antenna are attached since when; a hardware change is a
-  dated data boundary in the configuration history, and RSSI baselines never
-  span two hardware periods (evil twin (b) would fire after a swap). Mixed current plans → warning. Upload is **not** a setting
+  when they never collected anything, with the name typed (PLAN 5b follow-up). Capture
+  hardware (decided 2026-10-13): one read-only adapter line per sensor (identity VID:PID +
+  MAC; seeded now, reported by the sensor in the live-upload phase) and "Add hardware
+  change" - a dated entry of the configuration history (when, an optional note such as
+  "swapped antenna") that is a data boundary like a channel-plan change; RSSI baselines
+  never span it (evil twin (b) would fire after a swap). There is no antenna record: it
+  is passive, undetectable by the sensor, and its gain feeds no computation. Mixed current plans → warning. Upload is **not** a setting
   (always after every poll, section 10). Configuration history with "data
   boundary" marking – a channel-plan change splits measurements for analysis.
   Until configuration delivery exists (section 10) "Send" stores the desired

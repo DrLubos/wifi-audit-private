@@ -1,8 +1,9 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
-  antennaBody, antennaDraft, antennaProblem, deleteGuard, renameNote, sensorBody, sensorNameProblem, EMPTY_ANTENNA,
-  addAllowed, captureText, classificationBody, classificationDraft, classificationProblem, configState, cycleText,
-  detectorsBody, detectorsDraft, detectorsProblem, historyRows, hopStride, hwDetail, hwText, networkDraft,
+  adapterLine, adapterSource, deleteGuard, hardwareChangeBody, hardwareChangeProblem, renameNote, sensorBody,
+  sensorNameProblem,
+  addAllowed, classificationBody, classificationDraft, classificationProblem, configState, cycleText,
+  detectorsBody, detectorsDraft, detectorsProblem, historyRows, hopStride, networkDraft,
   networksBody, ouiText, parseAllowed, planList, planText, removeAllowed, sameBody, ssidProblem, utcToZoned, utf8Length,
   zonedToUtc,
 } from "./settings.js";
@@ -75,14 +76,15 @@ test("channel plans and the stride rule", () => {
   eq(configState({ current: null, pending: { version: 4 } }, TZ).text, "Saved, not delivered");
 });
 
-test("hardware texts and the account's wall time", () => {
-  const catalog = [{ id: 1, kind: "adapter", name: "RTL8821CU USB adapter", gain_dbi: null, bands: ["2.4", "5"], connector: "USB" },
-                   { id: 2, kind: "antenna", name: "Dipole", gain_dbi: 5, bands: ["2.4", "5"], connector: "RP-SMA" }];
-  eq(hwText(catalog[1]), "Dipole (5 dBi)");
-  eq(hwDetail(catalog[1]), "2.4 / 5 GHz · RP-SMA");
-  eq(captureText({ adapter_id: 1, antenna_id: 2 }, catalog), "RTL8821CU USB adapter + Dipole (5 dBi)");
-  eq(captureText({ adapter_id: 1, antenna_id: null }, catalog), "RTL8821CU USB adapter + its own antenna");
-  eq(captureText(null, catalog), "none recorded");
+test("the adapter line and the account's wall time", () => {
+  const a = { name: "RTL8821CU USB adapter", usb_id: "0bda:c811", driver: "rtw88_8821cu", interface: "wlan1",
+              bands: ["2.4", "5"], reported_by: "seed" };
+  eq(adapterLine(a), "RTL8821CU USB adapter · 0bda:c811 · rtw88_8821cu on wlan1 · 2.4 / 5 GHz");
+  eq(adapterLine({ ...a, mac_known: true }), "RTL8821CU USB adapter · 0bda:c811 · MAC on record · rtw88_8821cu on wlan1 · 2.4 / 5 GHz");
+  eq(adapterLine({ name: "X", usb_id: null, driver: null, interface: null, bands: [] }), "X · VID:PID not reported yet");
+  eq(adapterLine(null), "no adapter recorded");
+  eq(adapterSource(a), "recorded by hand - the sensor will report it itself in the live-upload phase");
+  eq(adapterSource({ ...a, reported_by: "sensor" }), "reported by the sensor");
   // CEST (+2), CET (+1) after 25 Oct 2026, and back
   eq(zonedToUtc("2026-10-12T18:00", TZ), "2026-10-12T16:00:00Z");
   eq(zonedToUtc("2026-11-02T08:30", TZ), "2026-11-02T07:30:00Z");
@@ -92,9 +94,19 @@ test("hardware texts and the account's wall time", () => {
   eq(utcToZoned("2026-11-02T07:30:00Z", TZ), "2026-11-02T08:30");
 });
 
+test("a hardware change: when and an optional note", () => {
+  const now = Date.parse("2026-10-13T12:00:00Z");
+  eq(hardwareChangeProblem("2026-10-13T09:00:00Z", now), null);                  // in the past: recorded later
+  eq(hardwareChangeProblem("2026-10-13T12:03:00Z", now), null);                  // 5 min of clock skew
+  eq(hardwareChangeProblem("2026-10-13T13:00:00Z", now), "a change cannot lie in the future");
+  eq(hardwareChangeProblem(null, now), "give the date and time of the change");
+  eq(hardwareChangeBody("2026-10-13T09:00:00Z", " swapped antenna "), { valid_from: "2026-10-13T09:00:00Z", note: "swapped antenna" });
+  eq(hardwareChangeBody("2026-10-13T09:00:00Z", "  "), { valid_from: "2026-10-13T09:00:00Z", note: null });
+});
+
 test("history rows", () => {
   const rows = historyRows([
-    { sensor: "pi-fri", ts: "2026-10-12T16:00:00Z", boundary: true, kind: "hardware", label: "Capture hardware: A + B" },
+    { sensor: "pi-fri", ts: "2026-10-12T16:00:00Z", boundary: true, kind: "hardware_change", label: "Hardware change: swapped antenna" },
     { sensor: "pi-fri", ts: "2026-09-27T13:04:57Z", boundary: true, kind: "change", label: "Hop list: 89 entries" },
     { sensor: "pi-fri", ts: "2026-09-27T14:15:50Z", boundary: false, kind: "change", label: "Hop guard" }], TZ);
   eq(rows.map((r) => [r.ts, r.effect]), [["12 Oct 18:00", "RSSI baselines start again"], ["27 Sep 15:04", "evaluated apart"],
@@ -117,18 +129,6 @@ test("sensors: names, the body, rename and the guarded delete", () => {
   eq(deleteGuard({ has_polls: false }, "pi-new", "").why, "type pi-new to confirm");
   eq(deleteGuard({ has_polls: false }, "pi-new", "pi-ne").allowed, false);
   eq(deleteGuard({ has_polls: false }, "pi-new", " pi-new ").allowed, true);
-});
-
-test("antenna: the gain is optional", () => {
-  const a = { ...EMPTY_ANTENNA, name: " Dipole " };
-  eq(antennaProblem(a), null);                                                    // no gain is fine
-  eq(antennaBody(a), { kind: "antenna", name: "Dipole", gain_dbi: null, bands: ["2.4", "5"], connector: null, note: null });
-  eq(antennaBody({ ...a, gain_dbi: "5", connector: "RP-SMA" }).gain_dbi, 5);
-  eq(antennaProblem({ ...a, gain_dbi: "105" }), "the gain is a number from −10 to 30 dBi, or leave it empty");
-  eq(antennaProblem({ ...a, gain_dbi: "x" }) != null, true);
-  eq(antennaProblem({ ...a, name: "" }), "give the antenna a name");
-  eq(antennaProblem({ ...a, bands: [] }), "pick its bands");
-  eq(antennaDraft({ id: 2, name: "Dipole", gain_dbi: null, bands: ["5"], connector: null, note: null }).gain_dbi, "");
 });
 
 done();

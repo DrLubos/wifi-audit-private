@@ -139,13 +139,12 @@ export function stateNote(s, st, tz) {
   return null;
 }
 
-// the capture hardware attached now (schema 11): "RTL8821CU USB adapter · Dipole
-// (5 dBi), since 15 Sep 2026"
-export function captureLine(c, tz) {
-  if (!c) return "not recorded (Settings > Sensors)";
-  const gain = c.gain_dbi == null ? "" : ` (${c.gain_dbi} dBi)`;
-  const antenna = c.antenna ? `${c.antenna}${gain}` : "its own antenna";
-  return `${c.adapter} · ${antenna}, since ${fmtDate(c.since, tz)} ${partsOf(c.since, tz).year}`;
+// the capture adapter (read-only, schema 13) and the last hardware change entered by hand:
+// "RTL8821CU USB adapter · 0bda:c811 · last hardware change 13 Oct 14:00"
+export function adapterText(a, lastChange, tz) {
+  if (!a) return "not recorded";
+  const id = a.usb_id ?? "VID:PID not reported yet";
+  return `${a.name} · ${id} · ${lastChange ? `last hardware change ${fmtDateTime(lastChange, tz)}` : "no hardware change recorded"}`;
 }
 
 // "since 15 Sep 2026"

@@ -20,7 +20,7 @@ import { useNow } from "../../hooks/useNow.js";
 import { fmtDateTime } from "../../format.js";
 import CoverageChart from "./CoverageChart.jsx";
 import {
-  apsText, bufferText, captureLine, configText, coverageColumns, coverageText, coverageTitle, crashText, footText,
+  adapterText, apsText, bufferText, configText, coverageColumns, coverageText, coverageTitle, crashText, footText,
   headText, hopBadge, lastPollText, legendItems, localDate, outageRows, PLANS, restartText, sinceText, stateNote, uploadText,
 } from "./sensors.js";
 import "./sensors.css";
@@ -68,7 +68,8 @@ function SensorCard({ s, account, now, n }) {
   const ends = s.last_poll ? `ends at the last poll, ${fmtDateTime(s.last_poll, tz)}` : undefined;
   const rows = [
     ["Hardware", s.hardware ?? "–"],
-    ["Capture hardware", captureLine(s.capture, tz), "a change is a data boundary: RSSI baselines start again from it"],
+    ["Capture adapter", adapterText(s.adapter, s.last_hardware_change, tz),
+     "read-only; a hardware change entered in Settings is a data boundary: RSSI baselines start again from it"],
     ["Last poll", lastPollText(s, now, tz)],
     ["Last upload", uploadText(s.last_upload, now, tz)],
     ["Coverage, last 7 days", coverageText(s), coverageTitle(s, tz)],

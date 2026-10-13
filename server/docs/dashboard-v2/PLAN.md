@@ -1628,7 +1628,7 @@ docker compose build frontend && docker compose up -d frontend
   (the Settings 1100 px cap is gone). A form control is at most 480 px wide
   (`.in`), a modal's fields fill the modal. Measured at 2560, 1920, 1512
   (14" scaled), 1280 and 390 px.
-- *Capture hardware, lighter:* the section shows one line per sensor (what
+- *Capture hardware, lighter (superseded by schema 13 below):* the section shows one line per sensor (what
   is attached, since when) with "Edit / record change" - a modal: the
   antenna (or "+ a new antenna…" with name, optional gain, connector,
   bands), when it was attached, a note; the adapter is shown, not typed.
@@ -1637,7 +1637,7 @@ docker compose build frontend && docker compose up -d frontend
   data boundary needs only that a change happened and which antenna. The
   data model is unchanged.
 - *Adapter auto-detection (planned for the live-upload phase, 11.1, not
-  built):* the adapter is fully detectable, so it is never typed - the
+  built; see schema 13 below):* the adapter is fully detectable, so it is never typed - the
   sensor reports its USB VID:PID, chipset, driver, MAC and interface, a
   change is recorded as a boundary by itself, and its RSSI floors follow from
   the chipset (`rssi_valid()`'s list per chipset instead of the RTL8821CU's
@@ -1661,12 +1661,65 @@ docker compose build frontend && docker compose up -d frontend
   `sensor.delete` (the deleted row and the configuration removed). No
   schema change.
 
-Deploy the follow-up (api and frontend, no schema change):
+**Schema 13: the antenna catalog is dropped (2026-10-13).** The antenna is
+passive and undetectable by the sensor, its gain feeds no computation, it
+changes rarely, and the one real need - a data boundary where RSSI baselines
+shift - is a dated entry of the configuration history. So:
+
+- *Removed:* `capture_hardware` (catalog of adapters and antennas) and
+  `sensor_hardware` (what was attached since when), the antenna kind, the
+  gain, and every selection control and endpoint of them (`/settings/hardware`,
+  `POST /settings/sensors/{name}/hardware`). The schema-11/12 rows were
+  placeholders (the migration converts what was recorded by hand - nothing so
+  far; the seed row only marked the start).
+- *The boundary:* `sensor_annotations.kind = 'hardware_change'` (sensor,
+  timestamp, label = "Hardware change" + the optional note, boundary true),
+  entered with `POST /settings/sensors/{name}/hardware-change` (`valid_from`
+  default now, not in the future; audit `sensor.hardware_change`). It shows in
+  the Settings configuration history like a channel-plan change, marked
+  "RSSI baselines start again".
+- *Who consumed the old boundary (found before changing anything):* exactly
+  one function, `hardware_period()` (it read `sensor_hardware.valid_from`), and
+  `fp_audit.py` directly (`HARDWARE_CHANGES_SQL`). `hardware_period()` is what
+  `refresh_ap_baselines()` (the window a baseline is learned in,
+  `ap_baselines.hw_from`) and `evil_twin.py` (`AP_META_SQL`: `hw_to` of the
+  baseline's period) call, so re-pointing the function to the new entries and
+  the one fp-audit query re-points everything; a fixture test
+  (`hardware_test.sql`) proves a baseline never spans an entry and is cleared
+  right after one. *Other RSSI-dependent logic does not use the boundary and is
+  not a baseline:* `ap_summary.rssi_typical` (the median of the AP's hourly
+  medians over its whole history) feeds the classification rule "ignore APs
+  weaker than X dBm" (off - `ignore_weaker_dbm` is NULL), the list order and the
+  rule event's classification; the AP page's RSSI chart and the Spectrum /
+  Networks "seen by" RSSI show period medians. A swap shifts these until the
+  period turns over; making `rssi_typical` read only the newest hardware period
+  is a one-line follow-up in `refresh_rollups()` if the rule is ever switched on.
+- *The adapter:* `sensor_adapters`, one read-only record per sensor (name,
+  `usb_id` VID:PID, `mac`, chipset, driver, interface - display only,
+  interface names like wlan1 are unstable -, bands, `reported_by` seed |
+  sensor). Seeded from the schema-12 catalog row; `ADAPTER_USB_ID` /
+  `ADAPTER_MAC` fill the identity in the migration (the Pi was not reachable
+  for the check). **Live-upload phase (11.1, not built):** the sensor reports
+  its adapter itself (VID:PID + MAC as identity; driver / interface for
+  display), an adapter change is recorded as a `hardware_change` by itself and
+  `reported_by` turns to `sensor`; the RSSI floors follow from the chipset.
+- *UI:* Settings > Sensors > Capture hardware is one read-only adapter line
+  per sensor plus "Add hardware change" (a modal: date and time, optional
+  note); the Sensors card shows the adapter and the last hardware change. No
+  catalog, no selection.
+
+Deploy (schema 13 - the images first, so the api of schema 12, which reads the
+dropped tables on /settings and /sensors, is replaced right after the
+migration; `ADAPTER_USB_ID` from `lsusb`, `ADAPTER_MAC` from
+`cat /sys/class/net/wlan1/address` on the Pi, both optional):
 
 ```sh
 cd ~/wifi-audit && git pull && cd server
-docker compose build api && docker compose up -d api
-docker compose build frontend && docker compose up -d frontend
+docker compose build api && docker compose build frontend        # builds only: nothing restarts yet
+./backup.sh                                                       # copy the dump off the box
+ADAPTER_USB_ID='<vid:pid>' ADAPTER_MAC='<mac>' \
+  sh ops/migrate_schema13.sh 2>&1 | tee ~/migrate13-$(date -u +%Y%m%dT%H%MZ).log
+docker compose up -d api frontend
 ```
 
 Out of scope for now (designed in 11, not built): upload after every poll
@@ -1678,12 +1731,12 @@ with config delivery, ranges beyond 30 days, live updates, login.
 
 ### 11.1 Upload after every poll + config delivery
 
-Capture hardware (decided 2026-10-13): the upload reports the adapter (USB
-VID:PID + MAC as identity, driver / interface / chipset for display) and
-records an adapter change as a `sensor_hardware` boundary itself, the RSSI
-floors following from the chipset; the antenna stays human-entered
-(structured name, optional gain_dbi, connector, bands) - nothing on the
-sensor can detect it.
+Capture hardware (decided 2026-10-13, schema 13): the upload reports the adapter
+(USB VID:PID + MAC as identity; driver / interface / chipset for display) into
+`sensor_adapters` (`reported_by` = sensor) and records an adapter change as a
+`hardware_change` entry of the configuration history itself, the RSSI floors
+following from the chipset; there is no antenna record - it is passive, nothing
+on the sensor can detect it, and a swap is a hardware_change entered by hand.
 
 `POST /api/ingest/{polls,observations,devices,…,ap_load_hourly}` with a
 per-sensor token (`sensor_tokens(sensor_id, token_hash)`); idempotent on the

@@ -214,23 +214,20 @@ export function configState(s, tz) {
   return { cls: "neu", text: "none recorded" };
 }
 
-// --- sensors: capture hardware ------------------------------------------------------------------
+// --- sensors: the adapter (read-only) and hardware changes (by hand) ---------------------------------
 
-// "Dipole (5 dBi)"; hwDetail: "2.4 / 5 GHz · RP-SMA"
-export function hwText(item) {
-  if (!item) return "none recorded";
-  const gain = item.gain_dbi == null ? "" : ` (${item.gain_dbi} dBi)`;
-  return `${item.name}${gain}`;
+// the adapter line: "RTL8821CU USB adapter · 0bda:c811 · MAC on record · rtw88_8821cu on wlan1 · 2.4 / 5 GHz";
+// the identity is VID:PID + MAC (the MAC itself never leaves the database), the interface is display
+// only; reported_by says who knows it
+export function adapterLine(a) {
+  if (!a) return "no adapter recorded";
+  const via = a.driver ? `${a.driver}${a.interface ? ` on ${a.interface}` : ""}` : a.interface;
+  return [a.name, a.usb_id ?? "VID:PID not reported yet", a.mac_known ? "MAC on record" : null, via,
+          a.bands?.length ? `${a.bands.join(" / ")} GHz` : null].filter(Boolean).join(" · ");
 }
-export function hwDetail(item) {
-  return [item.bands?.length ? `${item.bands.join(" / ")} GHz` : null, item.connector].filter(Boolean).join(" · ");
-}
-
-// the attached hardware of a sensor in words
-export function captureText(capture, catalog) {
-  if (!capture) return "none recorded";
-  const by = Object.fromEntries((catalog ?? []).map((h) => [h.id, h]));
-  return `${hwText(by[capture.adapter_id])} + ${capture.antenna_id ? hwText(by[capture.antenna_id]) : "its own antenna"}`;
+export function adapterSource(a) {
+  if (!a) return null;
+  return a.reported_by === "sensor" ? "reported by the sensor" : "recorded by hand - the sensor will report it itself in the live-upload phase";
 }
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -256,6 +253,16 @@ export function zonedToUtc(value, tz) {
 export function utcToZoned(v, tz) {
   const p = partsOf(v, tz);
   return `${p.year}-${pad(MONTHS.indexOf(p.month) + 1)}-${pad(p.day)}T${p.hour}:${p.minute}`;
+}
+
+// the body of "Add hardware change": when (not in the future) and an optional note
+export function hardwareChangeProblem(sinceUtc, now = Date.now()) {
+  if (!sinceUtc) return "give the date and time of the change";
+  if (Date.parse(sinceUtc) > now + 5 * 60e3) return "a change cannot lie in the future";
+  return null;
+}
+export function hardwareChangeBody(sinceUtc, note) {
+  return { valid_from: sinceUtc, note: note?.trim() || null };
 }
 
 // --- sensors: add, edit, rename, delete -------------------------------------------------------------
@@ -288,37 +295,12 @@ export function deleteGuard(meta, name, typed) {
   return { allowed: true, ask: true };
 }
 
-// --- capture hardware: the antenna is the only thing entered by hand --------------------------------
-
-export const EMPTY_ANTENNA = { id: null, name: "", gain_dbi: "", bands: ["2.4", "5"], connector: "", note: "" };
-
-export function antennaDraft(h) {
-  return { id: h.id, name: h.name, gain_dbi: h.gain_dbi ?? "", bands: [...(h.bands ?? [])], connector: h.connector ?? "",
-           note: h.note ?? "" };
-}
-
-// the gain is optional - a change of antenna is the data boundary, whatever its gain
-export function antennaProblem(a) {
-  if (!a.name.trim()) return "give the antenna a name";
-  if (!a.bands.length) return "pick its bands";
-  if (a.gain_dbi !== "" && a.gain_dbi != null) {
-    const g = Number(a.gain_dbi);
-    if (Number.isNaN(g) || g < -10 || g > 30) return "the gain is a number from −10 to 30 dBi, or leave it empty";
-  }
-  return null;
-}
-
-export function antennaBody(a) {
-  return { kind: "antenna", name: a.name.trim(), gain_dbi: a.gain_dbi === "" || a.gain_dbi == null ? null : Number(a.gain_dbi),
-           bands: a.bands, connector: a.connector.trim() || null, note: a.note.trim() || null };
-}
-
 // --- the history --------------------------------------------------------------------------------
 
 // rows of the configuration history: valid from, sensor, change, effect on the data
 export function historyRows(history, tz) {
   return (history ?? []).map((h, i) => ({
     key: `${h.ts}|${h.sensor}|${i}`, ts: fmtDateTime(h.ts, tz), sensor: h.sensor, label: h.label,
-    boundary: h.boundary, effect: h.kind === "hardware" ? "RSSI baselines start again" : h.boundary ? "evaluated apart" : "no boundary",
+    boundary: h.boundary, effect: h.kind === "hardware_change" ? "RSSI baselines start again" : h.boundary ? "evaluated apart" : "no boundary",
   }));
 }

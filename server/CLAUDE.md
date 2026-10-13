@@ -179,16 +179,20 @@ Conventions for the stack:
     before were merged once by `ops/merge_duplicate_events.sql` (keeps
     statuses and notes, `audit_log` 'event.merge'). Read-only check:
     `tests/sql/check_schema10.sql`.
-  - **Labels and capture hardware (schema 11, `ops/migrate_schema11.sh`):**
-    a label needs a fixed reason (`detections.status_reason`, a constraint
-    fits it to the status; RQ2 counts by it). `capture_hardware` is the
-    catalog of adapters and antennas, `sensor_hardware` what a sensor has
-    attached since when; every hardware change is a data boundary -
-    `refresh_ap_baselines()` learns a baseline inside one hardware period
-    (`hardware_period()`, `ap_baselines.hw_from`) and evil_twin (b) compares a
-    reading only with a baseline of its period. Never fit or compare an RSSI
-    statistic across a hardware change. Fixture test
-    `tests/sql/hardware_test.sql`; read-only check `check_schema11.sql`.
+  - **Labels (schema 12) and the hardware boundary (schema 11, 13):** a label has
+    one of three outcomes - confirmed, benign, false_positive - each with a
+    required reason (`detections.status_reason`; a NULL-safe constraint, RQ2
+    counts by it). A change of the capture hardware (the antenna swapped, anything
+    that shifts every RSSI) is a `hardware_change` entry of the configuration
+    history (`sensor_annotations`, a data boundary entered by hand; the antenna
+    itself is not recorded - it is passive and undetectable, its gain feeds
+    nothing); `sensor_adapters` is the read-only adapter record (VID:PID + MAC,
+    seeded now, reported by the sensor in the live-upload phase). `hardware_period()`
+    reads those entries: `refresh_ap_baselines()` learns a baseline inside one
+    hardware period (`ap_baselines.hw_from`) and evil_twin (b) compares a reading
+    only with a baseline of its period. Never fit or compare an RSSI statistic
+    across a hardware change. Fixture test `tests/sql/hardware_test.sql`; read-only
+    check `check_schema13.sql`.
   - **Writes (phase 5):** every write endpoint needs `WRITE_TOKEN` (`.env`,
     passed by compose; empty = writes disabled) and runs in
     `deps.write_tx()` (audit_log rows, `accounts.write_version + 1`); the
