@@ -116,7 +116,7 @@ Conventions for the stack:
     written only by `refresh_rollups(sensor_id, from)` (the importer calls it
     after every load; idempotent; incremental = full, fixture test
     `tests/sql/refresh_rollups_test.sql`). `sensor_summary.refreshed_at` is the
-    api's ETag. `/api/overview`, `/api/aps`, `/api/aps/{key}` never read raw
+    api's ETag. The dashboard endpoints never read raw
     observations; raw 15-min RSSI buckets only for a window of at most 48 h.
     Measurements before/after: `docs/performance.md`.
   - **Slim observations (schema 7 / collector buffer v6, `ops/migrate_schema7.sh`):**
@@ -217,8 +217,9 @@ Conventions for the stack:
     **No MAC but an account AP BSSID in any response**: the detectors'
     evidence names deauth sources (client MACs), every response with
     evidence or detector summaries goes through `privacy.redact()` (Kismet
-    device keys hold their MAC byte-reversed). The old `/api/detections/{id}`
-    still returns that evidence unredacted - removed with the old endpoints.
+    device keys hold their MAC byte-reversed). The first dashboard's
+    `/api/detections/{id}`, which returned that evidence unredacted, was
+    removed with its endpoints (phase 5c).
   - **An AP's band comes from its advertised channel** (`ap_band()`:
     `devices.adv_channel`, else the busiest frequency of `device_freq_hist`),
     stored as `ap_baselines.band`. `observations.freq_khz` was never the

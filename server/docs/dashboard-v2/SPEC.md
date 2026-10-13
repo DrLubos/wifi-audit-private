@@ -287,8 +287,8 @@ phase 1, additive), **9** = everything else below (phase 2).
 Read endpoints are public until login; every write needs the write token
 (section 8). All period endpoints take `sensor` and `range` and return buckets
 with explicit `start`, `end`, coverage per sensor and `null` for no data.
-The new endpoints live under **`/api/v2/`** while the current ones stay for
-the old pages; the old ones are removed after the frontend switch (D7). The
+The endpoints live under **`/api/v2/`**; the first dashboard's were removed
+after the frontend switch (D7, phase 5c). The
 paths below are relative to that prefix; full list with parameters and
 response shapes in `PLAN.md` section 7.
 

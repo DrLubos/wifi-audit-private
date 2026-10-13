@@ -4,6 +4,10 @@ What made the dashboard slow on the demo box, what server schema 6 changed,
 and the measurements before and after. All times are measured on the real box
 with the real data (UTC dates); the tools are in `../tests/perf/`.
 
+> Historical (2026-10-13): the endpoints measured here (`/api/overview`, `/api/aps` ...) were
+> removed in phase 5c; the numbers stay as the record of the schema 5 to 6 work. Current
+> measurements: `tests/perf/measure.sh` (v2).
+
 ## 1. Setup
 
 | | |

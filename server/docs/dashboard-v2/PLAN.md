@@ -1757,6 +1757,34 @@ docker compose build api && docker compose up -d api
 docker compose build frontend && docker compose up -d frontend
 ```
 
+#### 5c as built (cleanup, 2026-10-13)
+
+- API: the first dashboard's routers (`/api/overview`, `/aps`, `/aps/{key}`,
+  `/alerts`, `/findings`, `/detections`, `/detections/{id}`) and their
+  `deps.py` are deleted; `/api/health` and `/api/v2` remain. The old
+  `/api/detections/{id}` returned the evidence unredacted and `/api/alerts`
+  the raw alerts, so nothing client-related is reachable any more.
+  `cache.rollup_etag` is gone (`v2_etag` stays).
+- Frontend: `src/legacy/` and `Pending.jsx` deleted, the sidebar's "Previous
+  dashboard" link too. `/detections` redirects to `/events`, `/legacy` to `/`;
+  `/aps/<Kismet device key>` still redirects to the BSSID page.
+- Perf tools: `tests/perf/measure.sh` defaults to the v2 queries (`MODE=detectors`
+  for the detector scans), `coldstart_probe.py` probes v2 paths; the
+  first dashboard's snapshot / compare / e2e tools and `ep_*.sql` are deleted.
+  The measurements in `performance.md` are historical.
+- Follow-ups: `uplot` is no longer imported (`npm uninstall uplot` where npm
+  exists, updates `package.json` and the lock file); `ap_summary.rssi_typical`
+  is not hardware-boundary aware; an `api_rw` database role (writes only) is an
+  option, not done.
+
+Deploy (api and frontend, no schema change):
+
+```sh
+cd ~/wifi-audit && git pull && cd server
+docker compose build api && docker compose up -d api
+docker compose build frontend && docker compose up -d frontend
+```
+
 Out of scope for now (designed in 11, not built): upload after every poll
 with config delivery, ranges beyond 30 days, live updates, login.
 

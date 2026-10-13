@@ -30,8 +30,9 @@ once before the first run (it adds the `detections_dedupe` index):
 
 Unit tests (stdlib, no database): `cd server && python3 -m unittest discover -s detection/tests`.
 
-The dashboard shows the rows read-only: `GET /api/detections` and the *Detections*
-page (row expand = the evidence); Overview carries an "open detections" tile.
+The dashboard shows the rows as events (`GET /api/v2/events`, the *Events* page:
+row expand = why it fired and who saw it, with every MAC but an account AP's
+redacted; labels with a reason by the operator).
 
 | File | Purpose |
 |---|---|
