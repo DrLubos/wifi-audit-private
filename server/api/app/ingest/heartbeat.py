@@ -7,9 +7,15 @@ HISTORY_GAP_S = 55            # sensor_heartbeats: at most one row a minute (N5)
 RETENTION_MARGIN_DAYS = 2     # D10: warn two days before the sensor's retention
 
 
-def clock_offset_s(received_at, sensor_ts, rtt_ms):
-    """received_at - sensor_ts - RTT/2 (seconds; positive = the sensor is behind)."""
-    return received_at - sensor_ts - (rtt_ms or 0) / 2000.0
+def clock_offset_s(received_at, sensor_ts, rtt_ms=None):
+    """received_at - sensor_ts: the sensor stamps the heartbeat right before
+    sending, so this is the clock offset plus the one-way latency (an upper
+    bound; positive = the sensor is behind). Half the RTT of the previous
+    request is NOT subtracted: that RTT is mostly the server's merge time (up
+    to seconds while catching up) - it made the offset negative on the first
+    live day. chrony's own offset (heartbeat chrony_offset_s) is the precise
+    figure; rtt_ms is kept in the history as information."""
+    return received_at - sensor_ts
 
 
 def history_due(last_stored_at, now):

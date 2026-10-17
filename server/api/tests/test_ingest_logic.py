@@ -97,8 +97,9 @@ class Stalls(unittest.TestCase):
 
 class Heartbeat(unittest.TestCase):
     def test_clock_offset(self):
-        self.assertAlmostEqual(hb.clock_offset_s(1000.0, 990.0, 200), 9.9)
-        self.assertAlmostEqual(hb.clock_offset_s(1000.0, 1000.0, None), 0.0)
+        # offset + one-way latency; the previous request's RTT is not subtracted
+        self.assertAlmostEqual(hb.clock_offset_s(1000.0, 990.0, 2000), 10.0)
+        self.assertAlmostEqual(hb.clock_offset_s(1000.0, 999.8, None), 0.2)
 
     def test_history_at_most_once_a_minute(self):
         self.assertTrue(hb.history_due(None, NOW))

@@ -5,9 +5,12 @@ refresh never holds one of the api's pool connections).
 Live ingest marks a sensor dirty (ingest_state.dirty_from = the earliest ts
 it inserted; ingest_merge()) instead of refreshing per request. Each round:
 
-1. per dirty sensor refresh_rollups(sensor, dirty_from), then clear the mark
-   unless an ingest moved it meanwhile (dirty_at changed) - the next round
-   refreshes again from the earlier of the two;
+1. per dirty sensor: take the mark and clear it in one statement, then
+   refresh_rollups(sensor, dirty_from); an ingest during the refresh sets a new
+   mark for the next round (only its own new rows), and a failed refresh puts
+   the taken mark back. (Clearing only "if no ingest moved it meanwhile" never
+   cleared it with a batch every 30 s and rounds longer than that: every
+   round re-refreshed days of hours - found on the first live day.)
 2. refresh_contact_periods() for every sensor that ever uploaded
    ('unreachable' annotations from heartbeat gaps);
 3. once a night at 03:30 in the account's time zone, refresh_ap_baselines().
@@ -61,16 +64,29 @@ def round_once(conn, baseline_dates):
         "WHERE i.dirty_from IS NOT NULL ORDER BY i.sensor_id", prepare=False).fetchall()
     for d in dirty:
         t = time.monotonic()
-        r = conn.execute("SELECT * FROM refresh_rollups(%s, %s)", (d["sensor_id"], d["dirty_from"]),
-                         prepare=False).fetchone()
-        cleared = conn.execute(
-            "UPDATE ingest_state SET dirty_from = NULL, dirty_since = NULL "
-            "WHERE sensor_id = %s AND dirty_at = %s RETURNING 1", (d["sensor_id"], d["dirty_at"]),
-            prepare=False).fetchone()
-        log.info("refresh_rollups sensor=%s from=%s s=%.2f ap_hours=%s sensor_hours=%s waited_s=%.0f%s",
-                 d["name"], d["dirty_from"].isoformat(), time.monotonic() - t, r["ap_hours"], r["sensor_hours"],
-                 (rs.utc_now() - d["dirty_since"]).total_seconds() if d["dirty_since"] else 0,
-                 "" if cleared else " (new data meanwhile: again next round)")
+        taken = conn.execute(
+            "UPDATE ingest_state i SET dirty_from = NULL, dirty_since = NULL "
+            "FROM (SELECT sensor_id, dirty_from, dirty_since FROM ingest_state "
+            "      WHERE sensor_id = %s AND dirty_from IS NOT NULL FOR UPDATE) o "
+            "WHERE i.sensor_id = o.sensor_id RETURNING o.dirty_from, o.dirty_since",
+            (d["sensor_id"],), prepare=False).fetchone()
+        if taken is None:
+            continue
+        try:
+            r = conn.execute("SELECT * FROM refresh_rollups(%s, %s)", (d["sensor_id"], taken["dirty_from"]),
+                             prepare=False).fetchone()
+        except psycopg.Error:
+            if not conn.closed:
+                conn.execute(
+                    "INSERT INTO ingest_state AS i (sensor_id, dirty_from, dirty_since, dirty_at) "
+                    "VALUES (%s, %s, %s, now()) ON CONFLICT (sensor_id) DO UPDATE SET "
+                    "dirty_from = least(i.dirty_from, EXCLUDED.dirty_from), "
+                    "dirty_since = coalesce(least(i.dirty_since, EXCLUDED.dirty_since), EXCLUDED.dirty_since)",
+                    (d["sensor_id"], taken["dirty_from"], taken["dirty_since"]), prepare=False)
+            raise
+        log.info("refresh_rollups sensor=%s from=%s s=%.2f ap_hours=%s sensor_hours=%s waited_s=%.0f",
+                 d["name"], taken["dirty_from"].isoformat(), time.monotonic() - t, r["ap_hours"], r["sensor_hours"],
+                 (rs.utc_now() - taken["dirty_since"]).total_seconds() if taken["dirty_since"] else 0)
     t = time.monotonic()
     contact = conn.execute("SELECT st.sensor_id, refresh_contact_periods(st.sensor_id) AS gaps "
                            "FROM sensor_status st ORDER BY st.sensor_id", prepare=False).fetchall()

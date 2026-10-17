@@ -270,6 +270,9 @@ class Uploader:
             payload, new, info = self.build()
         seq = payload["batch_seq"]
         self.attempts[seq] = payload["attempt"]
+        # stamp the clock right before sending: the server compares it with its
+        # receive time (offset + one-way latency), building a batch takes time
+        payload["heartbeat"]["sensor_ts"], payload["heartbeat"]["mono"] = clock.now()
         status, body, rtt, mid = self.client.post("/batch", payload)
         self.rtt_ms = rtt
         now = time.monotonic()
