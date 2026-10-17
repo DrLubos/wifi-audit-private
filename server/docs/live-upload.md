@@ -986,6 +986,9 @@ sudo steps by the developer. Times UTC.
 | 20:44 / 20:46 | **step 4** (developer): `install_uploader.sh` | first start exited (unit `Group=kismet`: no access to the root:pi 0640 token) - fixed (`Group=` the sensor user), re-run; running from 20:46:38 |
 | 20:46:48-20:57:18 | **backlog replay** | 10,083 polls (2026-10-14 05:21:58 on) in 85 batches of 120, **10.5 min**; 2.2 s average merge per catch-up batch; 0 lost, 0 unverified, 0 replays |
 | 21:05 | **step 5**: frontend | the live states; 14/14 test files pass in the build |
+| 21:23-21:37 | refresher fixes (below) | rounds 2.4-4.3 s, each from the previous minute; no baseline repeat on restart |
+| 21:32:30 | uploader reinstalled (developer): hourly frequency histograms, heartbeat stamped before the POST | batches without histogram rows; clock offset reads 0.35-0.41 s (both clocks within 0.5 ms of NTP: the rest is the one-way latency incl. TCP+TLS setup), before 0.45-0.71 s |
+| 21:41 | disk cleanup (9.4 A) | the three older buffer snapshots on the Mac (`~/wifi-audit-snapshots/`, sha256 equal), deleted on the box; dangling images + build cache pruned (0.54 GB); 14 GB free of 29 GB; `buffer-snapshot.db` (10-14) kept |
 
 **First measurements** (section 11):
 
@@ -1021,7 +1024,10 @@ sudo steps by the developer. Times UTC.
   rode through (502/503, retries, then one batch of 3 polls, 0 gaps), but the
   refresher could not put back the dirty mark it had taken over a dead
   connection: it now keeps it in memory and writes it back first thing in
-  the next round.
+  the next round. The window lost at 21:23 (before the fix) was checked:
+  hourly rollups, security periods and events are recomputed by later
+  rounds, and for the 29 APs with history in 20:40-21:30 the
+  `ap_config_changes` table equals the rules view (0 missing, 0 extra).
 
 **Open (the developer's):** whether the external IP `34.42.184.97` is static
 (Console -> VPC network -> IP addresses; promote it if ephemeral - the
