@@ -175,7 +175,6 @@ BEGIN
            CASE WHEN st.bits_changed THEN coalesce(st.chg_bits, st.cur_bits)
                 WHEN st.crypt IS NOT DISTINCT FROM st.cur_crypt THEN st.cur_bits END AS crypt_bits
     FROM st
-  )
   ), sec AS MATERIALIZED (    -- the security functions once per distinct input (schema 15)
     SELECT u.crypt, u.crypt_bits, u.mfp_sup, u.mfp_req,
            security_level(u.crypt, u.crypt_bits, u.mfp_sup, u.mfp_req) AS sec_level,
