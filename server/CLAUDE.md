@@ -249,9 +249,10 @@ developer runs anything that changes the box. Rules set 2026-09-29.
   contents when done). Nothing outside that folder. Scripts that touch the
   database still use only `claude_ro`; anything that would write, restart or
   deploy stays under "Not allowed" - a script does not change that.
-- **Not allowed:** database writes, `docker compose up/down/build/rm`, editing
-  or deleting files on the server, package or service changes. The developer
-  runs those (schema, imports, backups, deploys) when Claude says what to run.
+- **Allowed:** `docker compose up/down/build/rm`, package or service changes,
+  you may runs those (schema, imports, backups, deploys).
+- **Not allowed:** database writes, editing
+  or deleting files on the server or package changes.
 
 ## Privacy (same rule as the sensor)
 

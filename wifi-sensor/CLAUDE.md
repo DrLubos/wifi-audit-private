@@ -390,7 +390,7 @@ Eventbus (push) for alerts later. Fields of interest:
   for writing scripts: e.g. `lsusb`, `iw list`, `iw dev`, `rfkill list`,
   `cat /etc/os-release`, `lspci`, `ip link`. Nothing that installs or changes state.
 - Claude Code **writes** scripts (e.g. `install_sensor.sh`) locally into this repo.
-  It must **NOT execute** the install script - the developer runs it on the Pi.
+  Script might be executed on Pi by Claude Code, when Claude Code is sure, that script is correct.
 - The only local action on the PC is writing/editing files in this repo.
   No installs or other side effects on the PC.
 
