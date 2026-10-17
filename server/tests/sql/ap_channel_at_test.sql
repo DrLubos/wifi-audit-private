@@ -4,8 +4,8 @@
 --
 -- Writes nothing: everything runs in one transaction that is rolled back. A
 -- scratch schema first on the search path gets empty copies of devices and
--- device_config_history and the ap_config_changes materialized view built
--- from the DEPLOYED definition; the deployed ap_channel_at() then reads them
+-- device_config_history and the ap_config_changes table with its rules view built
+-- from the DEPLOYED definition (schema 15); the deployed ap_channel_at() then reads them
 -- (its table names resolve through the search path). Run it as the owner
 -- (CREATE SCHEMA):
 --
@@ -24,13 +24,15 @@ BEGIN;
 
 DO $$
 DECLARE
-  cfg text := rtrim(pg_get_viewdef('public.ap_config_changes'::regclass), E'; \n');
+  cfg text := rtrim(pg_get_viewdef('public.ap_config_changes_v'::regclass), E'; \n');
 BEGIN
   CREATE SCHEMA ap_channel_at_test;
   PERFORM set_config('search_path', 'ap_channel_at_test, public', true);
   CREATE TABLE devices (LIKE public.devices INCLUDING DEFAULTS);
   CREATE TABLE device_config_history (LIKE public.device_config_history INCLUDING DEFAULTS);
-  EXECUTE 'CREATE MATERIALIZED VIEW ap_config_changes AS ' || cfg || ' WITH NO DATA';
+  -- schema 15: the rules as a view, the timeline a table refresh_config_changes() fills
+  EXECUTE 'CREATE VIEW ap_config_changes_v AS ' || cfg;
+  CREATE TABLE ap_config_changes (LIKE public.ap_config_changes INCLUDING ALL);
 END $$;
 
 -- --- fixtures: 2026-09-20, UTC --------------------------------------------------------
@@ -52,7 +54,7 @@ VALUES (1, 'A', '2026-09-20 10:00+00', 'WPA2', '1'),
        (1, 'A', '2026-09-20 10:30+00', 'WPA2', '6'),
        (1, 'C', '2026-09-20 10:00+00', NULL, NULL),
        (1, 'D', '2026-09-20 10:00+00', 'WPA2', '44');
-REFRESH MATERIALIZED VIEW ap_config_changes;
+SELECT refresh_config_changes(x.sensor_id) FROM (SELECT DISTINCT sensor_id FROM devices) x;
 
 CREATE FUNCTION pg_temp.check_rows(label text, got text, want text) RETURNS void
 LANGUAGE plpgsql AS $$

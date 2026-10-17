@@ -85,7 +85,16 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 --    (the AP rule of the devices_ever_ap() trigger, shared with the ingest's
 --    client filter); autovacuum settings for the per-poll writes
 --    (ops/migrate_schema14.sh)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '14')
+-- 15: an incremental refresh_rollups() for the per-poll ingest (live upload,
+--    N8: an "incremental" run took 14-17 s, all of it whole-sensor work):
+--    ap_config_changes is a table refreshed per AP by
+--    refresh_config_changes() from the rules in the plain view
+--    ap_config_changes_v (was a materialized view refreshed whole every
+--    time, ~33 s); the per-AP hour aggregate scans observations from a
+--    constant bound; security_level()/security_label() run once per
+--    distinct input in ap_summary and ap_security_periods
+--    (ops/migrate_schema15.sh)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '15')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- accounts and sensors ------------------------------------------------------------
@@ -1324,11 +1333,15 @@ WHERE d.ever_ap;
 -- Values are text (booleans 'true'/'false', crypt_bits decimal). Fixture test:
 -- tests/sql/ap_config_changes_test.sql.
 --
--- MATERIALIZED since schema 6 (as a plain view it read every history row of
--- an AP on each AP page: 85 ms warm for the busiest AP, 4.7 s for all APs);
--- refresh_rollups() refreshes it after every import - history only changes
--- there.
-CREATE MATERIALIZED VIEW IF NOT EXISTS ap_config_changes AS
+-- The rules are this plain view; the readers read the TABLE ap_config_changes
+-- below, which refresh_config_changes() fills from it per AP (schema 15). Before
+-- that it was a materialized view (schema 6: as a plain view it read every
+-- history row of an AP on each AP page, 85 ms warm for the busiest AP, 4.7 s
+-- for all APs) refreshed whole by every refresh_rollups() - ~33 s on the
+-- e2-micro, too much for a refresh after every poll. Filtered on sensor and
+-- AP, the view reads only those APs' history rows: the filter is pushed into
+-- both branches of st and through the window (partitioned by the AP).
+CREATE OR REPLACE VIEW ap_config_changes_v AS
 WITH st AS (
   SELECT sensor_id, device_key, ts, ssid, cloaked, crypt, crypt_bits, mfp_sup, mfp_req,
          adv_channel, ht_mode, beacon_rate, country
@@ -1360,19 +1373,55 @@ WITH st AS (
 )
 SELECT sensor_id, device_key, ts, field, val AS old_value, new_val AS new_value
 FROM seq
-WHERE ts IS NOT NULL AND new_val IS NOT NULL AND new_val <> val
-WITH DATA;
+WHERE ts IS NOT NULL AND new_val IS NOT NULL AND new_val <> val;
+
+CREATE TABLE IF NOT EXISTS ap_config_changes (
+  sensor_id  integer NOT NULL,
+  device_key text NOT NULL,
+  ts         timestamptz NOT NULL,             -- when the old value was replaced
+  field      text NOT NULL,
+  old_value  text,
+  new_value  text);
 -- One row per (AP, ts, field): the unique index serves the per-AP lookups
--- (sensor_id, device_key, ts) and REFRESH ... CONCURRENTLY.
+-- (sensor_id, device_key, ts) and the per-AP refresh.
 CREATE UNIQUE INDEX IF NOT EXISTS ap_config_changes_key
   ON ap_config_changes (sensor_id, device_key, ts, field);
-COMMENT ON MATERIALIZED VIEW ap_config_changes IS
-  'Changes of an AP''s advertised configuration, one row per changed field (old -> new), with the pre-v5 incomplete-record churn, Kismet''s missing-field crypt_bits 0 and the hidden-beacon/named-record alternation read as unknown. History is not rewritten. Materialized (schema 6), refreshed by refresh_rollups().';
+COMMENT ON TABLE ap_config_changes IS
+  'Changes of an AP''s advertised configuration, one row per changed field (old -> new), with the pre-v5 incomplete-record churn, Kismet''s missing-field crypt_bits 0 and the hidden-beacon/named-record alternation read as unknown (rules: view ap_config_changes_v). History is not rewritten. A table filled per AP by refresh_config_changes() (schema 15; a materialized view in schemas 6-14).';
+
+-- The rows of ap_config_changes for one sensor's APs (schema 15): p_keys the
+-- APs whose timeline can have changed, NULL = all of the sensor's. Delete and
+-- insert in one transaction: readers see the old rows or the new ones.
+-- Returns the rows written. Called by refresh_rollups().
+CREATE OR REPLACE FUNCTION refresh_config_changes(p_sensor_id integer, p_keys text[] DEFAULT NULL)
+RETURNS integer
+LANGUAGE plpgsql
+SET jit = off
+AS $$
+DECLARE v_n integer;
+BEGIN
+  IF p_keys IS NULL THEN
+    DELETE FROM ap_config_changes WHERE sensor_id = p_sensor_id;
+    INSERT INTO ap_config_changes (sensor_id, device_key, ts, field, old_value, new_value)
+    SELECT v.sensor_id, v.device_key, v.ts, v.field, v.old_value, v.new_value
+    FROM ap_config_changes_v v
+    WHERE v.sensor_id = p_sensor_id;
+  ELSE
+    DELETE FROM ap_config_changes WHERE sensor_id = p_sensor_id AND device_key = ANY (p_keys);
+    INSERT INTO ap_config_changes (sensor_id, device_key, ts, field, old_value, new_value)
+    SELECT v.sensor_id, v.device_key, v.ts, v.field, v.old_value, v.new_value
+    FROM ap_config_changes_v v
+    WHERE v.sensor_id = p_sensor_id AND v.device_key = ANY (p_keys);
+  END IF;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n;
+END
+$$;
 
 -- Changes of an AP's advertised channel: the adv_channel rows of
 -- ap_config_changes (same rows as its schema-4 definition: 11,388 on 138 APs,
 -- compared 2026-09-28). Used by the evil_twin channel guard and fp-audit.
--- A plain view on the materialized one: as current as its last refresh.
+-- A plain view on the table: as current as its last refresh.
 CREATE OR REPLACE VIEW ap_channel_changes AS
 SELECT sensor_id, device_key, ts, old_value AS from_channel, new_value AS to_channel
 FROM ap_config_changes
@@ -1635,9 +1684,17 @@ BEGIN
                 WHEN st.crypt IS NOT DISTINCT FROM st.cur_crypt THEN st.cur_bits END AS crypt_bits
     FROM st
   )
+  ), sec AS MATERIALIZED (    -- the security functions once per distinct input (schema 15)
+    SELECT u.crypt, u.crypt_bits, u.mfp_sup, u.mfp_req,
+           security_level(u.crypt, u.crypt_bits, u.mfp_sup, u.mfp_req) AS sec_level,
+           security_label(u.crypt, u.crypt_bits) AS sec_label
+    FROM (SELECT DISTINCT x.crypt, x.crypt_bits, x.mfp_sup, x.mfp_req FROM v x) u
+  )
   SELECT p_sensor_id, v.device_key, v.valid_from, v.valid_to, v.crypt, v.crypt_bits, v.mfp_sup, v.mfp_req,
-         security_level(v.crypt, v.crypt_bits, v.mfp_sup, v.mfp_req), security_label(v.crypt, v.crypt_bits)
-  FROM v;
+         sec.sec_level, sec.sec_label
+  FROM v
+  JOIN sec ON sec.crypt IS NOT DISTINCT FROM v.crypt AND sec.crypt_bits IS NOT DISTINCT FROM v.crypt_bits
+          AND sec.mfp_sup IS NOT DISTINCT FROM v.mfp_sup AND sec.mfp_req IS NOT DISTINCT FROM v.mfp_req;
   GET DIAGNOSTICS v_n = ROW_COUNT;
   RETURN v_n;
 END
@@ -2049,25 +2106,41 @@ BEGIN
     AND NOT EXISTS (SELECT 1 FROM ap_rssi_hourly h
                     WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key);
   v_sfrom := least(v_from, v_gone, v_new);
+  -- APs with hours before v_from: their observations from v_from on (one
+  -- constant bound - the BRIN index on ts reads only the new rows; a per-AP
+  -- bound made the planner read every observation, 16 s, schema 15); APs
+  -- without: their whole history (new APs, few)
   INSERT INTO ap_rssi_hourly (sensor_id, device_key, hour, n_obs, n_valid, n_floor,
                               median, p10, p90, min, max)
   SELECT p_sensor_id, device_key, hour, n_obs, n_valid, n_floor, pct[1], pct[2], pct[3], lo, hi
   FROM (
-    SELECT a.device_key, date_trunc('hour', o.ts, 'UTC') AS hour,
+    SELECT o.device_key, date_trunc('hour', o.ts, 'UTC') AS hour,
            count(*)::integer AS n_obs,
            count(rssi_valid(o.rssi))::integer AS n_valid,
            (count(*) FILTER (WHERE rssi_is_floor(o.rssi, o.rssi_floor)))::integer AS n_floor,
            percentile_cont(ARRAY[0.5, 0.1, 0.9]) WITHIN GROUP (ORDER BY rssi_valid(o.rssi)) AS pct,
            min(rssi_valid(o.rssi)) AS lo,
            max(rssi_valid(o.rssi)) AS hi
-    FROM (SELECT d.device_key,
-                 CASE WHEN EXISTS (SELECT 1 FROM ap_rssi_hourly h
-                                   WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key)
-                      THEN v_from ELSE '-infinity'::timestamptz END AS since
-          FROM devices d
-          WHERE d.sensor_id = p_sensor_id AND d.ever_ap) a
-    JOIN observations o
-      ON o.sensor_id = p_sensor_id AND o.device_key = a.device_key AND o.ts >= a.since
+    FROM observations o
+    WHERE o.sensor_id = p_sensor_id AND o.ts >= v_from
+      AND o.device_key IN (SELECT d.device_key FROM devices d
+                           WHERE d.sensor_id = p_sensor_id AND d.ever_ap
+                             AND EXISTS (SELECT 1 FROM ap_rssi_hourly h
+                                         WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key))
+    GROUP BY 1, 2
+    UNION ALL
+    SELECT o.device_key, date_trunc('hour', o.ts, 'UTC') AS hour,
+           count(*)::integer AS n_obs,
+           count(rssi_valid(o.rssi))::integer AS n_valid,
+           (count(*) FILTER (WHERE rssi_is_floor(o.rssi, o.rssi_floor)))::integer AS n_floor,
+           percentile_cont(ARRAY[0.5, 0.1, 0.9]) WITHIN GROUP (ORDER BY rssi_valid(o.rssi)) AS pct,
+           min(rssi_valid(o.rssi)) AS lo,
+           max(rssi_valid(o.rssi)) AS hi
+    FROM devices d
+    JOIN observations o ON o.sensor_id = d.sensor_id AND o.device_key = d.device_key
+    WHERE d.sensor_id = p_sensor_id AND d.ever_ap
+      AND NOT EXISTS (SELECT 1 FROM ap_rssi_hourly h
+                      WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key)
     GROUP BY 1, 2) s;
   GET DIAGNOSTICS v_ap_hours = ROW_COUNT;
 
@@ -2129,12 +2202,20 @@ BEGIN
   LEFT JOIN al ON al.hour = hrs.hour;
   GET DIAGNOSTICS v_sensor_hours = ROW_COUNT;
 
-  -- 4. the configuration timeline (all sensors; history only changes with an
-  --    import). CONCURRENTLY: AP pages and detectors keep reading meanwhile.
-  IF (SELECT relispopulated FROM pg_class WHERE oid = to_regclass('ap_config_changes')) THEN
-    REFRESH MATERIALIZED VIEW CONCURRENTLY ap_config_changes;
+  -- 4. the configuration timeline of the APs whose timeline can have changed
+  --    since v_from: a history row or a sighting (devices.last_seen) from
+  --    then on - every new configuration arrives with a poll that sees the
+  --    AP; all of the sensor's APs on a full run (schema 15)
+  IF v_from = '-infinity' THEN
+    PERFORM refresh_config_changes(p_sensor_id);
   ELSE
-    REFRESH MATERIALIZED VIEW ap_config_changes;
+    PERFORM refresh_config_changes(p_sensor_id, ARRAY(
+      SELECT d.device_key FROM devices d
+      WHERE d.sensor_id = p_sensor_id AND d.ever_ap
+        AND (d.last_seen >= v_from
+             OR EXISTS (SELECT 1 FROM device_config_history h
+                        WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key
+                          AND h.ts >= v_from))));
   END IF;
 
   -- 5. one row per AP, rebuilt
@@ -2150,6 +2231,26 @@ BEGIN
       cur_n_clients, cur_qbss_stations, cur_util_pct, cur_at,
       history_rows, n_changes, last_change_at, last_change,
       security, security_label, crypt_bits_known, rssi_typical)
+  -- the bitfield, or the last known one of the same crypt string when
+  -- Kismet's missing-field 0 replaced it (ap_config_changes rule 3); the
+  -- security functions once per distinct input (a few dozen, not ~900 calls
+  -- at a few ms each on the e2-micro, schema 15)
+  WITH dk AS MATERIALIZED (
+    SELECT d.*, kb.bits
+    FROM devices d
+    LEFT JOIN LATERAL (
+      SELECT CASE WHEN d.crypt_bits <> 0 OR d.crypt = 'Open' THEN d.crypt_bits
+                  ELSE (SELECT h.crypt_bits FROM device_config_history h
+                        WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key
+                          AND h.crypt IS NOT DISTINCT FROM d.crypt AND h.crypt_bits <> 0
+                        ORDER BY h.ts DESC LIMIT 1) END AS bits) kb ON true
+    WHERE d.sensor_id = p_sensor_id AND d.ever_ap
+  ), sec AS MATERIALIZED (
+    SELECT u.crypt, u.bits, u.mfp_sup, u.mfp_req,
+           security_level(u.crypt, u.bits, u.mfp_sup, u.mfp_req) AS level,
+           security_label(u.crypt, u.bits) AS label
+    FROM (SELECT DISTINCT x.crypt, x.bits, x.mfp_sup, x.mfp_req FROM dk x) u
+  )
   SELECT d.sensor_id, d.device_key, d.mac,
          (d.mac & macaddr '02:00:00:00:00:00') <> macaddr '00:00:00:00:00:00',
          d.manuf, d.ssid, (d.ssid IS NULL OR d.ssid = ''), d.cloaked, d.crypt, d.crypt_bits,
@@ -2167,9 +2268,11 @@ BEGIN
           WHERE o.sensor_id = d.sensor_id AND o.device_key = d.device_key),
          d.cur_n_clients, d.cur_qbss_stations, d.cur_util_pct, d.cur_at,
          coalesce(hi.n_rows, 0), coalesce(c.n_changes, 0), c.last_change_at, c.last_change,
-         security_level(d.crypt, kb.bits, d.mfp_sup, d.mfp_req), security_label(d.crypt, kb.bits),
-         kb.bits, rt.rssi_typical
-  FROM devices d
+         sec.level, sec.label,
+         d.bits, rt.rssi_typical
+  FROM dk d
+  LEFT JOIN sec ON sec.crypt IS NOT DISTINCT FROM d.crypt AND sec.bits IS NOT DISTINCT FROM d.bits
+               AND sec.mfp_sup IS NOT DISTINCT FROM d.mfp_sup AND sec.mfp_req IS NOT DISTINCT FROM d.mfp_req
   LEFT JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.device_key
   LEFT JOIN (SELECT device_key, sum(n_obs) AS n_obs, sum(n_valid) AS n_valid, sum(n_floor) AS n_floor
              FROM ap_rssi_hourly WHERE sensor_id = p_sensor_id
@@ -2187,18 +2290,9 @@ BEGIN
                    FROM ap_config_changes WHERE sensor_id = p_sensor_id
                    GROUP BY device_key, ts) e
              GROUP BY device_key) c ON c.device_key = d.device_key
-  -- the bitfield, or the last known one of the same crypt string when
-  -- Kismet's missing-field 0 replaced it (ap_config_changes rule 3)
-  LEFT JOIN LATERAL (
-    SELECT CASE WHEN d.crypt_bits <> 0 OR d.crypt = 'Open' THEN d.crypt_bits
-                ELSE (SELECT h.crypt_bits FROM device_config_history h
-                      WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key
-                        AND h.crypt IS NOT DISTINCT FROM d.crypt AND h.crypt_bits <> 0
-                      ORDER BY h.ts DESC LIMIT 1) END AS bits) kb ON true
   LEFT JOIN (SELECT device_key, percentile_cont(0.5) WITHIN GROUP (ORDER BY median) AS rssi_typical
              FROM ap_rssi_hourly WHERE sensor_id = p_sensor_id AND median IS NOT NULL
-             GROUP BY device_key) rt ON rt.device_key = d.device_key
-  WHERE d.sensor_id = p_sensor_id AND d.ever_ap;
+             GROUP BY device_key) rt ON rt.device_key = d.device_key;
   GET DIAGNOSTICS v_aps = ROW_COUNT;
 
   -- 5b. security periods (refresh_security_periods())

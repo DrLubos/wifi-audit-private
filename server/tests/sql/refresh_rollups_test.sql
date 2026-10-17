@@ -3,8 +3,8 @@
 --
 -- Writes nothing: everything runs in one transaction that is rolled back. A
 -- scratch schema, first on the search path, gets empty copies of the source
--- tables, the four read tables and the ap_config_changes materialized view
--- (built from the deployed definition); the deployed refresh_rollups() then
+-- tables, the four read tables and the ap_config_changes table with its rules
+-- view (built from the deployed definition, schema 15); the deployed refresh_rollups() then
 -- runs against them (its table names resolve through the search path). No
 -- real row is read or written; explicit ids, so no real sequence moves. Run it
 -- as the owner (CREATE SCHEMA):
@@ -37,7 +37,7 @@ BEGIN;
 
 DO $$
 DECLARE
-  cfg text := rtrim(pg_get_viewdef('public.ap_config_changes'::regclass), E'; \n');
+  cfg text := rtrim(pg_get_viewdef('public.ap_config_changes_v'::regclass), E'; \n');
   t text;
 BEGIN
   CREATE SCHEMA refresh_rollups_test;
@@ -60,8 +60,9 @@ BEGIN
   -- LIKE copies no trigger: the deployed ever_ap rule on the copy (schema 10)
   CREATE TRIGGER devices_ever_ap BEFORE INSERT OR UPDATE ON devices
     FOR EACH ROW EXECUTE FUNCTION public.devices_ever_ap();
-  EXECUTE 'CREATE MATERIALIZED VIEW ap_config_changes AS ' || cfg || ' WITH NO DATA';
-  CREATE UNIQUE INDEX ON ap_config_changes (sensor_id, device_key, ts, field);
+  -- schema 15: the rules as a view, the timeline a table refresh_config_changes() fills
+  EXECUTE 'CREATE VIEW ap_config_changes_v AS ' || cfg;
+  CREATE TABLE ap_config_changes (LIKE public.ap_config_changes INCLUDING ALL);
 END $$;
 
 -- --- fixtures: 2026-09-20, UTC -------------------------------------------------------

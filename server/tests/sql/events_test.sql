@@ -5,8 +5,8 @@
 -- Writes nothing: everything runs in one transaction that is rolled back. A
 -- scratch schema first on the search path gets empty copies of every table
 -- these functions read or write (detections with its own id sequence, so the
--- real one does not move) and the ap_config_changes materialized view built
--- from the DEPLOYED definition; the deployed functions resolve their tables
+-- real one does not move) and the ap_config_changes table with its rules view built
+-- from the DEPLOYED definition (schema 15); the deployed functions resolve their tables
 -- through the search path. Run it as the owner (CREATE SCHEMA):
 --
 --   docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
@@ -42,7 +42,7 @@ BEGIN;
 
 DO $$
 DECLARE
-  cfg text := rtrim(pg_get_viewdef('public.ap_config_changes'::regclass), E'; \n');
+  cfg text := rtrim(pg_get_viewdef('public.ap_config_changes_v'::regclass), E'; \n');
   t text;
 BEGIN
   CREATE SCHEMA events_test;
@@ -60,8 +60,9 @@ BEGIN
   -- LIKE copies no trigger: the deployed ever_ap rule on the copy (schema 10)
   CREATE TRIGGER devices_ever_ap BEFORE INSERT OR UPDATE ON devices
     FOR EACH ROW EXECUTE FUNCTION public.devices_ever_ap();
-  EXECUTE 'CREATE MATERIALIZED VIEW ap_config_changes AS ' || cfg || ' WITH NO DATA';
-  CREATE UNIQUE INDEX ON ap_config_changes (sensor_id, device_key, ts, field);
+  -- schema 15: the rules as a view, the timeline a table refresh_config_changes() fills
+  EXECUTE 'CREATE VIEW ap_config_changes_v AS ' || cfg;
+  CREATE TABLE ap_config_changes (LIKE public.ap_config_changes INCLUDING ALL);
 END $$;
 
 -- --- fixtures: 2026-09-20, UTC ------------------------------------------------------------
@@ -91,7 +92,7 @@ INSERT INTO device_config_history (sensor_id, device_key, ts, ssid, cloaked, cry
 VALUES (1, 'A1', '2026-09-20 12:00+00', 'Net', false, 'Open', 0, false, false, '6'),
        (1, 'A1', '2026-09-20 14:00+00', 'Net', false, 'WPA2 WPA2-PSK AES-CCMP', 274945016842, false, false, '6'),
        (1, 'A1', '2026-09-20 15:00+00', 'Net', false, 'Open', 0, false, false, '6');
-REFRESH MATERIALIZED VIEW ap_config_changes;
+SELECT refresh_config_changes(x.sensor_id) FROM (SELECT DISTINCT sensor_id FROM devices) x;
 INSERT INTO ap_summary (sensor_id, device_key, bssid, random_bssid, ssid, hidden, crypt, crypt_bits,
                         crypt_bits_known, mfp_sup, mfp_req, adv_channel, first_seen, last_seen,
                         hidden_beacon, has_baseline, trusted, n_obs, n_valid, n_floor, first_obs,

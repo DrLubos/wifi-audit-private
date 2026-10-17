@@ -32,6 +32,8 @@ MIGRATION12 = open(os.path.join(HERE, "..", "ops", "migrate_schema12.sql"), enco
 MIGRATION13 = open(os.path.join(HERE, "..", "ops", "migrate_schema13.sql"), encoding="utf-8").read()
 MIGRATION14 = open(os.path.join(HERE, "..", "ops", "migrate_schema14.sql"), encoding="utf-8").read()
 ROLLBACK14 = open(os.path.join(HERE, "..", "ops", "rollback_schema14.sql"), encoding="utf-8").read()
+MIGRATION15 = open(os.path.join(HERE, "..", "ops", "migrate_schema15.sql"), encoding="utf-8").read()
+ROLLBACK15 = open(os.path.join(HERE, "..", "ops", "rollback_schema15.sql"), encoding="utf-8").read()
 SCHEMA14_TABLES = ("sensor_tokens", "sensor_status", "sensor_heartbeats", "ingest_state",
                    "sensor_clock_boots", "sensor_seq_gaps")
 SCHEMA14_FUNCTIONS = ("ingest_stage_create", "ingest_merge", "refresh_contact_periods")
@@ -111,11 +113,12 @@ class SchemaFiles(unittest.TestCase):
     def test_version(self):
         def version(sql):
             return re.search(r"VALUES \('schema_version', '(\d+)'\)", sql).group(1)
-        self.assertEqual((version(SCHEMA), version(MIGRATION14), version(MIGRATION13), version(MIGRATION12),
-                          version(MIGRATION11), version(MIGRATION10), version(MIGRATION9), version(MIGRATION8),
-                          version(MIGRATION)),
-                         ("14", "14", "13", "12", "11", "10", "9", "8", "7"))
+        self.assertEqual((version(SCHEMA), version(MIGRATION15), version(MIGRATION14), version(MIGRATION13),
+                          version(MIGRATION12), version(MIGRATION11), version(MIGRATION10), version(MIGRATION9),
+                          version(MIGRATION8), version(MIGRATION)),
+                         ("15", "15", "14", "13", "12", "11", "10", "9", "8", "7"))
         self.assertEqual(version(ROLLBACK14), "13")
+        self.assertEqual(version(ROLLBACK15), "14")
 
     def test_schema11_reasons_and_hardware(self):
         body = re.sub(r"--[^\n]*", "", table_body(SCHEMA, "detections"))
@@ -244,6 +247,51 @@ class SchemaFiles(unittest.TestCase):
     def test_load_samples_stage_matches_the_loader(self):
         stages = stage_tables(function(SCHEMA, "ingest_stage_create"))
         self.assertEqual(stages["load_samples"], ["ts", "device_key", "n_clients", "qbss_stations", "util_pct"])
+
+
+class Schema15(unittest.TestCase):
+    """The incremental refresh (live upload N8): ap_config_changes a table
+    filled per AP from the rules view; the migration carries the same
+    definitions; the rollback rebuilds the schema-14 materialized view from the
+    same rules."""
+
+    def view(self, sql):
+        return re.search(r"CREATE OR REPLACE VIEW ap_config_changes_v AS\n.*?new_val <> val;", sql, re.S).group(0)
+
+    def test_table_view_and_functions_equal_the_migration(self):
+        self.assertEqual(table_body(MIGRATION15, "ap_config_changes_t"), table_body(SCHEMA, "ap_config_changes"))
+        self.assertEqual(self.view(MIGRATION15), self.view(SCHEMA))
+        for name in ("refresh_config_changes", "refresh_security_periods", "refresh_rollups"):
+            self.assertIsNotNone(function(SCHEMA, name), name)
+            self.assertEqual(function(MIGRATION15, name), function(SCHEMA, name), name)
+
+    def test_no_materialized_view_left(self):
+        code = re.sub(r"--[^\n]*", "", SCHEMA)
+        self.assertNotIn("MATERIALIZED VIEW", code)
+        self.assertNotIn("REFRESH MATERIALIZED", code)
+        self.assertIn("DROP MATERIALIZED VIEW ap_config_changes;", MIGRATION15)
+        self.assertIn("CREATE MATERIALIZED VIEW ap_config_changes AS", ROLLBACK15)
+
+    def test_rules_are_the_same_as_schema_14s(self):
+        rules = self.view(SCHEMA).split("AS\n", 1)[1].rstrip(";")
+        self.assertIn(rules, ROLLBACK15)
+
+    def test_refresh_is_incremental(self):
+        rr = function(SCHEMA, "refresh_rollups")
+        self.assertIn("PERFORM refresh_config_changes(p_sensor_id, ARRAY(", rr)
+        self.assertIn("WHERE o.sensor_id = p_sensor_id AND o.ts >= v_from", rr)       # one constant bound
+        self.assertNotIn("o.ts >= a.since", rr)
+        for name in ("refresh_rollups", "refresh_security_periods"):
+            body = function(SCHEMA, name)
+            # the security functions only inside the per-distinct-input CTE
+            self.assertEqual(body.count("security_level("), 1, name)
+            self.assertIn("sec AS MATERIALIZED", body, name)
+
+    def test_fixture_tests_build_the_table(self):
+        for t in ("ap_config_changes_test", "ap_channel_at_test", "events_test", "refresh_rollups_test"):
+            text = open(os.path.join(HERE, "sql", t + ".sql"), encoding="utf-8").read()
+            self.assertNotIn("REFRESH MATERIALIZED", text, t)
+            self.assertIn("pg_get_viewdef('public.ap_config_changes_v'::regclass)", text, t)
 
 
 def stage_tables(fn):

@@ -1,11 +1,15 @@
--- Fixture test of the materialized view ap_config_changes (schema.sql, schema 5,
--- materialized in schema 6) and of ap_channel_changes, which is derived from it.
+-- Fixture test of the configuration timeline ap_config_changes (schema.sql,
+-- schema 5; materialized in schema 6; since schema 15 a table filled per AP by
+-- refresh_config_changes() from the rules in the view ap_config_changes_v) and
+-- of ap_channel_changes, which is derived from it.
 --
 -- Writes nothing: everything runs in one transaction that is rolled back. The
--- DEPLOYED definitions are read with pg_get_viewdef() first; then a scratch
--- schema (a materialized view cannot be TEMP) gets empty copies of devices and
--- device_config_history, the view is built there from those definitions, the
--- fixtures go in and the view is refreshed. No real row is read or written.
+-- DEPLOYED view definitions are read with pg_get_viewdef() first; then a
+-- scratch schema gets empty copies of devices, device_config_history and the
+-- ap_config_changes table, the views are built there from those definitions,
+-- the fixtures go in and the deployed refresh_config_changes() fills the
+-- table. A per-AP refresh must give the same rows as the full one (the
+-- incremental refresh of schema 15). No real row is read or written.
 -- Run it as the owner (CREATE SCHEMA):
 --
 --   docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
@@ -26,17 +30,19 @@ BEGIN;
 --    leaves them unqualified), then the scratch schema, first on the search path
 DO $$
 DECLARE
-  cfg text := rtrim(pg_get_viewdef('public.ap_config_changes'::regclass), E'; \n');
+  cfg text := rtrim(pg_get_viewdef('public.ap_config_changes_v'::regclass), E'; \n');
   chan text := rtrim(pg_get_viewdef('public.ap_channel_changes'::regclass), E'; \n');
 BEGIN
-  IF (SELECT relkind FROM pg_class WHERE oid = 'public.ap_config_changes'::regclass) <> 'm' THEN
-    RAISE EXCEPTION 'ap_config_changes is not a materialized view: apply schema.sql (schema 6) first';
+  IF (SELECT relkind FROM pg_class WHERE oid = 'public.ap_config_changes'::regclass) <> 'r' THEN
+    RAISE EXCEPTION 'ap_config_changes is not a table: apply schema.sql (schema 15) first';
   END IF;
   CREATE SCHEMA ap_config_changes_test;
   PERFORM set_config('search_path', 'ap_config_changes_test, public', true);
   CREATE TABLE devices (LIKE public.devices INCLUDING DEFAULTS);
   CREATE TABLE device_config_history (LIKE public.device_config_history INCLUDING DEFAULTS);
-  EXECUTE 'CREATE MATERIALIZED VIEW ap_config_changes AS ' || cfg || ' WITH NO DATA';
+  -- schema 15: the rules as a view, the timeline a table refresh_config_changes() fills
+  EXECUTE 'CREATE VIEW ap_config_changes_v AS ' || cfg;
+  CREATE TABLE ap_config_changes (LIKE public.ap_config_changes INCLUDING ALL);
   EXECUTE 'CREATE VIEW ap_channel_changes AS ' || chan;
 END $$;
 
@@ -99,7 +105,7 @@ FROM (VALUES
   ('T10', 'Net', false, 'WPA2 WPA2-PSK AES-CCMP', 274945016842, true, false, '6',  'HT20', 100,  'US')
 ) AS f(k, s, c, cr, cb, ms, mr, ch, ht, br, co);
 
-REFRESH MATERIALIZED VIEW ap_config_changes;
+SELECT refresh_config_changes(x.sensor_id) FROM (SELECT DISTINCT sensor_id FROM devices) x;
 
 -- 3. expected rows: (key, minute of the replaced row, field, old, new)
 CREATE TEMP TABLE expected (device_key text, t int, field text, old_value text, new_value text);
@@ -146,7 +152,24 @@ BEGIN
   IF chan IS DISTINCT FROM 'T7 1 -> 11' THEN
     RAISE EXCEPTION 'ap_channel_changes: FAIL - got %, expected T7 1 -> 11', coalesce(chan, 'no rows');
   END IF;
-  RAISE NOTICE 'ap_config_changes: PASS (15 expected changes over 10 fixture APs; churn, crypt_bits 0 and hidden-beacon cases silent)';
+END $$;
+
+-- 5. per AP (schema 15): refreshing each AP on its own gives the same rows as
+--    the full refresh, and a refresh of some APs leaves the others alone
+CREATE TEMP TABLE full_rows AS SELECT * FROM ap_config_changes;
+DELETE FROM ap_config_changes;
+SELECT refresh_config_changes(1, ARRAY[d.device_key]) FROM devices d ORDER BY d.device_key;
+SELECT refresh_config_changes(1, ARRAY['T1', 'T7']);
+DO $$
+DECLARE diff bigint;
+BEGIN
+  SELECT count(*) INTO diff FROM ((SELECT * FROM ap_config_changes EXCEPT ALL SELECT * FROM full_rows)
+                                  UNION ALL
+                                  (SELECT * FROM full_rows EXCEPT ALL SELECT * FROM ap_config_changes)) d;
+  IF diff <> 0 THEN
+    RAISE EXCEPTION 'ap_config_changes: FAIL - per-AP refresh differs from the full one in % rows', diff;
+  END IF;
+  RAISE NOTICE 'ap_config_changes: PASS (15 expected changes over 10 fixture APs; churn, crypt_bits 0 and hidden-beacon cases silent; per-AP refresh = full)';
 END $$;
 
 ROLLBACK;
