@@ -109,6 +109,21 @@ python3 seed/import_snapshot.py buffer-snapshot.db --sensor pi-fri \
   version, inserted rows; the buffer's size when the snapshot was made by the
   current `export_snapshot.py`, which records it in the copy's `meta`). Apply
   schema 9 (`ops/migrate_schema9.sh`) before importing with this importer.
+- **Server schema 14 (live upload, `docs/live-upload.md`):** the snapshot
+  import is the **recovery path** - the sensor's uploader is the normal one.
+  Both go through the same server-side merge: the stream calls
+  `ingest_stage_create()`, COPYs into those staging tables (explicit column
+  lists) and calls `ingest_merge(sensor, 'snapshot')` once; the merge rules
+  above live in `schema.sql`, and its result (staged / inserted / conflicting
+  rows per table, the earliest inserted ts) is printed after COMMIT. The
+  buffer's `polls.id` goes in as `polls.seq` (a later snapshot also fills it
+  for polls stored without one), so polls that never arrived show as seq
+  gaps. **Client data stays on the sensor** unless `--with-client-tables`:
+  the client devices, `associations`, `client_bssids` and `probes` (decision
+  D4; nothing on the server reads them). Rows already on the server stay;
+  `ops/delete_client_rows.sh` (dry run by default) is there for a later
+  decision. Apply schema 14 (`ops/migrate_schema14.sh`) before importing with
+  this importer.
 - Buffer schema v2 to v7 snapshots are accepted. v3 (collector deployed
   2026-09-22 or later) carries `observations.disconnects_last`, v4 (2026-09-27 or
   later) `polls.ds_hop_n / ds_hop_visited / ds_hop_ok` (hop-list coverage), v5

@@ -1,4 +1,4 @@
-"""Static checks of schema.sql and the schema-7/8/9/10/11/12/13 migrations (standard
+"""Static checks of schema.sql and the schema-7/8/9/10/11/12/13/14 migrations (standard
 library, no database):
 
   cd server && python3 -m unittest discover -s tests -p 'test_*.py'
@@ -8,7 +8,10 @@ library, no database):
   ap_channel_at(), load_ap_load_samples(); schema 9: the new tables;
   schema 10: devices.ever_ap, its index and trigger, nothing reads the
   device type for the AP set any more; schema 11: the status reason and its
-  constraint, the capture hardware tables, hardware-bounded baselines);
+  constraint, the capture hardware tables, hardware-bounded baselines;
+  schema 14: the live-upload tables, the polls / sensor_uploads columns,
+  ingest_stage_create() / ingest_merge() / refresh_contact_periods(), and the
+  importer's staging columns are the ones ingest_stage_create() creates);
 - schema.sql is the complete definition, without upgrade-only statements
   (ADD COLUMN IF NOT EXISTS, DROP INDEX IF EXISTS, view-to-matview DO block);
 - the newest migration sets the version schema.sql declares.
@@ -27,6 +30,11 @@ MIGRATION10 = open(os.path.join(HERE, "..", "ops", "migrate_schema10.sql"), enco
 MIGRATION11 = open(os.path.join(HERE, "..", "ops", "migrate_schema11.sql"), encoding="utf-8").read()
 MIGRATION12 = open(os.path.join(HERE, "..", "ops", "migrate_schema12.sql"), encoding="utf-8").read()
 MIGRATION13 = open(os.path.join(HERE, "..", "ops", "migrate_schema13.sql"), encoding="utf-8").read()
+MIGRATION14 = open(os.path.join(HERE, "..", "ops", "migrate_schema14.sql"), encoding="utf-8").read()
+ROLLBACK14 = open(os.path.join(HERE, "..", "ops", "rollback_schema14.sql"), encoding="utf-8").read()
+SCHEMA14_TABLES = ("sensor_tokens", "sensor_status", "sensor_heartbeats", "ingest_state",
+                   "sensor_clock_boots", "sensor_seq_gaps")
+SCHEMA14_FUNCTIONS = ("ingest_stage_create", "ingest_merge", "refresh_contact_periods")
 SCHEMA9_TABLES = ("accounts", "account_settings", "networks", "aps", "ap_sensors", "sensor_annotations",
                   "sensor_config", "sensor_uploads", "kismet_alert_rules", "audit_log",
                   "ap_security_periods", "sensor_periods")
@@ -72,9 +80,13 @@ class SchemaFiles(unittest.TestCase):
                 self.assertIn("CONSTRAINT sensor_config_channel_plan_check", table_body(SCHEMA, t))
                 self.assertIn("ADD CONSTRAINT sensor_config_channel_plan_check", MIGRATION12)
                 continue
-            if t == "sensor_annotations":  # schema 13 added the entry kind 'hardware_change'
+            if t == "sensor_annotations":  # schema 13/14 added entry kinds
                 self.assertIn("CONSTRAINT sensor_annotations_kind_check", table_body(SCHEMA, t))
                 self.assertIn("ADD CONSTRAINT sensor_annotations_kind_check", MIGRATION13)
+                self.assertIn("ADD CONSTRAINT sensor_annotations_kind_check", MIGRATION14)
+                continue
+            if t == "sensor_uploads":      # schema 14 added the batch columns
+                self.assertIn("CONSTRAINT sensor_uploads_batch UNIQUE", table_body(SCHEMA, t))
                 continue
             self.assertIsNotNone(table_body(SCHEMA, t), t)
             self.assertEqual(table_body(MIGRATION9, t), table_body(SCHEMA, t), t)
@@ -99,9 +111,11 @@ class SchemaFiles(unittest.TestCase):
     def test_version(self):
         def version(sql):
             return re.search(r"VALUES \('schema_version', '(\d+)'\)", sql).group(1)
-        self.assertEqual((version(SCHEMA), version(MIGRATION13), version(MIGRATION12), version(MIGRATION11),
-                          version(MIGRATION10), version(MIGRATION9), version(MIGRATION8), version(MIGRATION)),
-                         ("13", "13", "12", "11", "10", "9", "8", "7"))
+        self.assertEqual((version(SCHEMA), version(MIGRATION14), version(MIGRATION13), version(MIGRATION12),
+                          version(MIGRATION11), version(MIGRATION10), version(MIGRATION9), version(MIGRATION8),
+                          version(MIGRATION)),
+                         ("14", "14", "13", "12", "11", "10", "9", "8", "7"))
+        self.assertEqual(version(ROLLBACK14), "13")
 
     def test_schema11_reasons_and_hardware(self):
         body = re.sub(r"--[^\n]*", "", table_body(SCHEMA, "detections"))
@@ -158,7 +172,9 @@ class SchemaFiles(unittest.TestCase):
         # the AP set is ever_ap everywhere; the type is read only by the trigger
         code = re.sub(r"--[^\n]*", "", SCHEMA)
         self.assertEqual(re.findall(r"type = 'ap'", code), ["type = 'ap'"])
-        self.assertIn("NEW.type = 'ap'", function(SCHEMA, "devices_ever_ap"))
+        # schema 14: the rule is ap_evidence(), shared with the live ingest's client filter
+        self.assertIn("ap_evidence(NEW.type, NEW.ssid, NEW.crypt, NEW.adv_channel)", function(SCHEMA, "devices_ever_ap"))
+        self.assertIn("p_type = 'ap'", function(SCHEMA, "ap_evidence"))
 
     def test_observations_definition_matches_the_migration(self):
         def cols(sql, table):
@@ -171,6 +187,72 @@ class SchemaFiles(unittest.TestCase):
         self.assertEqual([c for c, _ in cols(SCHEMA, "observations")],
                          ["ts", "pk_total", "pk_data", "bss_timestamp", "disconnects_last",
                           "sensor_id", "disconnects", "rssi", "rssi_floor", "device_key"])
+
+    def test_schema14_tables_and_functions_equal_schema(self):
+        for t in SCHEMA14_TABLES:
+            self.assertIsNotNone(table_body(SCHEMA, t), t)
+            self.assertEqual(table_body(MIGRATION14, t), table_body(SCHEMA, t), t)
+            self.assertIn("DROP TABLE %s;" % t, ROLLBACK14, t)
+        for name in SCHEMA14_FUNCTIONS:
+            self.assertIsNotNone(function(SCHEMA, name), name)
+            self.assertEqual(function(MIGRATION14, name), function(SCHEMA, name), name)
+            self.assertIn("DROP FUNCTION %s(" % name, ROLLBACK14, name)
+
+    def test_schema14_columns(self):
+        for table, cols in (("polls", ("seq", "received_at", "ts_offset_s")),
+                            ("sensor_uploads", ("buffer_id", "batch_seq", "sent_at", "attempt", "replays",
+                                                "bytes", "duration_ms"))):
+            body = re.sub(r"--[^\n]*", "", table_body(SCHEMA, table))
+            for c in cols:
+                self.assertRegex(body, r"\n\s+%s\s" % c, "%s.%s" % (table, c))
+                self.assertRegex(MIGRATION14, r"ADD COLUMN %s\b" % c, "%s.%s" % (table, c))
+                self.assertRegex(ROLLBACK14, r"DROP COLUMN %s\b" % c, "%s.%s" % (table, c))
+        for kind in ("'lost'", "'unreachable'"):
+            self.assertIn(kind, table_body(SCHEMA, "sensor_annotations"))
+            self.assertIn(kind, MIGRATION14)
+
+    def test_schema14_merge_is_the_only_writer_of_the_staged_tables(self):
+        merge = function(SCHEMA, "ingest_merge")
+        for t in ("devices", "polls", "device_config_history", "observations", "ap_load_hourly",
+                  "device_freq_hist", "associations", "client_bssids", "probes", "alerts"):
+            self.assertRegex(merge, r"INSERT INTO %s\b" % t, t)
+        # the AP set of the time series is ever_ap, never the device type
+        self.assertNotIn("type = 'ap'", re.sub(r"--[^\n]*", "", merge))
+        self.assertIn("load_ap_load_samples(p_sensor_id)", merge)
+        # live ingest never writes client data, whatever is staged
+        self.assertIn("p_via = 'snapshot'", merge)
+        # a newer row without a configuration-change time keeps the stored one (N9)
+        self.assertIn("coalesce(EXCLUDED.config_changed_at, devices.config_changed_at)", merge)
+        # polls record when the server stored them
+        self.assertIn("received_at", merge)
+        # session staging tables: created once per connection, emptied by every commit
+        stage = function(SCHEMA, "ingest_stage_create")
+        self.assertEqual(stage.count("CREATE TEMP TABLE IF NOT EXISTS"), 11)
+        self.assertEqual(stage.count("ON COMMIT DELETE ROWS"), 11)
+
+    def test_importer_stages_the_columns_ingest_stage_create_creates(self):
+        import sys
+        sys.path.insert(0, os.path.join(HERE, "..", "seed"))
+        import import_snapshot as imp
+        stages = stage_tables(function(SCHEMA, "ingest_stage_create"))
+        for spec in imp.TABLES:
+            cols = [c[0] for c in spec["stage"]]
+            self.assertIn(spec["name"], stages, spec["name"])
+            self.assertTrue(set(cols) <= set(stages[spec["name"]]),
+                            "%s: %s not in %s" % (spec["name"], cols, stages[spec["name"]]))
+
+    def test_load_samples_stage_matches_the_loader(self):
+        stages = stage_tables(function(SCHEMA, "ingest_stage_create"))
+        self.assertEqual(stages["load_samples"], ["ts", "device_key", "n_clients", "qbss_stations", "util_pct"])
+
+
+def stage_tables(fn):
+    """{name: [columns]} of the CREATE TEMP TABLE statements of ingest_stage_create()."""
+    out = {}
+    for name, body in re.findall(r"CREATE TEMP TABLE IF NOT EXISTS stage_(\w+) \((.*?)\) ON COMMIT", fn, re.S):
+        out[name] = [c.strip().split()[0] for c in body.split(",") if c.strip()]
+    return out
+
 
 if __name__ == "__main__":
     unittest.main()

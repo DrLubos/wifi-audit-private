@@ -3,7 +3,7 @@
 Status: **approved 2026-10-17 with changes (folded in below); being built in
 the order of section 14, each step its own commit, stopped before each
 deploy.** Decisions D1–D14 are recorded in section 13 as decided; new
-questions that came up while folding the changes in are N1–N9 (13.2).
+questions that came up while folding the changes in are N1–N10 (13.2).
 Replaces `dashboard-v2/PLAN.md` section 11.1 for the upload; config delivery
 stays deferred (D9).
 
@@ -411,7 +411,7 @@ CREATE TABLE sensor_heartbeats (                  -- history, at most one a minu
   PRIMARY KEY (sensor_id, received_at));
 
 CREATE TABLE ingest_state (sensor_id integer PRIMARY KEY REFERENCES sensors(id),
-                           dirty_from timestamptz, dirty_at timestamptz);
+                           dirty_from timestamptz, dirty_since timestamptz, dirty_at timestamptz);
 
 CREATE TABLE sensor_clock_boots (                 -- one row per corrected boot (thesis: offsets)
   sensor_id integer NOT NULL REFERENCES sensors(id), boot_id uuid NOT NULL,
@@ -745,7 +745,7 @@ retries over the real network).
 | D14 | Replaced by the per-poll upload; catch-up 120 polls, 2 s pacing, tuned after measuring |
 | Amendments | 1 stall events (6.5); 2 TLS always verified + test; 3 disk measured before step 2 (9.3); 4 delete sensor revokes tokens (6.1) |
 
-### 13.2 New questions (N1–N9) – my defaults are built unless you say otherwise
+### 13.2 New questions (N1–N10) – my defaults are built unless you say otherwise
 
 | # | Question | Default |
 |---|---|---|
@@ -758,6 +758,7 @@ retries over the real network).
 | N7 | Time-unverified polls stay on the Pi (pruned with the retention) – no quarantine upload | yes |
 | N8 | Refresher default interval 60 s with the 4× duty-cycle cap; the measured incremental cost at the step-2 deploy decides whether 1 min is real | yes |
 | N9 | `devices.config_changed_at` merge: a NULL from a newer row keeps the stored value (today it overwrites with NULL); applies to the importer too | yes |
+| N10 | The recovery snapshot import also leaves the **client devices** (and their frequency histograms) on the Pi unless `--with-client-tables` - they only serve the client tables; matches what the live ingest accepts. `ops/delete_client_rows.sh --client-devices` could remove the 221 k existing client device rows (~140 MB with `--vacuum-full`) | yes (built in step 1) |
 
 ---
 

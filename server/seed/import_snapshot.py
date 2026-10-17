@@ -10,39 +10,44 @@ that psql executes in a single transaction:
 Only the standard library is needed; psql does the talking to PostgreSQL, so
 the script runs wherever psql runs (the server box, or a laptop with a tunnel).
 
+Since live upload (server schema 14, docs/live-upload.md) this is the
+recovery path: the sensor's uploader is the normal one, and both go through
+the same server-side merge, so they cannot drift apart.
+
 What the stream does
   1. upserts the sensors row (--sensor NAME, optional --location/--description/--tz),
-  2. per buffer table: CREATE TEMP TABLE stage_<x>, COPY ... FROM STDIN with the
-     rows streamed straight out of SQLite (bounded memory), then
-     INSERT INTO <x> ... SELECT ... FROM stage_<x> with the type conversions
-     (unix seconds -> timestamptz, text -> macaddr, 0/1 -> boolean, JSON -> jsonb)
-     and merge rules that make a re-import - or a later, overlapping snapshot -
-     idempotent and accumulating:
-       polls, observations, device_config_history, alerts: ON CONFLICT DO NOTHING
-       devices:  first_seen = LEAST, last_seen = GREATEST, configuration and
-                 type from whichever row was seen last
-       associations, probes: LEAST / GREATEST of first / last
-       device_freq_hist: the row with the newer updated_ts wins
-       ap_load_hourly (buffer v7): the row with more polls wins
-     and, for observation rows that still carry the per-poll AP load columns
-     (written by buffers <= v5), stages them as stage_load_samples and calls
-     load_ap_load_samples() (schema 8), which turns them into ap_load_hourly
-     rows of source 'v5_obs' - the same fuller-wins merge,
-  3. records the import in sensor_uploads (schema 9: span, buffer version,
+  2. SELECT ingest_stage_create() - the session staging tables stage_<x>
+     (schema.sql), shared with the live ingest - and per buffer table a
+     COPY stage_<x> (columns) FROM STDIN with the rows streamed straight out
+     of SQLite (bounded memory), in the buffer's representation (unix
+     seconds, text MACs, 0/1 flags); polls.id goes in as seq (the buffer's
+     row id: the server finds polls that never arrived by its gaps),
+  3. SELECT ingest_merge(sensor, 'snapshot'): the type conversions and the
+     merge rules that make a re-import - or a later, overlapping snapshot,
+     or rows the live ingest already delivered - idempotent and accumulating
+     (polls, observations, history, alerts: nothing twice; devices: first /
+     last seen widened, configuration from the newest row; client tables:
+     first / last widened; device_freq_hist: newer wins; ap_load_hourly and
+     the per-poll AP load of buffers <= v5 (load_ap_load_samples()): the row
+     with more polls wins). It returns the staged / inserted rows per table
+     and the earliest inserted ts (the psql variable :merged),
+  4. records the import in sensor_uploads (schema 9: span, buffer version,
      inserted rows, the buffer size export_snapshot.py stored in the copy),
-  4. refreshes ap_baselines for the sensor (unless --no-baselines),
-  5. prints per-table row counts for the sensor.
+  5. refreshes ap_baselines for the sensor (unless --no-baselines),
+  6. prints per-table row counts for the sensor.
+
+The client tables (associations, client_bssids, probes) and the client
+devices themselves (their rows and frequency histograms) stay on the Pi
+unless --with-client-tables (live upload decision D4: nothing on the server
+reads them; the live ingest accepts AP devices only). Rows already on the
+server are not touched (ops/delete_client_rows.sh, a later decision).
 
 Everything runs between BEGIN and COMMIT, so a failure (bad MAC, FK violation,
-lost connection) leaves the database untouched. psql's own "COPY n" / "INSERT 0 n"
-command tags show what was staged and what was actually inserted; for polls,
-observations and alerts the inserted rows and their earliest ts are collected
-in the session's temp table import_from instead (printed after COMMIT). After
-COMMIT the stream
-  6. vacuums observations (outside the transaction), so the new heap pages are
+lost connection) leaves the database untouched. After COMMIT the stream
+  7. vacuums observations (outside the transaction), so the new heap pages are
      all-visible and the AP queries stay index-only scans (schema.sql, covering
      primary key observations_pkey, INCLUDE (rssi, rssi_floor)),
-  7. calls refresh_rollups(sensor, earliest inserted ts) (schema 6; unless
+  8. calls refresh_rollups(sensor, earliest inserted ts) (schema 6; unless
      --no-rollups): the dashboard tables from that hour on, the whole history
      on the sensor's first refresh. It runs in its own transaction: if it
      fails, the import stays and `SELECT * FROM refresh_rollups(<id>)` can be
@@ -52,7 +57,8 @@ Column and semantics reference: wifi-sensor/collector/store.py (buffer schema v2
 to v7; v3 added observations.disconnects_last, v4 polls.ds_hop_*, v5
 observations.rssi_floor; older snapshots import them as NULL - their floor
 readings stay raw in rssi and are read through rssi_valid(); v6 devices.cur_*
-and client_bssids; v7 ap_load_hourly) and server/schema.sql (schema 8).
+and client_bssids; v7 ap_load_hourly) and server/schema.sql (schema 14:
+ingest_stage_create(), ingest_merge()).
 """
 
 import argparse
@@ -71,33 +77,32 @@ _MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
 _COPY_ESCAPE = str.maketrans({"\\": "\\\\", "\t": "\\t", "\n": "\\n", "\r": "\\r", "\x00": ""})
 
 # The advertised-configuration columns shared by devices and device_config_history.
-_CONFIG_COLS = ("ssid", "cloaked", "crypt", "crypt_bits", "mfp_sup", "mfp_req",
-                "adv_channel", "ht_mode", "beacon_rate", "country")
-
-
 # --- table specs -----------------------------------------------------------------
 #
-# stage:  (pg_column, pg_type[, sqlite_expression]) - the staging table keeps the
-#         buffer's representation (bigint seconds, text MACs, 0/1 flags); the
-#         conversions happen in the INSERT ... SELECT.
+# name:   the buffer table; the staging table is stage_<name> (created by the
+#         server's ingest_stage_create(), schema 14).
+# stage:  (stage_column, pg_type[, sqlite_expression]) - the columns this
+#         importer fills, in COPY order; the type is documentation (the
+#         server's staging table defines it; tests/test_schema_files.py keeps
+#         the names equal).
 # optional: staging columns that older buffer versions lack; they are selected
 #         as NULL when the snapshot's table does not have them.
-# where:  SQLite filter on the snapshot rows.
+# where / order: SQLite filter and order on the snapshot rows.
 # select: function(db) -> the SQLite SELECT, instead of the generated one.
 # macs:   staging columns that must be a MAC address (validated before COPY).
 # optional_table: the buffer table exists only from some version on; a
 #         snapshot without it skips the spec.
-# insert: the merge statement; :sid is the psql variable holding sensors.id.
-# track:  time-series table: the merge records how many rows it inserted and
-#         the earliest ts among them in import_from (refresh_rollups' p_from).
+# client: client data, staged only with --with-client-tables (D4).
+# ap_only: without --with-client-tables only the rows of AP devices (the
+#         snapshot's AP evidence) - what the live ingest accepts.
+# The merge itself is ingest_merge() in schema.sql.
 
-def _stage_ddl(spec):
-    return ", ".join("%s %s" % (c[0], c[1]) for c in spec["stage"])
-
-
-def _stage_select(spec, db):
+def _stage_select(spec, db, with_clients=False):
     if "select" in spec:
         return spec["select"](db)
+    where = spec.get("where", "")
+    if spec.get("ap_only") and not with_clients:
+        where = " WHERE %s IN (SELECT key FROM devices WHERE %s)" % (spec["ap_only"], _AP_EVIDENCE)
     present = {r[1] for r in db.execute("PRAGMA table_info(%s)" % spec["name"])}
     cols = []
     for c in spec["stage"]:
@@ -105,26 +110,7 @@ def _stage_select(spec, db):
         if c[0] in spec.get("optional", ()) and expr not in present:
             expr = "NULL AS " + c[0]
         cols.append(expr)
-    return "SELECT %s FROM %s%s%s" % (", ".join(cols), spec["name"], spec.get("where", ""),
-                                     spec.get("order", ""))
-
-
-def _newer_wins(col):
-    """devices merge: take the column from the row whose last_seen is newer."""
-    return ("%s = CASE WHEN EXCLUDED.last_seen >= devices.last_seen "
-            "THEN EXCLUDED.%s ELSE devices.%s END" % (col, col, col))
-
-
-# The latest AP load (devices.cur_*, buffer v6): the snapshot's values win
-# when they are at least as new as the stored ones; a snapshot without them
-# (v5 or older, cur_at NULL) keeps the stored values.
-_CUR_COLS = ("cur_n_clients", "cur_qbss_stations", "cur_util_pct", "cur_at")
-
-
-def _cur_newer_wins(col):
-    return ("%s = CASE WHEN EXCLUDED.cur_at IS NOT NULL AND (devices.cur_at IS NULL "
-            "OR EXCLUDED.cur_at >= devices.cur_at) THEN EXCLUDED.%s ELSE devices.%s END"
-            % (col, col, col))
+    return "SELECT %s FROM %s%s%s" % (", ".join(cols), spec["name"], where, spec.get("order", ""))
 
 
 # A device of the snapshot that has been an AP (server schema 10,
@@ -162,8 +148,7 @@ _CONFIG_STAGE = [("ssid", "text"), ("cloaked", "integer"), ("crypt", "text"),
                  ("crypt_bits", "bigint"), ("mfp_sup", "integer"), ("mfp_req", "integer"),
                  ("adv_channel", "text"), ("ht_mode", "text"), ("beacon_rate", "integer"),
                  ("country", "text")]
-_CONFIG_SELECT = ("ssid, cloaked::boolean, crypt, crypt_bits, mfp_sup::boolean, "
-                  "mfp_req::boolean, adv_channel, ht_mode, beacon_rate, country")
+_CUR_COLS = ("cur_n_clients", "cur_qbss_stations", "cur_util_pct", "cur_at")
 
 TABLES = [
     {
@@ -174,70 +159,37 @@ TABLES = [
                                     ("cur_n_clients", "integer"), ("cur_qbss_stations", "integer"),
                                     ("cur_util_pct", "real"), ("cur_at", "bigint")],
         "optional": _CUR_COLS,                                      # buffer v6
+        "ap_only": "key",
         "macs": ("mac",),
-        "insert": (
-            "INSERT INTO devices (sensor_id, device_key, mac, type, manuf, first_seen, last_seen, "
-            + ", ".join(_CONFIG_COLS) + ", config_changed_at, " + ", ".join(_CUR_COLS) + ")\n"
-            "SELECT :sid, device_key, mac::macaddr, type, manuf, to_timestamp(first_seen), "
-            "to_timestamp(last_seen), " + _CONFIG_SELECT + ", to_timestamp(config_changed_at), "
-            "cur_n_clients, cur_qbss_stations, cur_util_pct, to_timestamp(cur_at)\n"
-            "FROM stage_devices\n"
-            "ON CONFLICT (sensor_id, device_key) DO UPDATE SET\n  "
-            + ",\n  ".join(
-                [_newer_wins("mac"), _newer_wins("type"),
-                 "manuf = COALESCE(CASE WHEN EXCLUDED.last_seen >= devices.last_seen "
-                 "THEN EXCLUDED.manuf END, devices.manuf, EXCLUDED.manuf)",
-                 "first_seen = LEAST(devices.first_seen, EXCLUDED.first_seen)"]
-                + [_newer_wins(c) for c in _CONFIG_COLS + ("config_changed_at",)]
-                + [_cur_newer_wins(c) for c in _CUR_COLS]
-                # All SET expressions see the stored row, so the CASEs above
-                # compare against the old last_seen regardless of order.
-                + ["last_seen = GREATEST(devices.last_seen, EXCLUDED.last_seen)"])
-            + ";"),
     },
     {
         "name": "polls",
         "order": " ORDER BY ts",
-        "stage": [("ts", "bigint"), ("kismet_ts", "bigint"), ("devices_total", "integer"),
-                  ("devices_active", "integer"), ("new_obs", "integer"), ("ds_running", "integer"),
-                  ("ds_error", "text"), ("ds_packets", "bigint"), ("ds_hop_n", "integer"),
-                  ("ds_hop_visited", "integer"), ("ds_hop_ok", "integer"), ("duration_ms", "integer"),
-                  ("ok", "integer"), ("error", "text")],
+        "stage": [("seq", "bigint", "id"), ("ts", "bigint"), ("kismet_ts", "bigint"),
+                  ("devices_total", "integer"), ("devices_active", "integer"), ("new_obs", "integer"),
+                  ("ds_running", "integer"), ("ds_error", "text"), ("ds_packets", "bigint"),
+                  ("ds_hop_n", "integer"), ("ds_hop_visited", "integer"), ("ds_hop_ok", "integer"),
+                  ("duration_ms", "integer"), ("ok", "integer"), ("error", "text")],
         "optional": ("ds_hop_n", "ds_hop_visited", "ds_hop_ok"),   # buffer v4
         "macs": (),
-        "track": True,
-        "insert": (
-            "INSERT INTO polls (sensor_id, ts, kismet_ts, devices_total, devices_active, new_obs, "
-            "ds_running, ds_error, ds_packets, ds_hop_n, ds_hop_visited, ds_hop_ok, "
-            "duration_ms, ok, error)\n"
-            "SELECT :sid, to_timestamp(ts), to_timestamp(kismet_ts), devices_total, devices_active, "
-            "new_obs, ds_running::boolean, ds_error, ds_packets, ds_hop_n, ds_hop_visited, "
-            "ds_hop_ok::boolean, duration_ms, ok::boolean, error\n"
-            "FROM stage_polls\n"
-            "ON CONFLICT DO NOTHING;"),
     },
     {
         "name": "device_config_history",
         "order": " ORDER BY key, ts",
         "stage": [("device_key", "text", "key"), ("ts", "bigint")] + _CONFIG_STAGE,
         "macs": (),
-        "insert": (
-            "INSERT INTO device_config_history (sensor_id, device_key, ts, "
-            + ", ".join(_CONFIG_COLS) + ")\n"
-            "SELECT :sid, device_key, to_timestamp(ts), " + _CONFIG_SELECT + "\n"
-            "FROM stage_device_config_history\n"
-            "ON CONFLICT DO NOTHING;"),
     },
     {
         # Server schema 7: AP rows only, the columns the detectors and the
         # dashboard read. The buffer's other columns (last_time, freq_khz,
         # channel, rssi_min/max, pk_tx/rx, bytes, n_clients, qbss_stations,
         # util_pct, ie_checksum, beacon_fp, bssid) are not read; a client's
-        # BSSID comes in through client_bssids (below), the AP load through
-        # devices.cur_*. Rows of devices that have never been an AP are left
-        # out on the Pi side already (the snapshot's AP evidence) and again
-        # on the server side (the merged devices.ever_ap, schema 10): an AP
-        # that Kismet re-typed as a client keeps its observations.
+        # BSSID comes in through client_bssids (with --with-client-tables),
+        # the AP load through devices.cur_*. Rows of devices that have never
+        # been an AP are left out on the Pi side already (the snapshot's AP
+        # evidence) and again by the merge (the merged devices.ever_ap,
+        # schema 10): an AP that Kismet re-typed as a client keeps its
+        # observations.
         "name": "observations",
         "where": " WHERE key IN (SELECT key FROM devices WHERE " + _AP_EVIDENCE + ")",
         "order": " ORDER BY ts, key",
@@ -247,17 +199,6 @@ TABLES = [
                   ("bss_timestamp", "bigint")],
         "optional": ("disconnects_last", "rssi_floor"),   # buffer v3, v5
         "macs": (),
-        "track": True,
-        "insert": (
-            "INSERT INTO observations (ts, pk_total, pk_data, bss_timestamp, disconnects_last, "
-            "sensor_id, disconnects, rssi, rssi_floor, device_key)\n"
-            "SELECT to_timestamp(s.ts), s.pk_total, s.pk_data, s.bss_timestamp, "
-            "to_timestamp(s.disconnects_last), :sid, s.disconnects, s.rssi, s.rssi_floor::boolean, "
-            "s.device_key\n"
-            "FROM stage_observations s\n"
-            "JOIN devices d ON d.sensor_id = :sid AND d.device_key = s.device_key AND d.ever_ap\n"
-            "ORDER BY s.ts, s.device_key\n"
-            "ON CONFLICT DO NOTHING;"),
     },
     {
         # Buffer v7: the collector's hourly AP load rows; schema 8.
@@ -268,22 +209,6 @@ TABLES = [
                   ("clients_sum", "integer"), ("qbss_polls", "integer"), ("qbss_max", "integer"),
                   ("qbss_sum", "integer"), ("util_max", "real"), ("util_sum", "real")],
         "macs": (),
-        "insert": (
-            "INSERT INTO ap_load_hourly AS t (sensor_id, device_key, hour, channel, polls, "
-            "clients_polls, clients_max, clients_sum, qbss_polls, qbss_max, qbss_sum, util_max, "
-            "util_sum, source)\n"
-            "SELECT :sid, s.device_key, to_timestamp(s.hour), s.channel, s.polls, s.clients_polls, "
-            "s.clients_max, s.clients_sum, s.qbss_polls, s.qbss_max, s.qbss_sum, s.util_max, "
-            "s.util_sum, 'buffer'\n"
-            "FROM stage_ap_load_hourly s\n"
-            "JOIN devices d ON d.sensor_id = :sid AND d.device_key = s.device_key AND d.ever_ap\n"
-            "ON CONFLICT (sensor_id, device_key, hour, channel) DO UPDATE SET\n"
-            "  polls = EXCLUDED.polls, clients_polls = EXCLUDED.clients_polls,\n"
-            "  clients_max = EXCLUDED.clients_max, clients_sum = EXCLUDED.clients_sum,\n"
-            "  qbss_polls = EXCLUDED.qbss_polls, qbss_max = EXCLUDED.qbss_max,\n"
-            "  qbss_sum = EXCLUDED.qbss_sum, util_max = EXCLUDED.util_max,\n"
-            "  util_sum = EXCLUDED.util_sum, source = EXCLUDED.source\n"
-            "  WHERE EXCLUDED.polls > t.polls;"),
     },
     {
         # The per-poll AP load of rows from buffers <= v5 -> ap_load_hourly
@@ -293,62 +218,35 @@ TABLES = [
         "stage": [("ts", "timestamptz"), ("device_key", "text"), ("n_clients", "integer"),
                   ("qbss_stations", "integer"), ("util_pct", "real")],
         "macs": (),
-        "insert": "SELECT * FROM load_ap_load_samples(:sid);",
     },
     {
         "name": "device_freq_hist",
+        "ap_only": "key",
         "stage": [("device_key", "text", "key"), ("freq_khz", "integer"), ("packets", "bigint"),
                   ("updated_ts", "bigint")],
         "macs": (),
-        "insert": (
-            "INSERT INTO device_freq_hist (sensor_id, device_key, freq_khz, packets, updated_ts)\n"
-            "SELECT :sid, device_key, freq_khz, packets, to_timestamp(updated_ts)\n"
-            "FROM stage_device_freq_hist\n"
-            "ON CONFLICT (sensor_id, device_key, freq_khz) DO UPDATE SET\n"
-            "  packets = EXCLUDED.packets, updated_ts = EXCLUDED.updated_ts\n"
-            "  WHERE EXCLUDED.updated_ts > device_freq_hist.updated_ts;"),
     },
     {
         "name": "associations",
+        "client": True,
         "stage": [("ap_key", "text"), ("client_mac", "text"), ("first_seen", "bigint"),
                   ("last_seen", "bigint")],
         "macs": ("client_mac",),
-        "insert": (
-            "INSERT INTO associations (sensor_id, ap_key, client_mac, first_seen, last_seen)\n"
-            "SELECT :sid, ap_key, client_mac::macaddr, to_timestamp(first_seen), "
-            "to_timestamp(last_seen)\n"
-            "FROM stage_associations\n"
-            "ON CONFLICT (sensor_id, ap_key, client_mac) DO UPDATE SET\n"
-            "  first_seen = LEAST(associations.first_seen, EXCLUDED.first_seen),\n"
-            "  last_seen = GREATEST(associations.last_seen, EXCLUDED.last_seen);"),
     },
     {
         "name": "client_bssids",
+        "client": True,
         "select": _client_bssids_select,
         "stage": [("device_key", "text"), ("bssid", "text"), ("first_seen", "bigint"),
                   ("last_seen", "bigint")],
         "macs": ("bssid",),
-        "insert": (
-            "INSERT INTO client_bssids (sensor_id, client_key, bssid, first_seen, last_seen)\n"
-            "SELECT :sid, device_key, bssid::macaddr, to_timestamp(first_seen), "
-            "to_timestamp(last_seen)\n"
-            "FROM stage_client_bssids\n"
-            "ON CONFLICT (sensor_id, client_key, bssid) DO UPDATE SET\n"
-            "  first_seen = LEAST(client_bssids.first_seen, EXCLUDED.first_seen),\n"
-            "  last_seen = GREATEST(client_bssids.last_seen, EXCLUDED.last_seen);"),
     },
     {
         "name": "probes",
+        "client": True,
         "stage": [("device_key", "text", "key"), ("ssid", "text"), ("first_time", "bigint"),
                   ("last_time", "bigint")],
         "macs": (),
-        "insert": (
-            "INSERT INTO probes (sensor_id, device_key, ssid, first_time, last_time)\n"
-            "SELECT :sid, device_key, ssid, to_timestamp(first_time), to_timestamp(last_time)\n"
-            "FROM stage_probes\n"
-            "ON CONFLICT (sensor_id, device_key, ssid) DO UPDATE SET\n"
-            "  first_time = LEAST(probes.first_time, EXCLUDED.first_time),\n"
-            "  last_time = GREATEST(probes.last_time, EXCLUDED.last_time);"),
     },
     {
         "name": "alerts",
@@ -359,15 +257,6 @@ TABLES = [
                   ("channel", "text"), ("freq_khz", "integer"), ("device_key", "text"),
                   ("text", "text"), ("raw", "text")],
         "macs": ("source_mac", "dest_mac", "transmitter_mac", "other_mac"),
-        "track": True,
-        "insert": (
-            "INSERT INTO alerts (sensor_id, hash, ts, header, class, severity, source_mac, "
-            "dest_mac, transmitter_mac, other_mac, channel, freq_khz, device_key, text, raw)\n"
-            "SELECT :sid, hash, to_timestamp(ts), header, class, severity, source_mac::macaddr, "
-            "dest_mac::macaddr, transmitter_mac::macaddr, other_mac::macaddr, channel, freq_khz, "
-            "device_key, text, raw::jsonb\n"
-            "FROM stage_alerts\n"
-            "ON CONFLICT (sensor_id, hash) DO NOTHING;"),
     },
 ]
 
@@ -431,17 +320,16 @@ def snapshot_summary(db):
 
 # --- stream generation ---------------------------------------------------------------
 
-def emit_copy(out, db, spec, log):
-    """CREATE TEMP TABLE + COPY the rows of one buffer table. Returns the row count."""
+def emit_copy(out, db, spec, log, with_clients=False):
+    """COPY the rows of one buffer table into its staging table (created by
+    ingest_stage_create()). Returns the row count."""
     name = spec["name"]
-    stage = "stage_" + name
     mac_idx = [i for i, c in enumerate(spec["stage"]) if c[0] in spec["macs"]]
     out.write("\\echo -- %s\n" % name)
-    out.write("CREATE TEMP TABLE %s (%s) ON COMMIT DROP;\n" % (stage, _stage_ddl(spec)))
-    out.write("COPY %s FROM STDIN;\n" % stage)
+    out.write("COPY stage_%s (%s) FROM STDIN;\n" % (name, ", ".join(c[0] for c in spec["stage"])))
     n = 0
     try:
-        for row in db.execute(_stage_select(spec, db)):
+        for row in db.execute(_stage_select(spec, db, with_clients)):
             for i in mac_idx:
                 v = row[i]
                 if v is not None and not _MAC_RE.match(v):
@@ -460,16 +348,6 @@ def emit_copy(out, db, spec, log):
     return n
 
 
-def merge_sql(spec):
-    """The merge statement; for a tracked table wrapped so that it reports its
-    inserted rows and their earliest ts into import_from."""
-    if not spec.get("track"):
-        return spec["insert"]
-    body = spec["insert"].rstrip().rstrip(";")
-    return ("WITH ins AS (\n%s\nRETURNING ts)\n"
-            "INSERT INTO import_from SELECT '%s', count(*), min(ts) FROM ins;" % (body, spec["name"]))
-
-
 def emit_stream(out, db, args, log):
     counts, lo, hi = snapshot_summary(db)
     out.write("-- generated by import_snapshot.py from %s\n" % os.path.basename(args.snapshot))
@@ -478,8 +356,6 @@ def emit_stream(out, db, args, log):
     out.write("\\set ON_ERROR_STOP on\n")
     out.write("SET client_encoding = 'UTF8';\n")
     out.write("BEGIN;\n")
-    # Session-lifetime (survives COMMIT): what the tracked merges inserted.
-    out.write("CREATE TEMP TABLE import_from (tbl text, inserted bigint, min_ts timestamptz);\n")
 
     # 1. sensor row; fields not given on the command line keep their stored value.
     tz_new = sql_literal(args.tz) if args.tz else None
@@ -499,17 +375,23 @@ def emit_stream(out, db, args, log):
     # Fail early on an unknown time zone name instead of inside the baseline refresh.
     out.write("SELECT now() AT TIME ZONE (SELECT tz FROM sensors WHERE id = :sid) AS tz_check;\n")
 
-    # 2. staged copy + merge, devices first (foreign keys).
+    # 2. the staging tables of the server (schema 14), one COPY per buffer table
+    out.write("SELECT ingest_stage_create();\n")
     tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     for spec in TABLES:
         if spec.get("optional_table") and spec["name"] not in tables:
             log("  %-22s   (not in this buffer version)" % spec["name"])
             continue
-        emit_copy(out, db, spec, log)
-        out.write(merge_sql(spec))
-        out.write("\n")
+        if spec.get("client") and not args.with_client_tables:
+            log("  %-22s   (client table: left on the sensor, --with-client-tables)" % spec["name"])
+            continue
+        emit_copy(out, db, spec, log, args.with_client_tables)
 
-    # 3. the upload record (schema 9): what came in and from which buffer
+    # 3. the merge shared with the live ingest; :merged = {staged, inserted, conflicts, min_ts}
+    out.write("\\echo -- ingest_merge\n")
+    out.write("SELECT ingest_merge(:sid, 'snapshot') AS merged \\gset\n")
+
+    # 4. the upload record (schema 9): what came in and from which buffer
     meta = dict(db.execute("SELECT key, value FROM meta"))
     src_bytes = meta.get("snapshot_source_bytes")
     out.write("\\echo -- sensor_uploads\n")
@@ -517,19 +399,19 @@ def emit_stream(out, db, args, log):
         "INSERT INTO sensor_uploads (sensor_id, via, buffer_version, polls_from, polls_to, "
         "buffer_bytes, rows)\n"
         "SELECT :sid, 'snapshot', %s, %s, %s, %s,\n"
-        "       coalesce((SELECT jsonb_object_agg(tbl, inserted) FROM import_from), '{}'::jsonb);\n"
+        "       coalesce(:'merged'::jsonb -> 'inserted', '{}'::jsonb);\n"
         % (sql_literal(str(meta.get("schema_version"))),
            "to_timestamp(%d)" % lo if lo is not None else "NULL",
            "to_timestamp(%d)" % hi if hi is not None else "NULL",
            int(src_bytes) if src_bytes and src_bytes.isdigit() else "NULL"))
 
-    # 4. baselines
+    # 5. baselines
     if not args.no_baselines:
         out.write("\\echo -- ap_baselines\n")
         out.write("SELECT refresh_ap_baselines(:sid, %d, %d) AS ap_baselines_upserted;\n"
                   % (args.min_obs, args.min_days))
 
-    # 5. summary
+    # 6. summary
     out.write("\\echo -- row counts for sensor %s\n" % args.sensor)
     parts = ["('%s', (SELECT count(*) FROM %s WHERE sensor_id = :sid))" % (t, t)
              for t in ("polls", "devices", "device_config_history", "observations",
@@ -538,23 +420,23 @@ def emit_stream(out, db, args, log):
     out.write("SELECT * FROM (VALUES\n  %s) AS t (table_name, n_rows);\n" % ",\n  ".join(parts))
     out.write("COMMIT;\n")
 
-    # 6. visibility map: the AP queries are index-only scans on the covering index
+    # 7. visibility map: the AP queries are index-only scans on the covering index
     #    and fetch the heap row for every page not marked all-visible; autovacuum's
     #    insert threshold is ~20 % of the table, i.e. days of imports. VACUUM cannot
     #    run in a transaction block, and ON_ERROR_STOP keeps a failed load from
     #    getting here.
     out.write("\\echo -- vacuum observations (visibility map for index-only scans)\n")
     out.write("VACUUM (ANALYZE) observations;\n")
-    out.write("\\echo -- inserted rows (polls, observations, alerts)\n")
-    out.write("SELECT tbl AS table_name, inserted, min_ts AS earliest_ts FROM import_from;\n")
+    out.write("\\echo -- staged / inserted rows per table, earliest inserted ts\n")
+    out.write("SELECT jsonb_pretty(:'merged'::jsonb) AS merged;\n")
 
-    # 7. dashboard tables from the earliest inserted ts (nothing new: the
+    # 8. dashboard tables from the earliest inserted ts (nothing new: the
     #    current hour and the per-AP/per-sensor rows; the sensor's first
     #    refresh covers everything). Own transaction, after the vacuum.
     if not args.no_rollups:
         out.write("\\echo -- refresh_rollups (dashboard tables)\n")
         out.write("SELECT * FROM refresh_rollups(:sid, "
-                  "coalesce((SELECT min(min_ts) FROM import_from), now()));\n")
+                  "coalesce((:'merged'::jsonb ->> 'min_ts')::timestamptz, now()));\n")
         out.write("ANALYZE ap_rssi_hourly, sensor_hourly, ap_summary, sensor_summary, "
                   "ap_config_changes;\n")
 
@@ -589,6 +471,9 @@ def main(argv):
                     help="baseline: minimum RSSI readings per AP (default 200)")
     ap.add_argument("--min-days", type=int, default=2,
                     help="baseline: minimum distinct days per AP (default 2)")
+    ap.add_argument("--with-client-tables", action="store_true",
+                    help="also load the client devices, associations, client_bssids and "
+                         "probes (client data; off by default since live upload, decision D4)")
     ap.add_argument("--dry-run", action="store_true",
                     help="only print what the snapshot contains, emit no SQL")
     args = ap.parse_args(argv)

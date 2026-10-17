@@ -94,13 +94,19 @@ def make_v5(path):
 
 def staged(sql):
     """{table: [row fields]} of the COPY blocks."""
-    copied = re.findall(r"COPY stage_(\w+) FROM STDIN;\n(.*?)\\\.\n", sql, re.S)
+    copied = re.findall(r"COPY stage_(\w+) \([^)]*\) FROM STDIN;\n(.*?)\\\.\n", sql, re.S)
     return {t: [line.split("\t") for line in body.splitlines()] for t, body in copied}
+
+
+def copy_columns(sql):
+    """{table: [columns]} of the COPY statements."""
+    return {t: [c.strip() for c in cols.split(",")]
+            for t, cols in re.findall(r"COPY stage_(\w+) \(([^)]*)\) FROM STDIN;", sql)}
 
 
 def args(**kw):
     a = dict(snapshot="snap.db", sensor="pi-test", description=None, location=None, tz=None,
-             no_baselines=False, no_rollups=False, min_obs=200, min_days=2)
+             no_baselines=False, no_rollups=False, min_obs=200, min_days=2, with_client_tables=False)
     a.update(kw)
     return argparse.Namespace(**a)
 
@@ -123,25 +129,56 @@ class Stream(unittest.TestCase):
         db.close()
         return out.getvalue()
 
-    def test_tracked_merges_report_inserted_rows_and_earliest_ts(self):
+    def test_one_shared_merge_after_the_copies(self):
+        # schema 14: the stream stages and calls ingest_merge() - the merge
+        # rules live in schema.sql, shared with the live ingest
         sql = self.stream()
-        self.assertEqual(sql.count("CREATE TEMP TABLE import_from"), 1)
-        self.assertLess(sql.index("BEGIN;"), sql.index("CREATE TEMP TABLE import_from"))
-        for t in ("polls", "observations", "alerts"):
-            m = re.search(r"WITH ins AS \(\nINSERT INTO %s .*?\nRETURNING ts\)\n"
-                          r"INSERT INTO import_from SELECT '%s', count\(\*\), min\(ts\) FROM ins;"
-                          % (t, t), sql, re.S)
-            self.assertIsNotNone(m, t)
-            self.assertNotIn(";", m.group(0)[:-1], t)     # one statement
-        for t in ("devices", "device_config_history", "device_freq_hist", "associations", "probes"):
-            self.assertNotIn("INSERT INTO import_from SELECT '%s'" % t, sql)
+        begin, commit = sql.index("BEGIN;"), sql.index("COMMIT;")
+        create = sql.index("SELECT ingest_stage_create();")
+        merge = sql.index("SELECT ingest_merge(:sid, 'snapshot') AS merged \\gset")
+        self.assertEqual(sql.count("SELECT ingest_merge("), 1)
+        self.assertLess(begin, create)
+        self.assertLess(create, sql.index("COPY stage_devices ("))
+        self.assertLess(sql.rindex("\\.\n"), merge)          # after the last COPY block
+        self.assertLess(merge, commit)
+        for t in ("devices", "polls", "observations", "alerts", "ap_load_hourly", "device_freq_hist"):
+            self.assertNotIn("INSERT INTO %s " % t, sql, t)
+        self.assertNotIn("CREATE TEMP TABLE", sql)            # the stage tables are the server's
+        self.assertNotIn("import_from", sql)
+
+    def test_copy_lists_the_columns(self):
+        cols = copy_columns(self.stream())
+        self.assertEqual(cols["polls"][:2], ["seq", "ts"])
+        self.assertEqual(cols["observations"][:2], ["ts", "device_key"])
+
+    def test_poll_seq_is_the_buffer_row_id(self):
+        rows = staged(self.stream())["polls"]
+        self.assertEqual([r[:2] for r in rows], [["1", "1758981600"], ["2", "1758981630"], ["3", "1758981900"]])
+
+    def test_client_devices_only_with_the_flag(self):
+        # the recovery path loads what the live ingest accepts: AP devices
+        # (and their frequency histograms); clients only with the client tables
+        rows = staged(self.stream())
+        self.assertEqual([r[0] for r in rows["devices"]], [AP])
+        rows = staged(self.stream(with_client_tables=True))
+        self.assertEqual(sorted(r[0] for r in rows["devices"]), sorted([AP, CLIENT]))
+
+    def test_client_tables_only_with_the_flag(self):
+        # D4: the snapshot import is a recovery tool; client data stays on the Pi
+        rows = staged(self.stream())
+        for t in ("associations", "client_bssids", "probes"):
+            self.assertNotIn(t, rows, t)
+        rows = staged(self.stream(with_client_tables=True))
+        self.assertIn("client_bssids", rows)
+        self.assertIn("probes", rows)
+        self.assertIn("associations", rows)
 
     def test_refresh_rollups_after_commit_and_vacuum(self):
         sql = self.stream()
         commit = sql.index("COMMIT;")
         vacuum = sql.index("VACUUM (ANALYZE) observations;")
         refresh = sql.index("SELECT * FROM refresh_rollups(:sid, "
-                            "coalesce((SELECT min(min_ts) FROM import_from), now()));")
+                            "coalesce((:'merged'::jsonb ->> 'min_ts')::timestamptz, now()));")
         analyze = sql.index("ANALYZE ap_rssi_hourly, sensor_hourly, ap_summary, sensor_summary, "
                             "ap_config_changes;")
         self.assertLess(commit, vacuum)
@@ -158,7 +195,7 @@ class Stream(unittest.TestCase):
     def test_rows_are_staged(self):
         rows = staged(self.stream())
         self.assertEqual(len(rows["polls"]), 3)
-        self.assertEqual(len(rows["devices"]), 2)
+        self.assertEqual(len(rows["devices"]), 1)        # the AP; the client stays on the Pi
         self.assertEqual(len(rows["alerts"]), 1)
 
     def test_only_ap_observations_with_the_kept_columns(self):
@@ -168,12 +205,9 @@ class Stream(unittest.TestCase):
         self.assertEqual(obs, [["1758981600", AP, "-60", "\\N", "10", "0", "0", "\\N", "99"],
                                ["1758981630", AP, "\\N", "1", "10", "0", "0", "\\N", "99"],
                                ["1758981900", AP, "-62", "\\N", "10", "0", "0", "\\N", "99"]])
-        self.assertIn("JOIN devices d ON d.sensor_id = :sid AND d.device_key = s.device_key "
-                      "AND d.ever_ap", sql)
         for gone in ("last_time", "freq_khz", "rssi_min", "pk_tx", "bytes", "n_clients",
                      "ie_checksum", "beacon_fp"):
-            self.assertNotIn(gone, sql.split("CREATE TEMP TABLE stage_observations")[1]
-                             .split("\\.")[0].split("\n")[0], gone)
+            self.assertNotIn(gone, copy_columns(sql)["observations"], gone)
 
     def test_observations_of_an_ap_that_kismet_re_typed(self):
         # schema 10: a device with an advertised configuration has been an AP
@@ -198,13 +232,13 @@ class Stream(unittest.TestCase):
         self.assertEqual(keys, [AP, retyped])
 
     def test_client_bssids_from_the_table_and_the_old_rows(self):
-        rows = staged(self.stream())["client_bssids"]
+        rows = staged(self.stream(with_client_tables=True))["client_bssids"]
         # F6: per-poll rows 1758981600..1758981900 merged with the table's wider pair
         self.assertEqual(rows, [[CLIENT, "A1:B2:C3:D4:E5:F6", "1758981000", "1758982000"],
                                 [CLIENT, "A1:B2:C3:D4:E5:F7", "1758981800", "1758981800"]])
 
     def test_ap_load_is_staged_with_the_device(self):
-        dev = {r[0]: r for r in staged(self.stream())["devices"]}
+        dev = {r[0]: r for r in staged(self.stream(with_client_tables=True))["devices"]}
         self.assertEqual(dev[AP][-4:], ["3", "2", "12.5", "1758981900"])
         self.assertEqual(dev[CLIENT][-4:], ["\\N"] * 4)
 
@@ -214,11 +248,6 @@ class Stream(unittest.TestCase):
         self.assertEqual([r for r in rows if r[0] == AP],
                          [[AP, "1758981600", "6", "2", "2", "4", "7", "1", "2", "2", "12.5", "12.5"]])
         self.assertEqual(len(rows), 2)        # the client's row is staged, the merge drops it
-        merge = sql.split("INSERT INTO ap_load_hourly AS t")[1].split(";")[0]
-        self.assertIn("JOIN devices d ON d.sensor_id = :sid AND d.device_key = s.device_key "
-                      "AND d.ever_ap", merge)
-        self.assertIn("'buffer'", merge)
-        self.assertIn("WHERE EXCLUDED.polls > t.polls", merge)
 
     def test_v5_load_columns_become_load_samples(self):
         sql = self.stream()
@@ -228,20 +257,17 @@ class Stream(unittest.TestCase):
         # AP rows only (a client never carries the columns), ts as timestamptz text
         self.assertEqual(rows, [[iso(ts), AP, "3", "2", "12.5"]
                                 for ts in (1758981600, 1758981630, 1758981900)])
-        call = sql.index("SELECT * FROM load_ap_load_samples(:sid);")
-        self.assertLess(sql.index("COPY stage_load_samples FROM STDIN;"), call)
-        # the channel of a sample comes from the history merged before
-        self.assertLess(sql.index("INSERT INTO device_config_history"), call)
-        self.assertLess(call, sql.index("COMMIT;"))
+        # merged by ingest_merge() (load_ap_load_samples(), after the history)
+        self.assertLess(sql.index("COPY stage_load_samples ("), sql.index("SELECT ingest_merge("))
 
     def test_upload_is_recorded_in_the_transaction(self):
         sql = self.stream()
         rec = sql.split("INSERT INTO sensor_uploads")[1].split(";")[0]
         self.assertIn("SELECT :sid, 'snapshot', '7', to_timestamp(1758981600), to_timestamp(1758981900), "
                       "NULL,", rec)                       # no export meta in this fixture
-        self.assertIn("jsonb_object_agg(tbl, inserted) FROM import_from", rec)
+        self.assertIn("coalesce(:'merged'::jsonb -> 'inserted', '{}'::jsonb)", rec)
         self.assertLess(sql.index("INSERT INTO sensor_uploads"), sql.index("COMMIT;"))
-        self.assertLess(sql.index("INSERT INTO alerts"), sql.index("INSERT INTO sensor_uploads"))
+        self.assertLess(sql.index("SELECT ingest_merge("), sql.index("INSERT INTO sensor_uploads"))
 
     def test_buffer_size_from_the_export_meta(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -279,7 +305,7 @@ class StreamV5(unittest.TestCase):
         self.assertEqual(len(rows["observations"]), 3)
         self.assertNotIn("ap_load_hourly", rows)          # no such table before v7
         self.assertEqual(len(rows["load_samples"]), 3)
-        self.assertEqual(rows["client_bssids"], [[CLIENT, "A1:B2:C3:D4:E5:F6", "1758981600", "1758981900"]])
+        self.assertNotIn("client_bssids", rows)
         self.assertEqual({tuple(r[-4:]) for r in rows["devices"]}, {("\\N",) * 4})
 
 
