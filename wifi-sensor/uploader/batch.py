@@ -259,14 +259,19 @@ def build(db, cursor, current_boot, server_anchors, max_polls):
                                   r["clients_max"], r["clients_sum"], r["qbss_polls"], r["qbss_max"],
                                   r["qbss_sum"], r["util_max"], r["util_sum"]])
     new["load_ts"] = true_to
-    # frequency histograms of the APs of the batch
+    # frequency histograms (cumulative counters; only the band fallback reads
+    # them): every poll updates every AP's ~16 rows, so they go at most once per
+    # UTC hour - with the first batch of an hour, the APs of that batch, every
+    # row updated since the last send
     freq_rows = []
     keys = sorted({o[1] for o in obs_rows})
-    for k in keys:
-        for r in db.execute("SELECT key, freq_khz, packets, updated_ts FROM device_freq_hist "
-                            "WHERE key = ? AND updated_ts > ? AND updated_ts <= ?", (k, cursor["freq_ts"], true_to)):
-            freq_rows.append([r["key"], r["freq_khz"], r["packets"], r["updated_ts"]])
-    new["freq_ts"] = true_to
+    if true_to // 3600 > cursor["freq_ts"] // 3600:
+        for k in keys:
+            for r in db.execute("SELECT key, freq_khz, packets, updated_ts FROM device_freq_hist "
+                                "WHERE key = ? AND updated_ts > ? AND updated_ts <= ?",
+                                (k, cursor["freq_ts"], true_to)):
+                freq_rows.append([r["key"], r["freq_khz"], r["packets"], r["updated_ts"]])
+        new["freq_ts"] = true_to
     # the devices every row refers to, their time fields placed
     all_boots = list(bmap.values())
     dev_rows = []

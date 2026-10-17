@@ -110,6 +110,22 @@ class Steady(Fixture):
             self.assertEqual(len(self.rows(b, "observations")), len(self.rows(b, "polls")))
         self.assertEqual(seen, [1, 2, 3, 4, 5])
 
+    def test_frequency_histograms_at_most_once_an_hour(self):
+        # every poll updates every AP's per-frequency counters; sent per poll they
+        # were ~1,200 row updates per batch - now with the first batch of each hour
+        hour = TS - TS % 3600
+        self.poll(hour + 10, [ap(LAST)], clk(B, 10.0, True, hour + 10.0))
+        b, cur, _ = self.build()
+        self.assertTrue(self.rows(b, "device_freq_hist"))                 # the first batch of the hour
+        self.poll(hour + 40, [ap(LAST + 30)], clk(B, 40.0, True, hour + 40.0))
+        b, cur2, _ = self.build(cur)
+        self.assertEqual(self.rows(b, "device_freq_hist"), [])             # same hour: none
+        self.assertEqual(cur2["freq_ts"], cur["freq_ts"])
+        self.poll(hour + 3610, [ap(LAST + 3600)], clk(B, 3610.0, True, hour + 3610.0))
+        b, cur3, _ = self.build(cur2)
+        self.assertTrue(self.rows(b, "device_freq_hist"))                 # the next hour: the latest counts
+        self.assertGreater(cur3["freq_ts"], cur2["freq_ts"])
+
     def test_columns_equal_the_servers(self):
         v = load_server_validate()
         for name, cols in batch.COLUMNS.items():
