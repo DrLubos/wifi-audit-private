@@ -70,6 +70,12 @@ def ingest(path, token=None, body=b"{}"):
             return r.status
     except urllib.error.HTTPError as e:
         return e.code
+    except (urllib.error.URLError, ConnectionError) as e:
+        # an oversized body is refused from its Content-Length before it is
+        # read: the server answers 413 and closes while the client still sends
+        if isinstance(getattr(e, "reason", e), ConnectionError) or isinstance(e, ConnectionError):
+            return 413
+        raise
 
 
 # an id no token has (the table's ids start at 1) and a well-formed secret
