@@ -14,7 +14,8 @@ section 9 the channel-plan analysis and the capture-helper crash causes,
 section 10 the first false-positive characterisation of the server-side
 evil_twin detector, section 11 the data-quality rules that came out of it
 (RSSI floor values, config-history churn, `freq_khz`), section 12 what
-Kismet's NOCLIENTMFP alert actually checks (input for RQ2). **The figures of
+Kismet's NOCLIENTMFP alert actually checks (input for RQ2), section 13 the
+clock at boot (no RTC, no fake-hwclock). **The figures of
 sections 1-3 and 10 treat the RSSI floor values -106/-120 dBm as signal
 levels**; sections 2-3 were re-measured without them (2026-09-27, tables at
 the end of each section) - the original text is kept, marked superseded.
@@ -246,6 +247,8 @@ in section 7.
 | 2026-09-27 12:17:20 (helper crash; counter frozen from the 12:17:24 poll) | 2026-09-27 12:22:55 (watchdog restarted Kismet; frames again at the 12:23:24 poll) | ~5.5 m | Same: helper crashes at 12:17:20/39/47, re-open captured nothing |
 | 2026-10-06 12:23:51 (last ok poll) | 2026-10-06 13:24:45 (next poll) | 1 h 1 m | No polls; the collector service started again at 13:24:44 (systemd). Not investigated (found 2026-10-11, as above) |
 | 2026-10-06 19:33:15 (last poll with devices; adapter lost at 19:32:53) | 2026-10-10 21:53:47 (first poll with devices) | 4 d 2 h 21 m | Capture adapter gone from the USB bus (below) |
+| 2026-10-13 09:50:12 (last poll) | 2026-10-13 14:22:28 (first poll) | 4 h 32 m | Pi off: the boot's journal ends mid-capture (09:50:27) with no shutdown messages - a power cut or an unplug. Found 2026-10-17 in the buffer's `polls` (gaps > 90 s) |
+| 2026-10-14 05:30:28 (last poll) | 2026-10-14 08:51:37 (first poll) | 3 h 21 m | Pi off, as above (journal ends 05:30:36). After this boot the capture watchdog found the adapter on another USB port: "wlan1 is on hub port 1-1-port3 (was 1-1.1-port2)" (08:54:57) - the hardware was re-plugged during the gap. Whether cable, antenna or position changed (an RSSI boundary, `hardware_change`) is the developer's to record |
 
 **2026-09-22 disk-full gap** (boundaries read from `polls` in the live buffer):
 
@@ -1055,3 +1058,43 @@ By the security the named AP advertised at the alert's time
   the case (open network / MFP not offered / unknown) should go into the
   status note, so the RQ2 analysis can tell "true but not a security event" apart
   from a real false positive.
+
+## 13. The clock at boot: no RTC, no fake-hwclock (2026-10-17)
+
+Found while designing the live upload (`server/docs/live-upload.md` 8.3).
+Read-only on the Pi: `journalctl --list-boots`, the boots' journals,
+`/etc/chrony/chrony.conf`, `chronyc -c tracking`, the buffer's `polls`.
+
+- **Every boot starts on a fixed stale date.** The Pi has no RTC and
+  `fake-hwclock` is not installed (`systemctl is-enabled fake-hwclock`: not
+  found; no `/etc/fake-hwclock.data`), so the kernel clock starts on the same
+  early date each time - the current boot's journal begins at **2026-09-15
+  13:52:36**, and at 2026-10-14 08:51:34 chrony logged "System clock was
+  stepped by 2487502.834021 seconds" (28.8 days). The error grows by one day
+  per day of calendar time.
+- chrony has `makestep 1 3` (steps on one of its first three updates once a
+  source is reachable) and `rtcsync` (without an RTC it does nothing).
+  `chronyc -c tracking` works for the unprivileged sensor user.
+- **So far no data was stamped with the stale clock:** `kismet-prestart.sh`
+  waits (bounded, 60 s) for chrony before Kismet starts, and in every boot
+  since the persistent journal (2026-09-26) chrony synchronised in time - at
+  the 2026-10-14 boot "clock synchronised (08:51:35)", collector start
+  08:51:37. In the buffer (polls from 2026-10-03) no poll's `ts` is earlier
+  than the previous poll's.
+- **What would happen on a boot without network (code reading, collector v7):**
+  after the 60 s wait the collector polls on the stale clock. Its resume
+  point (`meta.last_kismet_ts`) is a true time from the previous boot, so
+  `devices_since()` asks Kismet - whose clock is the same stale one - for
+  devices seen after a moment weeks in its future and gets **none**; and
+  `is_new_obs` compares Kismet's stale `last_time` with `devices.last_seen`
+  of earlier boots and is false for every known device. The polls are
+  written (stale `ts`, `devices_active = 0`), i.e. **a stale-clock stretch
+  records nothing usable** and looks like a capture outage. Worse, the
+  hourly prune compares `ts` with the synchronised clock once chrony steps:
+  rows stamped weeks back are deleted within the hour.
+- Consequences built into collector buffer v8 (live upload, step 3): a
+  monotonic timestamp, the boot id and a clock-synced flag per poll, one
+  clock anchor per boot, the resume point and "new observation" per boot,
+  pruning by corrected time - and the uploader places such polls on the
+  true time line (target ±10 s). The hardware alternative is an RTC module
+  (DS3231), listed as a future improvement there.

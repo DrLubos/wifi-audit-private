@@ -2,8 +2,8 @@
 
 Status: **approved 2026-10-17 with changes (folded in below); being built in
 the order of section 14, each step its own commit, stopped before each
-deploy.** Decisions D1–D14 are recorded in section 13 as decided; new
-questions that came up while folding the changes in are N1–N10 (13.2).
+deploy.** Decisions D1–D14 and N1–N10 are recorded in section 13 as decided;
+N11 (13.2) is open.
 Replaces `dashboard-v2/PLAN.md` section 11.1 for the upload; config delivery
 stays deferred (D9).
 
@@ -355,6 +355,27 @@ Bratislava `refresh_ap_baselines(sid, 200, 2)`.
 - Status and last contact never wait for it: the Sensors endpoint reads
   `sensor_status` directly (its ETag includes `sensor_status.updated_at`);
   rollup-based charts lag by at most one refresh.
+- **Measuring after the step-2 deploy (N8)**: the refresher logs each run's
+  duration; on the box over a day: `vmstat 60` (the `st` steal column is
+  where the e2-micro's throttling shows - a shared-core VM has no credit
+  balance to read; it is allowed 0.25 vCPU sustained with short bursts to
+  2 vCPU), `docker stats --no-stream` every few minutes (refresher and db
+  CPU), Cloud Monitoring "CPU utilization" of the instance, and the
+  dashboard's `measure.sh MODE=v2` timings with and without a refresh
+  running.
+- **If an incremental refresh takes minutes**: make steps 4–8 incremental
+  instead of tuning the interval - `ingest_merge()` already knows what
+  arrived; it would record per sensor which kinds changed
+  (`ingest_state.dirty_config` when history or device configuration rows
+  changed, `dirty_alerts`, the set of touched APs). Then step 4 (the
+  materialized `ap_config_changes`) and the security periods / config
+  events run only when the configuration changed, and only for the touched
+  APs (the view becomes a table maintained per AP); step 5 (`ap_summary`)
+  updates the touched APs' rows instead of rebuilding all ~900; step 7
+  (`sensor_periods`) recomputes from the last closed period; step 8 the
+  Kismet episodes only when alerts arrived. Each stays "incremental = full"
+  under `refresh_rollups_test.sql`. Designed after the measurement, not
+  before.
 - `observations` autovacuum: `autovacuum_vacuum_insert_threshold = 20000`,
   `autovacuum_vacuum_insert_scale_factor = 0` (a vacuum about every 3 h of
   inserts keeps the index-only AP scans); `devices` and `ap_load_hourly`
@@ -495,9 +516,15 @@ of the boot is `E = wall_a - mono_a`.
 - An unsynced poll of the current boot without anchor: held back. If HTTPS
   works but NTP does not, the uploader creates a **server anchor** after
   2 min of contact: `wall_a = server_ts + RTT/2` at `mono_a` = the request's
-  midpoint (±RTT/2, ~60 ms from the dormitory to us-east), stored in its
+  midpoint (±RTT/2, ~60 ms from the dormitory to us-central1), stored in its
   state file and sent as `boots[].source = 'server'`. An NTP anchor recorded
   later for the same boot does not change polls already sent.
+  **Limit (found 2026-10-17):** the request is verified TLS (amendment 2),
+  and certificate validity is checked against the Pi's own clock. With
+  today's stale boot date (2026-09-15, weeks behind) every certificate
+  issued since is "not yet valid", so the server anchor cannot work - nor
+  Tailscale's control plane. It works when the boot clock is at most a few
+  days behind, which is what N11 gives.
 - A boot that ended without anchor: never uploaded (8.1, time unverified).
 
 **Every wall-clock value inside a poll's rows** (uploaded tables only, D3).
@@ -540,27 +567,17 @@ large offset instead of stepping would bend CLOCK_MONOTONIC too; `makestep`
 prevents it, and `clock_synced` requires |offset| < 0.5 s.
 
 **Validation test** (the developer runs it; N3):
-
-1. *Soft* (no reboot, minutes): stop the uploader; `sudo systemctl stop
-   chrony`; `sudo date -s @$(( $(date +%s) - 7200 ))` (2 h back) – the
-   collector now writes unsynced polls 2 h in the past in the same boot; a
-   ground-truth sampler on the Mac (`uploader/tests/clock_truth.py`: every
-   60 s over ssh `(Mac NTP time before/after, Pi CLOCK_MONOTONIC)`)
-   records the true time of known monotonic instants; after N minutes
-   `sudo systemctl start chrony` (it steps the clock back); start the
-   uploader. Error = corrected time of each sampled instant (from the
-   boot's anchor) – ground truth. Tests the path "anchor before the stale
-   stretch".
-2. *Real* (a reboot without NTP, N = 30 min, 3 h, 24 h): `sudo systemctl
-   disable chrony`, reboot (the uplink stays for ssh; with chrony off the
-   clock stays on the stale epoch), sampler running; after N `sudo
-   systemctl enable --now chrony`. Tests "anchor after the stale stretch",
-   the load folding and the Kismet-time rules. Plus once: reboot again
-   *before* enabling chrony – that boot must come out time-unverified,
-   counted and not uploaded.
-3. Report: error distribution per N (expected < 1 s), max |error| vs N
-   (drift), polls corrected, unverified count. A dated `findings.md` row for
-   each run (the data of those windows is corrected, not raw).
+`wifi-sensor/docs/clock-validation.md`, a step-by-step checklist that never
+touches the network and recovers by itself: the next boot's clock is set a
+few hours back through the mtime of `/var/lib/systemd/timesync/clock` (what
+systemd raises the boot clock to), and chrony's sources are held offline for
+N minutes after that boot (chronyd still runs - Kismet is ordered after it).
+Runs: A (30 min, 3 h, 24 h; ground truth from a sampler on the Mac),
+B (a boot that ends before its anchor -> time-unverified), C (the real
+33-day stale date, only from the dorm LAN: Tailscale's TLS fails with it),
+D (the server anchor). The clock is never moved by hand while connected
+(`date -s` backwards breaks WireGuard handshakes from the Pi). A dated
+`findings.md` row for each run.
 
 ### 8.4 Adapter identity from the heartbeat (D8)
 
@@ -638,6 +655,68 @@ Options (N4 – your decision before the uploader is enabled):
   maintenance window; best combined with C or TimescaleDB later.
 - Recommendation: **A + B now**, C designed before ~6 months of data; D only
   with C.
+
+### 9.4 Disk: the commands (N4 A + B; the developer runs them)
+
+**A. Cleanup** (measured 2026-10-17). First copy the snapshots off the box
+- they are raw data - and compare the hashes, from the Mac:
+
+```sh
+mkdir -p ~/wifi-audit-snapshots
+scp 'google:~/wifi-audit/server/buffer-snapshot*.db' ~/wifi-audit-snapshots/      # 4 files, 1.72 GB
+ssh google 'cd ~/wifi-audit/server && sha256sum buffer-snapshot*.db'
+cd ~/wifi-audit-snapshots && shasum -a 256 buffer-snapshot*.db                      # the same four hashes
+```
+
+Then on the box (`cd ~/wifi-audit/server`):
+
+| Command | Frees (expected) | Removes |
+|---|---|---|
+| `rm buffer-snapshot-20261010.db buffer-snapshot-20261012.db buffer-snapshot-20261013.db` | 1.29 GB | the three older snapshots (copied); `buffer-snapshot.db` (10-14) stays until the first live upload is verified, then `rm buffer-snapshot.db` (+0.43 GB) |
+| `docker image prune` | ~0.5 GB | **dangling images only** (42 untagged layers of old api/frontend builds). Never a tagged image, never one a container uses, never a volume. The base images `python:3.13-slim`, `node:22-alpine`, `postgres:17` stay (no re-download at the next build) |
+| `docker builder prune -a` | 178 MB | the build cache only (the next api/frontend build takes longer). Never images, containers or volumes |
+| check: `docker system df; df -h /` | | `Local Volumes` must stay 1.59 GB (the database volume) |
+
+Optional, system-level (your call): `sudo journalctl --vacuum-size=100M`
+(311 MB of journals -> ~0.2 GB freed); the disabled snap revisions (~0.54
+GB): `sudo snap remove core22 --revision=2437`, `sudo snap remove core24
+--revision=1643`, `sudo snap remove google-cloud-cli --revision=509`, `sudo
+snap remove snapd --revision=27738`, and `sudo snap set system
+refresh.retain=2`. **Never** `docker system prune --volumes` or `docker
+volume prune` (the database is the volume `wifi-audit_db-data`).
+
+Expected: ~2.0 GB (snapshots + docker), ~2.7 GB with the optional items,
++0.43 GB when the last snapshot goes.
+
+**B. Grow the disk to 30 GB** (online, no reboot).
+
+Check first - the free tier is one e2-micro in us-west1, us-central1 or
+us-east1 **and 30 GB-month of *standard* persistent disk per billing account
+in total** (every disk of the account counts; balanced and SSD disks are
+never free; snapshots beyond 5 GB-month are billed):
+
+1. Console -> Compute Engine -> VM instances: the box is `e2-micro` in
+   **us-central1-c** (read from the metadata server - eligible).
+2. Console -> Compute Engine -> Storage -> Disks: the boot disk (device
+   `instance-20250906-161250`; the disk usually has the same name) must show
+   **Type: Standard persistent disk**. If it is "Balanced", it is billed
+   already and 30 GB costs more - stop and decide. No other disks may exist in
+   the account (they count towards the 30 GB).
+3. Billing -> Reports: no unexpected Compute Engine charges so far.
+
+Steps:
+
+1. A fresh `./backup.sh` copied off the box (the database). Optional: a disk
+   snapshot (Disks -> the disk -> Create snapshot; ~17 GB used, billed beyond
+   5 GB - delete it a day later).
+2. Resize: Console -> Disks -> the disk -> Edit -> Size **30** -> Save, or in
+   Cloud Shell: `gcloud compute disks resize instance-20250906-161250
+   --zone=us-central1-c --size=30GB` (it asks to confirm; growing only).
+3. On the box (Ubuntu 24.04, ext4 root on `/dev/sda1`, the **last**
+   partition - checked: it ends at the disk's end, so it can grow):
+   `lsblk` (sda now 30G) -> `sudo growpart /dev/sda 1` -> `sudo resize2fs
+   /dev/sda1` -> `df -h /` (~29 G, ~12-13 GB free). Both are online
+   operations on a mounted ext4 root.
 
 ---
 
@@ -745,9 +824,21 @@ retries over the real network).
 | D14 | Replaced by the per-poll upload; catch-up 120 polls, 2 s pacing, tuned after measuring |
 | Amendments | 1 stall events (6.5); 2 TLS always verified + test; 3 disk measured before step 2 (9.3); 4 delete sensor revokes tokens (6.1) |
 
-### 13.2 New questions (N1–N10) – my defaults are built unless you say otherwise
+### 13.2 Questions N1–N10 – **all accepted 2026-10-17** as proposed, with these notes
 
-| # | Question | Default |
+- N4: the developer copies the buffer snapshots off the box before anything
+  is deleted (they are raw data); cleanup only of unused images and build
+  cache, never volumes - exact commands in 9.4.
+- N7: unverified polls stay on the Pi, but are **counted** (heartbeat,
+  `sensor_seq_gaps` reason `unverified`, the Sensors page) so the thesis can
+  report the loss.
+- N8: after the step-2 deploy, measure CPU use and CPU throttling of the
+  e2-micro, not only the refresh duration; if an incremental refresh takes
+  minutes, make steps 4–8 of `refresh_rollups()` incremental (6.4) rather
+  than tune the interval.
+- N3: the checklist is `wifi-sensor/docs/clock-validation.md`.
+
+| # | Question | Decision |
 |---|---|---|
 | N1 | Token format `wsi1.<id>.<secret>` with a public id, so a wrong secret can be attributed to its sensor (needed for the `upload_unauthorized` event); the id reveals only which token row is meant | yes |
 | N2 | AP load of unsynchronised polls: a pending table on the Pi, folded with the true hour at the anchor (exact), instead of "not recorded" for such stretches | pending + fold |
@@ -759,6 +850,12 @@ retries over the real network).
 | N8 | Refresher default interval 60 s with the 4× duty-cycle cap; the measured incremental cost at the step-2 deploy decides whether 1 min is real | yes |
 | N9 | `devices.config_changed_at` merge: a NULL from a newer row keeps the stored value (today it overwrites with NULL); applies to the importer too | yes |
 | N10 | The recovery snapshot import also leaves the **client devices** (and their frequency histograms) on the Pi unless `--with-client-tables` - they only serve the client tables; matches what the live ingest accepts. `ops/delete_client_rows.sh --client-devices` could remove the 221 k existing client device rows (~140 MB with `--vacuum-full`) | yes (built in step 1) |
+
+### 13.3 Open (2026-10-17)
+
+| # | Question | Recommendation |
+|---|---|---|
+| N11 | **Save the clock on the Pi**: a timer (hourly + at shutdown) that sets the mtime of `/var/lib/systemd/timesync/clock` to now while chrony is synchronised (installed by `install_sensor.sh`; the clock-test arm flag pauses it). A boot without NTP then starts at most an hour + the downtime behind instead of weeks: TLS (Tailscale, the ingest server, so the server anchor) keeps working, and the correction has a small offset to fix. No package (fake-hwclock does the same through its own file). Changes no captured data; a dated `findings.md` section 7 row | yes, in step 3 |
 
 ---
 
@@ -823,7 +920,8 @@ api refresher`, Caddy reload, token; Pi steps 3–4: `install_collector.sh`,
 
 ## 16. Future improvements
 
-- **RTC module (DS3231 on I²C, `dtoverlay=i2c-rtc,ds3231`)**: the hardware
+- **N11 (save the clock, if not decided otherwise)**, then an **RTC module
+  (DS3231 on I²C, `dtoverlay=i2c-rtc,ds3231`)**: the hardware
   answer to the stale boot clock – boots start on true time ±2 ppm, the
   correction of 8.3 becomes a rarely used safety net (and a check).
 - Make `refresh_rollups()` steps 4–8 conditional on what arrived (the 1-min
