@@ -1925,7 +1925,7 @@ Apple, Samsung, Google, OnePlus, Motorola (no Xiaomi/Huawei).
 | Q4 | Kismet alerts: episodes per AP/header (1 h gap) with Kismet's severity, and all historical events start `open` (~150)? | yes; consider overriding BEACONRATE (64 × high) to low |
 | Q5 | AP detail RSSI: hourly instead of 2-hour medians? | yes (exact from the rollup) |
 | Q6 | "Seen by sensors (RSSI)" and friendly-network RSSI = median of the hourly medians in the period? | yes (raw medians would break the 48 h rule) |
-| Q7 | Sensor status before ingest: `online/offline` by the age of the last poll (always offline between imports), or `data until <time>` with online/offline only once ingest exists? | `data until <time>` until ingest |
+| Q7 | Sensor status before ingest: `online/offline` by the age of the last poll (always offline between imports), or `data until <time>` with online/offline only once ingest exists? | `data until <time>` until ingest - superseded by live upload (2026-10-17, `docs/live-upload.md` 8.5) |
 | Q8 | AP "Active": seen within 5 min of its sensor's last capturing poll? | yes |
 | Q9 | Presence classes of "Other networks": permanent = ≥ 90 % of capturing hours; daytime only = ≥ 80 % of its active hours 07–20 local on ≥ 2 days; transient = mobile, shown with the mean lifetime; else intermittent? | as written |
 | Q10 | Settings → Sensors before config delivery exists: store the desired configuration and show "not delivered – sensor upload not built yet", or hide the Send button? | store + explicit note |

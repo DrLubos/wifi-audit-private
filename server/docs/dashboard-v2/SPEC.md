@@ -205,7 +205,10 @@ change frequency, 1/5/9/13 vs 1/6/11 counts); utilization heatmap with views
 
 **Sensors `/sensors`**: until ingest exists the status reads `data until
 <time of the last imported poll>` instead of online/offline, which would show
-every sensor offline between imports (Q7). One card per sensor (status,
+every sensor offline between imports (Q7). *Superseded 2026-10-17 by live
+upload (`docs/live-upload.md` 8.5): a sensor that uploads shows its live
+state (online, catching up, clock unverified, not capturing, unreachable);
+`data until` stays for a sensor that never uploaded.* One card per sensor (status,
 hardware, last poll, last upload, coverage, capture crashes, buffer, APs seen and seen only by this
 sensor, current capture configuration, pending change) with a "Sensor
 settings" link to `/settings/sensors?sensor=<name>`. Coverage per day for 14

@@ -55,7 +55,14 @@ Conventions for the stack:
   observations, AP load, AP frequency histogram, alerts; never the client
   tables) to `/api/ingest/v1`; one merge for ingest and snapshot import
   (`ingest_merge()`); the snapshot import is a recovery tool from then on.
-  Rolled out in the order of its section 14.
+  Live since 2026-10-17 20:46:38 UTC (rollout record: its section 17):
+  schema 15 (`ap_config_changes` is a table maintained incrementally by
+  `refresh_config_changes()`; the rules live in the view
+  `ap_config_changes_v`), the `refresher` compose service (rollups once a
+  minute from the dirty mark, contact periods, nightly baselines), ingest
+  tokens via `ops/sensor_token.sh` only. The box serves HTTPS as
+  `34-42-184-97.sslip.io` (Let's Encrypt, HSTS) - the uploader depends on
+  that name, so the external IP must not change.
 - Later still: detection. For the demo, at most ONE illustrative, honest detection
   (unknown BSSID advertising a protected SSID, gated by an operator-approved
   known-good whitelist). Rigorous detection + ROC vs staged attacks is thesis work
