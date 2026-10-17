@@ -49,6 +49,7 @@
 
   /* status dots */
   --dot-ok: #0ca30c;
+  --dot-warn: #d98a00;
   --dot-bad: #d03b3b;
   --dot-neu: #8e9a98;
 

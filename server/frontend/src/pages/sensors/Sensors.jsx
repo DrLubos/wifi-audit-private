@@ -21,7 +21,8 @@ import { fmtDateTime } from "../../format.js";
 import CoverageChart from "./CoverageChart.jsx";
 import {
   adapterText, apsText, bufferText, configText, coverageColumns, coverageText, coverageTitle, crashText, footText,
-  headText, hopBadge, lastPollText, legendItems, localDate, outageRows, PLANS, restartText, sinceText, stateNote, uploadText,
+  headText, hopBadge, lastPollText, legendItems, liveText, localDate, outageRows, PLANS, restartText, sinceText, stateNote,
+  uploadText,
 } from "./sensors.js";
 import "./sensors.css";
 
@@ -72,10 +73,13 @@ function SensorCard({ s, account, now, n }) {
      "read-only; a hardware change entered in Settings is a data boundary: RSSI baselines start again from it"],
     ["Last poll", lastPollText(s, now, tz)],
     ["Last upload", uploadText(s.last_upload, now, tz)],
+    ...(s.contact ? [["Live upload", liveText(s, now),
+                      "the sensor's contact (immediate); clock: the server's view of the sensor's clock; "
+                      + "lost: polls pruned on the sensor before upload; time-unverified: polls of a boot that never got a clock anchor"]] : []),
     ["Coverage, last 7 days", coverageText(s), coverageTitle(s, tz)],
     ["Capture crashes, last 24 h", restarts ? `${crashText(s.crashes_24h)} · ${restarts}` : crashText(s.crashes_24h), ends],
     ["Buffer on the sensor", bufferText(s.last_upload),
-     s.last_upload ? `at the import of ${fmtDateTime(s.last_upload.at, tz)}` : undefined],
+     s.last_upload ? `at the ${s.last_upload.via === "ingest" ? "upload" : "import"} of ${fmtDateTime(s.last_upload.at, tz)}` : undefined],
     ["APs seen, last 7 days", apsText(s, n), ends],
     ["Capture configuration", configText(s.config), PLANS[s.config?.plan]?.label],
   ];

@@ -1,7 +1,8 @@
 // The texts of the Sensors page (boards/Sensors.dc.html) from
 // /api/v2/sensors, /sensors/{name}/coverage and /outages - pure, tested in
-// sensors.test.js. Until live ingest a sensor's data ends at its last import
-// (SPEC Q7): "between imports" is neither online nor offline.
+// sensors.test.js. A sensor that uploads live (s.contact, schema 14) has the
+// api's live status; one seen only through snapshot imports has data up to
+// its last import (SPEC Q7): "between imports" is neither online nor offline.
 
 import { sensorState } from "../../app/status.js";
 import { fmtAgo, fmtDate, fmtDateTime, fmtDay, fmtInt, fmtTime, partsOf, toDate } from "../../format.js";
@@ -30,8 +31,10 @@ export function headText(sensors, offlineMin, now, tz) {
   const online = st.filter((x) => x.tone === "ok").length;
   const offline = st.filter((x) => x.offline).length;
   const between = sensors.filter((s, i) => st[i].tone === "neu" && toDate(s.last_poll)).length;
+  const busy = st.filter((x) => x.tone === "warn").length;
   return [`${fmtInt(sensors.length)} ${sensors.length === 1 ? "sensor" : "sensors"} in the account`,
-          `${fmtInt(online)} online`, offline ? `${fmtInt(offline)} offline` : null,
+          `${fmtInt(online)} online`, busy ? `${fmtInt(busy)} catching up` : null,
+          offline ? `${fmtInt(offline)} offline` : null,
           between ? `${fmtInt(between)} between imports` : null].filter(Boolean).join(" · ");
 }
 
@@ -118,7 +121,7 @@ export function hopBadge(s) {
 // exists, Q10) or since when the configuration is in effect
 export function footText(s, tz) {
   if (s.pending) {
-    return { warn: true, text: `Pending change: ${configText(s.pending)} - not delivered, the sensor upload is not built yet` };
+    return { warn: true, text: `Pending change: ${configText(s.pending)} - not delivered, configuration delivery to the sensor is not built yet` };
   }
   if (s.config?.confirmed_at) return { warn: false, text: `Configuration in effect since ${fmtDateTime(s.config.confirmed_at, tz)}` };
   return { warn: false, text: "No configuration recorded" };
@@ -127,6 +130,7 @@ export function footText(s, tz) {
 // the box under the details: offline (the data ends in an outage) or
 // between imports
 export function stateNote(s, st, tz) {
+  if (st.live) return liveNote(s, st, tz);
   if (st.offline) {
     const since = s.outage_since ?? s.last_capture_at;
     return { bad: true, text: `Not collecting since ${since ? fmtDateTime(since, tz) : "its first poll"}. `
@@ -137,6 +141,40 @@ export function stateNote(s, st, tz) {
       + "live upload from the sensor is not built yet, so it reads neither online nor offline." };
   }
   return null;
+}
+
+// the note of a live sensor (docs/live-upload.md 8.1, 8.2): no contact, not
+// capturing, catching up, polls waiting for the clock
+function liveNote(s, st, tz) {
+  const c = s.contact;
+  switch (s.status) {
+    case "unreachable":
+      return { bad: true, text: `No contact since ${fmtDateTime(c.last_contact_at, tz)}. The sensor keeps its data `
+        + "(14 days) and uploads it, oldest first, when contact returns - an upload gap is late data, not a gap in the data." };
+    case "not_capturing": {
+      const since = s.outage_since ?? s.last_capture_at;
+      return { bad: true, text: `In contact, but not collecting since ${since ? fmtDateTime(since, tz) : "its first poll"}. `
+        + "Check the capture adapter." };
+    }
+    case "catching_up":
+      return { bad: false, text: `Uploading the backlog: ${fmtInt(c.backlog_polls ?? 0)} polls`
+        + `${c.backlog_oldest ? ` since ${fmtDateTime(c.backlog_oldest, tz)}` : ""}, oldest first.` };
+    case "clock_unverified":
+      return { bad: false, text: `${fmtInt(c.held_polls ?? 0)} polls wait for the sensor's clock: it booted without NTP; `
+        + "they are uploaded on their true time once the clock is anchored." };
+    default:
+      return null;
+  }
+}
+
+// "12 s ago · clock +0.2 s · 0 polls lost · 0 time-unverified"; null without live upload
+export function liveText(s, now) {
+  const c = s.contact;
+  if (!c) return null;
+  const m = c.missing_polls ?? { lost: 0, unverified: 0 };
+  const off = c.clock_offset_s == null ? null : `clock ${c.clock_offset_s >= 0 ? "+" : ""}${c.clock_offset_s} s`;
+  return [`last contact ${fmtAgo(c.last_contact_at, now)}`, off, `${fmtInt(m.lost)} polls lost`,
+          `${fmtInt(m.unverified)} time-unverified`].filter(Boolean).join(" · ");
 }
 
 // the capture adapter (read-only, schema 13) and the last hardware change entered by hand:

@@ -46,6 +46,7 @@ body {
 .dot.d-ok { background: var(--dot-ok); }
 .dot.d-bad { background: var(--dot-bad); }
 .dot.d-neu { background: var(--dot-neu); }
+.dot.d-warn { background: var(--dot-warn); }
 
 .main { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; }
 /* The page column: at most --page-max wide, centred, 32 px gutters below the cap

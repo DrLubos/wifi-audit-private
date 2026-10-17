@@ -1,8 +1,9 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
   adapterText, apsText, bufferText, configText, coverageColumns, coverageText, crashText, dayNotes, durText, footText, headText,
-  hopBadge, lastPollText, legendItems, localDate, outageRows, restartText, sinceText, stateNote, uploadText,
+  hopBadge, lastPollText, legendItems, liveText, localDate, outageRows, restartText, sinceText, stateNote, uploadText,
 } from "./sensors.js";
+import { sensorState } from "../../app/status.js";
 
 const TZ = "Europe/Bratislava";
 const NOW = Date.parse("2026-10-12T16:20:00Z");
@@ -53,7 +54,7 @@ test("the card", () => {
   eq(hopBadge({ hop: { n: 90, visited: 45, ok: true } }).cls, "warn");
   eq(footText(FRI, TZ), { warn: false, text: "Configuration in effect since 27 Sep 15:04" });
   eq(footText({ ...FRI, pending: { plan: "all_89", n_channels: 89, dwell_s: 0.2, poll_s: 60 } }, TZ).text,
-     "Pending change: 89 channels · 0.2 s dwell · poll 60 s - not delivered, the sensor upload is not built yet");
+     "Pending change: 89 channels · 0.2 s dwell · poll 60 s - not delivered, configuration delivery to the sensor is not built yet");
   eq(sinceText(FRI, TZ), "since 15 Sep 2026");
   const ad = { name: "RTL8821CU USB adapter", usb_id: "0bda:c811" };
   eq(adapterText(ad, "2026-10-13T12:00:00Z", TZ), "RTL8821CU USB adapter · 0bda:c811 · last hardware change 13 Oct 14:00");
@@ -65,6 +66,25 @@ test("the card", () => {
   eq(stateNote({ ...FRI, outage_since: "2026-10-06T19:33:15Z" }, { offline: true }, TZ).text.slice(0, 40),
      "Not collecting since 6 Oct 21:33. Check ");
   eq(stateNote(FRI, { tone: "ok" }, TZ), null);
+});
+
+// live upload (schema 14)
+const LIVE = { ...FRI, status: "online", last_poll: "2026-10-12T16:19:50Z", last_capture_at: "2026-10-12T16:19:50Z",
+  contact: { last_contact_at: "2026-10-12T16:19:52Z", last_batch_at: "2026-10-12T16:19:52Z", backlog_polls: 0,
+             held_polls: 0, backlog_oldest: null, clock_offset_s: 0.2, unverified_now: 0,
+             missing_polls: { lost: 0, unverified: 0 }, refresh_pending_since: null } };
+
+test("live upload", () => {
+  eq(liveText(LIVE, NOW), "last contact 8 s ago · clock +0.2 s · 0 polls lost · 0 time-unverified");
+  eq(liveText(FRI, NOW), null);
+  eq(stateNote(LIVE, sensorState(LIVE, 15, NOW, TZ), TZ), null);
+  const up = { ...LIVE, status: "catching_up",
+               contact: { ...LIVE.contact, backlog_polls: 9963, backlog_oldest: "2026-10-14T05:21:58Z" } };
+  eq(stateNote(up, sensorState(up, 15, NOW, TZ), TZ).text, "Uploading the backlog: 9,963 polls since 14 Oct 07:21, oldest first.");
+  const gone = { ...LIVE, status: "unreachable", contact: { ...LIVE.contact, last_contact_at: "2026-10-12T13:00:00Z" } };
+  const note = stateNote(gone, sensorState(gone, 15, NOW, TZ), TZ);
+  eq([note.bad, note.text.slice(0, 35)], [true, "No contact since 12 Oct 15:00. The "]);
+  eq(headText([LIVE, up], 15, NOW, TZ), "2 sensors in the account · 1 online · 1 catching up");
 });
 
 const OUTAGES = [

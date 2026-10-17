@@ -3,11 +3,15 @@
 
 import { fmtDateTime, fmtDuration, toDate } from "../format.js";
 
-// A sensor's state against now. Until live ingest the data ends at the last
-// import (SPEC Q7): a sensor that was collecting at its last poll reads
-// "data until <time>" once that poll is older than the offline threshold,
-// not "offline"; it is offline when its data itself ends in an outage.
+// A sensor's state against now. A sensor that uploads live (s.contact, schema
+// 14) has the api's status (docs/live-upload.md 8.2): online, catching_up,
+// clock_unverified, not_capturing, unreachable - "last seen" counts from the
+// last contact. One seen only through snapshot imports has data up to its
+// last import (SPEC Q7): it reads "data until <time>" once that poll is older
+// than the offline threshold, not "offline"; it is offline when its data
+// itself ends in an outage.
 export function sensorState(s, offlineMin, now, tz) {
+  if (s.contact) return liveState(s, now);
   const lastPoll = toDate(s.last_poll);
   if (!lastPoll) return { tone: "neu", dot: "d-neu", short: "no data", badge: "No data" };
   const lastCap = toDate(s.last_capture_at);
@@ -26,6 +30,35 @@ export function sensorState(s, offlineMin, now, tz) {
     return { tone: "neu", dot: "d-neu", short: `data until ${until}`, badge: `Data until ${until}` };
   }
   return { tone: "ok", dot: "d-ok", short: "online", badge: "Online" };
+}
+
+function liveState(s, now) {
+  const nowMs = toDate(now).getTime();
+  const ago = (t) => (toDate(t) ? fmtDuration(Math.max(0, nowMs - toDate(t).getTime()) / 1000) : null);
+  const c = s.contact;
+  switch (s.status) {
+    case "unreachable": {
+      const since = ago(c.last_contact_at);
+      return { tone: "bad", dot: "d-bad", offline: true, live: true, since: c.last_contact_at,
+               short: since ? `unreachable ${since}` : "unreachable",
+               badge: since ? `Unreachable · last seen ${since} ago` : "Unreachable" };
+    }
+    case "not_capturing": {
+      const since = ago(s.last_capture_at);
+      return { tone: "bad", dot: "d-bad", offline: true, live: true, since: s.last_capture_at,
+               short: since ? `not capturing ${since}` : "not capturing",
+               badge: since ? `Not capturing ${since}` : "Not capturing" };
+    }
+    case "clock_unverified":
+      return { tone: "warn", dot: "d-warn", live: true, short: "clock unverified", badge: "Clock unverified" };
+    case "catching_up": {
+      const n = c.backlog_polls ?? 0;
+      return { tone: "warn", dot: "d-warn", live: true, short: `catching up · ${n} polls`,
+               badge: `Catching up · ${n} polls` };
+    }
+    default:
+      return { tone: "ok", dot: "d-ok", live: true, short: "online", badge: "Online" };
+  }
 }
 
 export const SEVERITY = {
