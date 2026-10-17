@@ -24,6 +24,13 @@
 #   DATA_DIR      SQLite buffer directory.              Default: /var/lib/wifi-sensor
 #   SENSOR_CONF   Config file path. Default: <script dir>/sensor.conf
 #
+# Buffer v8 (live upload, server/docs/live-upload.md 4.1, 8.3) and N11: also
+# installs sensor/clock-save.sh with wifi-sensor-clock-save.timer (hourly) and
+# wifi-sensor-clock-save-shutdown.service - the next boot's starting clock is
+# kept current while chrony is synchronised (the Pi has no RTC; findings.md
+# section 13). They touch nothing but /var/lib/systemd/timesync/clock and
+# never restart the collector.
+#
 # The runtime configuration of the collector itself lives in
 # /etc/wifi-sensor/collector.conf (created from collector/collector.conf.example
 # on first run, never overwritten afterwards).
@@ -106,6 +113,7 @@ check_prerequisites() {
   [[ -d $SRC_DIR && -f $SRC_DIR/collector.py ]] || die "collector sources not found in $SRC_DIR"
   [[ -d $ANALYSIS_SRC_DIR ]] || die "analysis scripts not found in $ANALYSIS_SRC_DIR"
   [[ -f $UNIT_TEMPLATE ]] || die "unit template not found: $UNIT_TEMPLATE"
+  [[ -f $SCRIPT_DIR/sensor/clock-save.sh ]] || die "sensor/clock-save.sh not found"
   [[ -f /etc/systemd/system/kismet.service || -f /lib/systemd/system/kismet.service \
      || -f /usr/lib/systemd/system/kismet.service ]] \
     || die "kismet.service not installed - run install_sensor.sh first"
@@ -168,6 +176,24 @@ install_config() {
   fi
   install -d -m 0750 -o "$SENSOR_USER" -g kismet "$DATA_DIR"
   log "buffer directory: $DATA_DIR (owner $SENSOR_USER:kismet)"
+}
+
+install_clock_save() {
+  step "N11: clock-save timer and shutdown unit"
+  # Not part of the collector: a change here must not restart it.
+  local changed_before=$CHANGED u rendered
+  install -d -m 0755 -o root -g root "$INSTALL_DIR/sensor"
+  write_if_changed "$INSTALL_DIR/sensor/clock-save.sh" 0755 root:root <"$SCRIPT_DIR/sensor/clock-save.sh"
+  for u in wifi-sensor-clock-save.service wifi-sensor-clock-save.timer wifi-sensor-clock-save-shutdown.service; do
+    rendered=$(sed -e "s|__INSTALL_DIR__|$INSTALL_DIR|g" "$SCRIPT_DIR/systemd/$u")
+    write_if_changed "/etc/systemd/system/$u" 0644 root:root <<<"$rendered"
+  done
+  systemctl daemon-reload
+  systemctl enable --now wifi-sensor-clock-save.timer wifi-sensor-clock-save-shutdown.service
+  systemctl start wifi-sensor-clock-save.service || warn "clock-save failed once - see journalctl -u wifi-sensor-clock-save"
+  journalctl -u wifi-sensor-clock-save -n 1 --no-pager -o cat || true
+  log "boot clock file: $(stat -c '%y' /var/lib/systemd/timesync/clock 2>/dev/null || echo missing)"
+  CHANGED=$changed_before
 }
 
 install_service() {
@@ -249,6 +275,7 @@ main() {
   install_analysis
   install_config
   install_service
+  install_clock_save
   verify
 }
 

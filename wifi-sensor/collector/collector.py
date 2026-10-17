@@ -3,7 +3,10 @@
 
 Polls the local Kismet REST API every POLL_INTERVAL seconds, reduces each
 active device to a compact record and appends it to a local SQLite buffer.
-No detection, no upload (the upload step comes later and reads the buffer).
+No detection, no upload (the separate uploader reads the buffer, read-only).
+Buffer v8: every poll records the clock data the uploader needs to correct
+its time when the Pi booted without NTP (clock.py; server/docs/live-upload.md
+8.3) - capture never waits for the clock.
 
 Configuration - environment variables, optionally loaded from a KEY=value file
 (COLLECTOR_CONF, default /etc/wifi-sensor/collector.conf; the systemd unit
@@ -37,6 +40,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import clock  # noqa: E402
 from hop_coverage import SiteConf, hop_health  # noqa: E402
 from kismet_client import KismetClient, KismetError  # noqa: E402
 from shape import DEVICE_FIELDS, shape_alert, shape_device  # noqa: E402
@@ -128,10 +132,19 @@ def datasource_health(sources):
     return running, error, packets
 
 
-def poll_once(client, store, cfg, since, site=None):
+def read_clock(boot):
+    """The clock data of a poll (buffer v8): wall and monotonic time read back
+    to back, the boot, chrony's state."""
+    wall, mono = clock.now()
+    synced, offset = clock.chrony_state()
+    return {"boot_id": boot, "wall": wall, "mono": mono, "synced": synced, "chrony_offset": offset}
+
+
+def poll_once(client, store, cfg, since, site=None, clk=None):
     """Run one poll. Returns the Kismet timestamp to resume from next time.
-    SITE (hop_coverage.SiteConf) supplies the configured hop list."""
-    ts = int(time.time())
+    SITE (hop_coverage.SiteConf) supplies the configured hop list; CLK
+    (read_clock()) the clock data stored with the poll (None: v7 behaviour)."""
+    ts = int(clk["wall"]) if clk else int(time.time())
     t0 = time.monotonic()
     try:
         status = client.status()
@@ -142,7 +155,7 @@ def poll_once(client, store, cfg, since, site=None):
         raw_alerts = client.alerts_since(query_from)
     except KismetError as e:
         ms = int((time.monotonic() - t0) * 1000)
-        store.write_failed_poll(ts, str(e), ms)
+        store.write_failed_poll(ts, str(e), ms, clock=clk)
         log.warning("poll failed after %d ms: %s", ms, e)
         return since
 
@@ -170,11 +183,12 @@ def poll_once(client, store, cfg, since, site=None):
         "ds_hop_ok": hop_ok,
     }
     ms = int((time.monotonic() - t0) * 1000)
-    new_obs, new_alerts = store.write_poll(ts, health, records, alerts, ms)
-    log.info("poll ok: total=%s active=%d skipped=%d new_obs=%d alerts=%d/%d ds=%s hop=%s/%s%s %dms",
+    new_obs, new_alerts = store.write_poll(ts, health, records, alerts, ms, clock=clk)
+    log.info("poll ok: total=%s active=%d skipped=%d new_obs=%d alerts=%d/%d ds=%s hop=%s/%s%s %dms%s",
              health["devices_total"], len(records), skipped, new_obs, new_alerts, len(alerts),
              "up" if ds_running else ("DOWN " + (ds_error or "")), hop_visited, hop_n,
-             "" if hop_ok is None else (" ok" if hop_ok else " DEGRADED"), ms)
+             "" if hop_ok is None else (" ok" if hop_ok else " DEGRADED"), ms,
+             "" if clk is None or clk["synced"] else " clock=unsynced")
     if abs(kismet_ts - ts) > 5:
         log.warning("clock skew: kismet=%d collector=%d", kismet_ts, ts)
     return kismet_ts
@@ -197,7 +211,10 @@ def main(argv):
                         format="%(levelname)s %(message)s", stream=sys.stdout)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-    store = Store(cfg["DB_PATH"])
+    boot = clock.boot_id()
+    store = Store(cfg["DB_PATH"], boot_id=boot)
+    if store.boot_started(boot):
+        log.info("new boot %s: the resume point of the previous boot is dropped", boot)
     site = SiteConf(cfg["KISMET_SITE_CONF"])
     client = KismetClient(cfg["KISMET_URL"], cfg["KISMET_USER"], cfg["KISMET_PASS"],
                           timeout=cfg["HTTP_TIMEOUT"])
@@ -212,11 +229,13 @@ def main(argv):
     try:
         while True:
             started = time.monotonic()
-            since = poll_once(client, store, cfg, since, site)
+            clk = read_clock(boot)
+            since = poll_once(client, store, cfg, since, site, clk)
             if once:
                 log.info("counts: %s", store.counts())
                 break
-            if started - last_prune >= PRUNE_EVERY:
+            # an unsynchronised clock gives a wrong cutoff: prune only on a synchronised one
+            if started - last_prune >= PRUNE_EVERY and clk["synced"]:
                 cutoff = int(time.time()) - cfg["RETENTION_DAYS"] * 86400
                 removed = store.prune(cutoff)
                 if any(removed.values()):

@@ -85,11 +85,14 @@ with `ok = 0` and the loop continues; the service is never taken down by it.
 | `probes` | client × SSID | first/last time the SSID was probed for (`""` = wildcard) |
 | `ap_load_hourly` | AP × UTC hour × advertised channel | (v7) polls with a new observation, max/sum of Kismet's client count, and for polls whose beacon carried a BSS Load element max/sum of the AP-reported station count and channel utilisation |
 | `alerts` | Kismet alert | header, class, severity, MACs, channel, text, full JSON; deduplicated by Kismet's hash |
-| `meta` | key | schema version, resume point |
+| `clock_anchors` | boot | (v8) wall and monotonic time of the boot's first poll with a synchronised clock |
+| `ap_load_pending` | AP × unsynchronised poll | (v8) the AP load of a poll whose clock was not synchronised, until the boot's anchor gives its true hour |
+| `meta` | key | schema version, resume point (`last_kismet_ts`, per boot: `last_boot_id`), `buffer_id` (v8) |
 
 Cumulative counters are stored as Kismet reports them; deltas are derived when
 the data is analysed, which keeps the collector free of state and robust to
-missed polls. `sent` columns exist for the later upload step.
+missed polls. The `sent` columns are unused: the uploader keeps its own cursor
+and opens the buffer read-only.
 
 Schema v7 records the AP load history again (`docs/findings.md` section 7 for
 the effective time): `ap_load_hourly` has one row per AP, UTC hour and
@@ -108,6 +111,38 @@ instead, in `ap_load_hourly` and in `devices.cur_qbss_stations` /
 `cur_util_pct` alike. About 1.9 k rows a day (~70 active APs per hour), pruned
 with the time series. Migration: the table only, metadata; to roll the code
 back set `meta.schema_version` to `6`.
+
+Schema v8 (live upload, `server/docs/live-upload.md` 4.1 and 8.3) records what
+the uploader needs to put a poll on the true time line when the Pi booted
+without NTP - the Pi has no RTC and no fake-hwclock, so such a boot runs on a
+date weeks in the past (`docs/findings.md` section 13); capture never waits
+for the clock:
+
+- `polls.mono` (CLOCK_MONOTONIC read next to the wall clock), `polls.boot_id`,
+  `polls.clock_synced` (chrony leap status Normal and |offset| < 0.5 s, from
+  `chronyc -c tracking`, `clock.py`), `polls.chrony_offset`;
+- `clock_anchors`: per boot, the wall and monotonic time of its first
+  synchronised poll - the true time of any poll of the boot is
+  `wall - mono + polls.mono`;
+- `observations.poll_id`, `device_config_history.poll_id`, `alerts.poll_id`:
+  the poll row is written first in the poll's transaction, so every row is
+  placed with its poll, never by a (possibly stale) ts;
+- a "new observation" is decided per boot (`devices.boot_id`, `boot_last` =
+  Kismet's `last_time` of the device in that boot) and the resume point is
+  dropped when the boot changes (`meta.last_boot_id`): on a stale clock the
+  v7 rules compared with an earlier boot's true times and recorded nothing;
+- the AP load of an unsynchronised poll waits in `ap_load_pending` and goes
+  into `ap_load_hourly` on its true hour when the boot's anchor is recorded;
+- `prune()` judges unsynchronised polls by their true time (anchored boot) or
+  append order (a boot that never got an anchor: gone once the first
+  synchronised poll after it is older than the retention), and the collector
+  prunes only while its clock is synchronised;
+- `meta.buffer_id`: a UUID written once (row ids restart with a new buffer).
+
+With a synchronised clock - every boot so far - the data written is the same
+as v7's. Migration: ALTER TABLE ADD COLUMN and the two new tables, metadata
+only; the devices seen so far count as seen in the boot the migration runs in.
+To roll the code back set `meta.schema_version` to `7`.
 
 Schema v6 slims the observation row (`docs/findings.md` section 7 for the
 effective time). It keeps what the server's detectors and dashboard read -

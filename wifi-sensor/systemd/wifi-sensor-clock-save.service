@@ -1,0 +1,19 @@
+# wifi-sensor-clock-save.service - template (repo: systemd/) installed by
+# install_collector.sh, which replaces __INSTALL_DIR__. Run hourly by
+# wifi-sensor-clock-save.timer (live upload N11): the next boot's starting
+# clock = now, while chrony is synchronised (sensor/clock-save.sh).
+[Unit]
+Description=Wi-Fi sensor: save the clock as the next boot's starting time (N11)
+After=chrony.service
+
+[Service]
+Type=oneshot
+ExecStart=__INSTALL_DIR__/sensor/clock-save.sh
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/systemd
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

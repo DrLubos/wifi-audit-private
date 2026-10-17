@@ -1,0 +1,10 @@
+# wifi-sensor-clock-save.timer - installed by install_collector.sh (live upload N11).
+[Unit]
+Description=Wi-Fi sensor: save the clock hourly as the next boot's starting time
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target

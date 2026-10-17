@@ -442,7 +442,7 @@ class StoreTest(unittest.TestCase):
         db.close()
         store = Store(path)
         try:
-            self.assertEqual(store.get_meta("schema_version"), "7")
+            self.assertEqual(store.get_meta("schema_version"), "8")      # v6 -> v7 -> v8
             self.assertEqual(store.db.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 1)
             self.assertEqual(store.db.execute("SELECT COUNT(*) FROM ap_load_hourly").fetchone()[0], 0)
             raw = dict(AP_RAW)

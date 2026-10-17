@@ -1,0 +1,16 @@
+# wifi-sensor-clock-save-shutdown.service - template (repo: systemd/) installed
+# by install_collector.sh, which replaces __INSTALL_DIR__ (live upload N11).
+# Saves the clock once more when the system shuts down: ordered after chrony,
+# so at shutdown it stops - and runs ExecStop - while chrony still answers.
+[Unit]
+Description=Wi-Fi sensor: save the clock at shutdown as the next boot's starting time (N11)
+After=chrony.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=__INSTALL_DIR__/sensor/clock-save.sh
+
+[Install]
+WantedBy=multi-user.target
