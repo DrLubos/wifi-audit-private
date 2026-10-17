@@ -15,7 +15,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=__SENSOR_USER__
-Group=kismet
+# the sensor user's own group: the token file is root:<sensor user> 0640, and
+# with Group=kismet systemd would not give the process that group (only the
+# groups the user is listed in); the buffer is readable as its owner anyway
+Group=__SENSOR_USER__
 EnvironmentFile=-/etc/wifi-sensor/uploader.conf
 ExecStart=/usr/bin/python3 __INSTALL_DIR__/uploader/uploader.py
 Restart=always

@@ -100,12 +100,13 @@ def load_config(env=None):
     cfg.update({k: v for k, v in env.items() if k in DEFAULTS})
     for k in NUMERIC:
         cfg[k] = float(cfg[k])
+    cfg["TOKEN_ERROR"] = None
     if not cfg["INGEST_TOKEN"]:
         try:
             with open(cfg["INGEST_TOKEN_FILE"]) as f:
                 cfg["INGEST_TOKEN"] = f.read().strip()
-        except OSError:
-            pass
+        except OSError as e:
+            cfg["TOKEN_ERROR"] = "%s: %s" % (cfg["INGEST_TOKEN_FILE"], e.strerror)
     return cfg
 
 
@@ -383,7 +384,8 @@ def main(argv):
     logging.basicConfig(level=getattr(logging, cfg["LOG_LEVEL"].upper(), logging.INFO),
                         format="%(levelname)s %(message)s", stream=sys.stdout)
     if not cfg["INGEST_URL"] or not cfg["INGEST_TOKEN"]:
-        log.error("INGEST_URL and the token (INGEST_TOKEN_FILE) must be set")
+        log.error("INGEST_URL and the token (INGEST_TOKEN_FILE) must be set%s",
+                  " - cannot read the token file (%s)" % cfg["TOKEN_ERROR"] if cfg["TOKEN_ERROR"] else "")
         return 2
     try:
         client = Client(cfg["INGEST_URL"], cfg["INGEST_TOKEN"], timeout=cfg["HTTP_TIMEOUT"])
