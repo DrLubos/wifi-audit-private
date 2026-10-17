@@ -40,11 +40,19 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   guessed in advance. Let the sensor run and collect before building anything more.
 - **Out of scope until the contribution is chosen:** anomaly/threat detection,
   self-learning baselines. Do not build these unless explicitly asked.
-- **Live upload (approved 2026-10-17, being rolled out):
-  `../server/docs/live-upload.md`** - collector buffer v8 (clock correction
+- **Live upload (approved 2026-10-17, live since 2026-10-17 20:46:38 UTC;
+  rollout record in its section 17): `../server/docs/live-upload.md`** -
+  collector buffer v8 (clock correction
   data: monotonic time, boot id, clock-synced flag, one anchor per boot; N11
   saves the boot clock) and a separate uploader daemon that reads the buffer
-  read-only and sends each poll to the server.
+  read-only and sends each poll to the server (`uploader/`, installed by
+  `install_uploader.sh` to `/opt/wifi-sensor/uploader`, config
+  `/etc/wifi-sensor/uploader.conf`, token `/etc/wifi-sensor/ingest.token`,
+  unit `wifi-sensor-uploader.service`; tests `python3 -m unittest discover -s
+  uploader/tests`; `INGEST_URL` is `https://34-42-184-97.sslip.io/api/ingest/v1`, TLS
+  always verified). It never writes the buffer; its own state (cursor,
+  counters, server anchors) is a JSON file, and a lost one restarts from the
+  server's last poll.
 - **Never** in the deployed sensor: active attacks, deauth, handshake capture,
   password cracking, GPS, or a Flask web UI. This sensor is passive-only.
 
