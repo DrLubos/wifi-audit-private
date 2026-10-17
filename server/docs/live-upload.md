@@ -1,9 +1,8 @@
 # Live upload from the sensor – design
 
-Status: **approved 2026-10-17 with changes (folded in below); being built in
-the order of section 14, each step its own commit, stopped before each
-deploy.** Decisions D1–D14 and N1–N10 are recorded in section 13 as decided;
-N11 (13.2) is open.
+Status: **live since 2026-10-17 20:46:38 UTC** (steps 1-5 deployed, step 6
+docs; the rollout record is section 17). Decisions D1-D14, N1-N11 are in
+section 13.
 Replaces `dashboard-v2/PLAN.md` section 11.1 for the upload; config delivery
 stays deferred (D9).
 
@@ -855,7 +854,7 @@ retries over the real network).
 
 | # | Question | Recommendation |
 |---|---|---|
-| N11 | **Save the clock on the Pi**: a timer (hourly + at shutdown) that sets the mtime of `/var/lib/systemd/timesync/clock` to now while chrony is synchronised (installed by `install_sensor.sh`; the clock-test arm flag pauses it). A boot without NTP then starts at most an hour + the downtime behind instead of weeks: TLS (Tailscale, the ingest server, so the server anchor) keeps working, and the correction has a small offset to fix. No package (fake-hwclock does the same through its own file). Changes no captured data; a dated `findings.md` section 7 row | yes, in step 3 |
+| N11 (accepted with N1-N10, built in step 3) | **Save the clock on the Pi**: a timer (hourly + at shutdown) that sets the mtime of `/var/lib/systemd/timesync/clock` to now while chrony is synchronised (installed by `install_sensor.sh`; the clock-test arm flag pauses it). A boot without NTP then starts at most an hour + the downtime behind instead of weeks: TLS (Tailscale, the ingest server, so the server anchor) keeps working, and the correction has a small offset to fix. No package (fake-hwclock does the same through its own file). Changes no captured data; a dated `findings.md` section 7 row | yes, in step 3 |
 
 ---
 
@@ -962,3 +961,61 @@ Recorded at their stops (Pi steps 3–4: `install_collector.sh`,
   chart lag).
 - Config delivery (D9), pseudonymised alert MACs (`PLAN.md` 11.5), raw
   retention / partitioning (9.3 C, D), live push to the browser (PLAN 11.3).
+
+---
+
+## 17. Rollout record (2026-10-17)
+
+Run by Claude in the rollout mode of 2026-10-17 (`CLAUDE.md`), the Pi's two
+sudo steps by the developer. Times UTC.
+
+| Time | Step | Result |
+|---|---|---|
+| 16:41 | backup before step 1 (developer, copied off the box) | `wifi_audit-20261017T164104Z.dump` |
+| 18:12 | **step 1**: `ops/migrate_schema14.sh` | schema 14; all 10 fixture tests PASS (incl. `ingest_merge`, `contact_periods`); `check_schema14.sql` as claude_ro |
+| 18:13 | **step 2**: api + refresher + Caddy body limit | smoke 127/127 incl. the ingest refusals (401 no / malformed / unknown token, 413 for 3 MB) |
+| 18:19-18:27 | N8 measurement: incremental `refresh_rollups()` | 68 s (during the smoke runs), 82 s (instrumented), then 13.9 / 16.6 / 15.5 s quiet - over the ~15 s rule and ~23 % of a core at one a minute -> schema 15 |
+| 18:31 | backup before schema 15 | `wifi_audit-20261017T183120Z.dump`, sha256 equal on the box and the Mac |
+| 18:34-18:50 | rehearsal on a scratch copy (`ops/scratch_db.sh`) | caught a syntax error (fixed); 21 / 27 s showed two more full scans (new-AP hours, the timeline of every seen AP - both fixed); rollback rehearsed (back to the materialized view); then all tests PASS and **2.2 / 2.3 s**; timeline = full recompute |
+| 20:31 | **schema 15 live**: `ops/migrate_schema15.sh` | all tests PASS; 25,265 timeline rows copied; incremental refresh 26 s (cold) then **3.8 s**; live timeline = full recompute (0 / 0) |
+| 20:35 | **HTTPS** (the box served plain HTTP - `SITE_ADDRESS=:80` - found at step 4; the developer chose sslip.io) | `SITE_ADDRESS=34-42-184-97.sslip.io` (`.env` backed up as `.env.bak-20261017`), Let's Encrypt certificate, http -> https 308, HSTS; the Pi verifies it with Python 3.13's strict checks |
+| 20:39 | ingest token 1 | created by `ops/sensor_token.sh --stdout`, piped into the Pi user's home, never shown |
+| 20:41 | **step 3** (developer): `install_collector.sh` | buffer v8, first v8 poll 20:41:15 = the boot's NTP anchor; N11 timer; `findings.md` section 7 |
+| 20:42 | backup before the first real upload | `wifi_audit-20261017T204244Z.dump` |
+| 20:43 | `uploader.py --check` | heartbeat accepted; adapter identity filled by the sensor (`0bda:c811` + MAC, no boundary - D8); first batch 120 polls / 102 KB |
+| 20:44 / 20:46 | **step 4** (developer): `install_uploader.sh` | first start exited (unit `Group=kismet`: no access to the root:pi 0640 token) - fixed (`Group=` the sensor user), re-run; running from 20:46:38 |
+| 20:46:48-20:57:18 | **backlog replay** | 10,083 polls (2026-10-14 05:21:58 on) in 85 batches of 120, **10.5 min**; 2.2 s average merge per catch-up batch; 0 lost, 0 unverified, 0 replays |
+| 21:05 | **step 5**: frontend | the live states; 14/14 test files pass in the build |
+
+**First measurements** (section 11):
+
+- Upload latency, steady state: p50 3.3 s, p95 4.1 s, max 4.3 s (receive -
+  poll ts; the first live polls). A steady batch: 485 ms merge, 12 KB gzip.
+- Replay: 3.6 days of polls in 10.5 min (~16 polls/s, paced 2 s).
+- CPU (`vmstat`, e2-micro): ~13.5 % user during the replay, ~2 % in steady
+  state, steal 0 %.
+- Refresh: 2-4 s incremental on schema 15 (see the fix below for the
+  first live hour).
+
+**Found on the first live day and fixed:**
+
+- *Refresher never caught up:* it cleared the dirty mark only if no ingest
+  moved it during the round - with a batch every 30 s and rounds longer
+  than that, never; every round re-refreshed from 2026-10-14 23:42 (23-114
+  s). It now takes the mark atomically before the refresh.
+- *Clock offset* read -1.2 s with both clocks synced: the server subtracted
+  half the previous request's RTT (mostly merge time). Now receive - send
+  (offset + one-way latency), the uploader stamping right before the POST.
+- *Frequency histograms* went with every batch (~1,200 rows, ~3.5 M updates
+  a day): now at most once per UTC hour - **deployed to the Pi with the next
+  `sudo ./install_uploader.sh`** (the developer's).
+- *Nightly baselines* re-ran after every refresher restart (~4 min): the last
+  run's day now comes from `ap_baselines.computed_at`.
+
+**Open (the developer's):** whether the external IP `34.42.184.97` is static
+(Console -> VPC network -> IP addresses; promote it if ephemeral - the
+sslip.io name and the uploader depend on it); the clock-validation runs
+(`wifi-sensor/docs/clock-validation.md`; their helper scripts
+`clock-test.sh`, `clock_validation.py`, `clock_truth.py` are still to be
+written); deleting client rows (`ops/delete_client_rows.sh`, D4).
+
