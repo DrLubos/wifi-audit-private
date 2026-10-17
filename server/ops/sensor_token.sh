@@ -4,6 +4,11 @@
 #
 #   cd ~/wifi-audit/server
 #   sh ops/sensor_token.sh create <sensor> [label]   # prints the token ONCE
+#   sh ops/sensor_token.sh create <sensor> [label] --stdout   # only the token on stdout, for a pipe:
+#     ssh google 'cd ~/wifi-audit/server && sh ops/sensor_token.sh create pi-fri live --stdout' \
+#       | ssh pi 'umask 077 && cat > ~/.wifi-sensor-ingest-token'
+#     (then install_uploader.sh moves it to /etc/wifi-sensor/ingest.token; the
+#     token is never shown - if it ever is, revoke it and make a new one)
 #   sh ops/sensor_token.sh list
 #   sh ops/sensor_token.sh revoke <token id>
 #
@@ -21,12 +26,15 @@ cd "$(dirname "$0")/.."
 set -a; . ./.env; set +a
 psql_db() { docker compose exec -T db psql -X -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 "$@"; }
 
-usage() { echo "usage: sh ops/sensor_token.sh create <sensor> [label] | list | revoke <token id>" >&2; exit 2; }
+usage() { echo "usage: sh ops/sensor_token.sh create <sensor> [label] [--stdout] | list | revoke <token id>" >&2; exit 2; }
 
 case "${1:-}" in
   create)
     [ $# -ge 2 ] || usage
-    sensor=$2; label=${3:-}
+    sensor=$2; label=""; to_stdout=0
+    for a in "${3:-}" "${4:-}"; do
+      case "$a" in --stdout) to_stdout=1 ;; "") ;; *) label=$a ;; esac
+    done
     exists=$(psql_db -At -v sensor="$sensor" <<'SQL'
 SELECT count(*) FROM sensors WHERE name = :'sensor';
 SQL
@@ -40,11 +48,16 @@ SQL
 INSERT INTO sensor_tokens (id, sensor_id, token_hash, label)
 SELECT :id, s.id, decode(:'hash', 'hex'), nullif(:'label', '') FROM sensors s WHERE s.name = :'sensor';
 SQL
-    echo "token $id for sensor $sensor created. Shown once - store it now:"
-    echo
-    echo "  $token"
-    echo
-    echo "On the Pi: INGEST_TOKEN=$token in /etc/wifi-sensor/uploader.conf"
+    if [ "$to_stdout" = 1 ]; then
+      echo "token $id for sensor $sensor created (written to stdout only)" >&2
+      printf '%s\n' "$token"
+    else
+      echo "token $id for sensor $sensor created. Shown once - store it now:"
+      echo
+      echo "  $token"
+      echo
+      echo "On the Pi: in /etc/wifi-sensor/ingest.token (root:<sensor user> 0640)"
+    fi
     ;;
   list)
     psql_db <<'SQL'

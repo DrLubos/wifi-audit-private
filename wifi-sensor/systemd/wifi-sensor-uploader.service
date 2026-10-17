@@ -1,0 +1,38 @@
+# wifi-sensor-uploader.service - template (repo: systemd/) installed by
+# install_uploader.sh, which replaces __SENSOR_USER__ and __INSTALL_DIR__.
+#
+# Sends each poll of the collector's buffer to the server (live upload,
+# server/docs/live-upload.md). A separate process: capture never waits on the
+# network. Reads the buffer read-only (it needs the directory writable only
+# because a WAL reader writes the -shm file); its own cursor is in its
+# StateDirectory. Runs unprivileged as the sensor user.
+[Unit]
+Description=Wi-Fi sensor uploader (buffer -> server, one batch per poll)
+Documentation=file://__INSTALL_DIR__/uploader/README.md
+After=network-online.target wifi-sensor-collector.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__SENSOR_USER__
+Group=kismet
+EnvironmentFile=-/etc/wifi-sensor/uploader.conf
+ExecStart=/usr/bin/python3 __INSTALL_DIR__/uploader/uploader.py
+Restart=always
+RestartSec=30
+Nice=10
+MemoryMax=80M
+StateDirectory=wifi-sensor-uploader
+StateDirectoryMode=0750
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/wifi-sensor
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

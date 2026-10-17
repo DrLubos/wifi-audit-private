@@ -1,0 +1,20 @@
+# /etc/wifi-sensor/uploader.conf - the uploader's configuration (live upload).
+# Created by install_uploader.sh from this example, never overwritten.
+# The token is NOT here: it is in INGEST_TOKEN_FILE (root:<sensor user> 0640),
+# written by the token pipeline (server: ops/sensor_token.sh create ... --to-pi).
+
+# https://<server>/api/ingest/v1 - https only
+INGEST_URL=
+INGEST_TOKEN_FILE=/etc/wifi-sensor/ingest.token
+
+# the capture interface (the adapter identity in the heartbeat)
+CAPTURE_IFACE=wlan1
+
+# DB_PATH and RETENTION_DAYS are read from /etc/wifi-sensor/collector.conf
+#WATCH_S=2
+#HEARTBEAT_S=60
+#CATCHUP_POLLS=120
+#CATCHUP_PAUSE_S=2
+#MAX_BATCH_BYTES=1048576
+#BACKOFF_MAX_S=600
+#LOG_LEVEL=INFO
