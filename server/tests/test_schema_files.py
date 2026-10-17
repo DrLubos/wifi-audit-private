@@ -279,6 +279,8 @@ class Schema15(unittest.TestCase):
     def test_refresh_is_incremental(self):
         rr = function(SCHEMA, "refresh_rollups")
         self.assertIn("PERFORM refresh_config_changes(p_sensor_id, ARRAY(", rr)
+        self.assertIn("WHERE h.sensor_id = p_sensor_id AND h.ts >= v_from));", rr)   # APs with new history only
+        self.assertIn("o.device_key = ANY (v_new_keys)", rr)                          # new APs by key
         self.assertIn("WHERE o.sensor_id = p_sensor_id AND o.ts >= v_from", rr)       # one constant bound
         self.assertNotIn("o.ts >= a.since", rr)
         for name in ("refresh_rollups", "refresh_security_periods"):

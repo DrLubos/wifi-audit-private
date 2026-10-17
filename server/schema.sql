@@ -2069,6 +2069,8 @@ DECLARE
   v_sensor_hours integer;
   v_aps integer;
   v_account integer;
+  v_new_keys text[];         -- APs without any hour yet (schema 15)
+  v_n integer;
 BEGIN
   SELECT account_id INTO v_account FROM sensors WHERE id = p_sensor_id;
   IF v_account IS NULL THEN
@@ -2106,9 +2108,15 @@ BEGIN
                     WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key);
   v_sfrom := least(v_from, v_gone, v_new);
   -- APs with hours before v_from: their observations from v_from on (one
-  -- constant bound - the BRIN index on ts reads only the new rows; a per-AP
-  -- bound made the planner read every observation, 16 s, schema 15); APs
-  -- without: their whole history (new APs, few)
+  -- constant bound: index-only per AP from v_from; a per-AP bound made the
+  -- planner read every observation, 16 s, schema 15); APs without: their
+  -- whole history, looked up by key (new APs, few - an anti-join against all
+  -- observations cost 9 s even with none)
+  SELECT array_agg(d.device_key) INTO v_new_keys
+  FROM devices d
+  WHERE d.sensor_id = p_sensor_id AND d.ever_ap
+    AND NOT EXISTS (SELECT 1 FROM ap_rssi_hourly h
+                    WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key);
   INSERT INTO ap_rssi_hourly (sensor_id, device_key, hour, n_obs, n_valid, n_floor,
                               median, p10, p90, min, max)
   SELECT p_sensor_id, device_key, hour, n_obs, n_valid, n_floor, pct[1], pct[2], pct[3], lo, hi
@@ -2126,22 +2134,26 @@ BEGIN
                            WHERE d.sensor_id = p_sensor_id AND d.ever_ap
                              AND EXISTS (SELECT 1 FROM ap_rssi_hourly h
                                          WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key))
-    GROUP BY 1, 2
-    UNION ALL
-    SELECT o.device_key, date_trunc('hour', o.ts, 'UTC') AS hour,
-           count(*)::integer AS n_obs,
-           count(rssi_valid(o.rssi))::integer AS n_valid,
-           (count(*) FILTER (WHERE rssi_is_floor(o.rssi, o.rssi_floor)))::integer AS n_floor,
-           percentile_cont(ARRAY[0.5, 0.1, 0.9]) WITHIN GROUP (ORDER BY rssi_valid(o.rssi)) AS pct,
-           min(rssi_valid(o.rssi)) AS lo,
-           max(rssi_valid(o.rssi)) AS hi
-    FROM devices d
-    JOIN observations o ON o.sensor_id = d.sensor_id AND o.device_key = d.device_key
-    WHERE d.sensor_id = p_sensor_id AND d.ever_ap
-      AND NOT EXISTS (SELECT 1 FROM ap_rssi_hourly h
-                      WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key)
     GROUP BY 1, 2) s;
   GET DIAGNOSTICS v_ap_hours = ROW_COUNT;
+  IF v_new_keys IS NOT NULL THEN
+    INSERT INTO ap_rssi_hourly (sensor_id, device_key, hour, n_obs, n_valid, n_floor,
+                                median, p10, p90, min, max)
+    SELECT p_sensor_id, device_key, hour, n_obs, n_valid, n_floor, pct[1], pct[2], pct[3], lo, hi
+    FROM (
+      SELECT o.device_key, date_trunc('hour', o.ts, 'UTC') AS hour,
+             count(*)::integer AS n_obs,
+             count(rssi_valid(o.rssi))::integer AS n_valid,
+             (count(*) FILTER (WHERE rssi_is_floor(o.rssi, o.rssi_floor)))::integer AS n_floor,
+             percentile_cont(ARRAY[0.5, 0.1, 0.9]) WITHIN GROUP (ORDER BY rssi_valid(o.rssi)) AS pct,
+             min(rssi_valid(o.rssi)) AS lo,
+             max(rssi_valid(o.rssi)) AS hi
+      FROM observations o
+      WHERE o.sensor_id = p_sensor_id AND o.device_key = ANY (v_new_keys)
+      GROUP BY 1, 2) s;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    v_ap_hours := v_ap_hours + v_n;
+  END IF;
 
   -- 3. per sensor and hour (from v_sfrom: a re-classified device changed
   --    the AP counts of its hours before v_from too)
@@ -2201,20 +2213,18 @@ BEGIN
   LEFT JOIN al ON al.hour = hrs.hour;
   GET DIAGNOSTICS v_sensor_hours = ROW_COUNT;
 
-  -- 4. the configuration timeline of the APs whose timeline can have changed
-  --    since v_from: a history row or a sighting (devices.last_seen) from
-  --    then on - every new configuration arrives with a poll that sees the
-  --    AP; all of the sensor's APs on a full run (schema 15)
+  -- 4. the configuration timeline of the APs with a history row from v_from
+  --    on: a field once known stays known (the collector's field-wise merge),
+  --    so the timeline changes only with a known -> different known change,
+  --    which writes a history row in the same poll; all of the sensor's APs on
+  --    a full run (schema 15; the APs merely seen since v_from were the busy
+  --    ones - nearly every history row, 2.5 s a run)
   IF v_from = '-infinity' THEN
     PERFORM refresh_config_changes(p_sensor_id);
   ELSE
     PERFORM refresh_config_changes(p_sensor_id, ARRAY(
-      SELECT d.device_key FROM devices d
-      WHERE d.sensor_id = p_sensor_id AND d.ever_ap
-        AND (d.last_seen >= v_from
-             OR EXISTS (SELECT 1 FROM device_config_history h
-                        WHERE h.sensor_id = d.sensor_id AND h.device_key = d.device_key
-                          AND h.ts >= v_from))));
+      SELECT DISTINCT h.device_key FROM device_config_history h
+      WHERE h.sensor_id = p_sensor_id AND h.ts >= v_from));
   END IF;
 
   -- 5. one row per AP, rebuilt
