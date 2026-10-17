@@ -1014,6 +1014,14 @@ sudo steps by the developer. Times UTC.
   663 s (257 s in the step-2 measurement, uncontended), and the duty-cycle
   cap counted it, holding the next rollup round back 41 min: the cap now
   paces the rollups and contact periods only.
+- *Postgres crash-restarts* ("server process exited with exit code 2", no
+  message before it, then recovery; 2026-10-14 06:05, 10-16 05:05, 10-17
+  21:04 and 21:23 - the first two before live upload): no OOM kill in the
+  kernel log or Docker's state, /dev/shm 2 % used; cause open. The uploader
+  rode through (502/503, retries, then one batch of 3 polls, 0 gaps), but the
+  refresher could not put back the dirty mark it had taken over a dead
+  connection: it now keeps it in memory and writes it back first thing in
+  the next round.
 
 **Open (the developer's):** whether the external IP `34.42.184.97` is static
 (Console -> VPC network -> IP addresses; promote it if ephemeral - the

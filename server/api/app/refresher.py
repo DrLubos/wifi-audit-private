@@ -8,7 +8,9 @@ it inserted; ingest_merge()) instead of refreshing per request. Each round:
 1. per dirty sensor: take the mark and clear it in one statement, then
    refresh_rollups(sensor, dirty_from); an ingest during the refresh sets a new
    mark for the next round (only its own new rows), and a failed refresh puts
-   the taken mark back. (Clearing only "if no ingest moved it meanwhile" never
+   the taken mark back - kept in memory when the connection itself died
+   (Postgres restarting after a crash) and written back first thing in the
+   next round, so a crash never loses the window it was refreshing. (Clearing only "if no ingest moved it meanwhile" never
    cleared it with a batch every 30 s and rounds longer than that: every
    round re-refreshed days of hours - found on the first live day.)
 2. refresh_contact_periods() for every sensor that ever uploaded
@@ -44,6 +46,19 @@ BASELINES = os.environ.get("REFRESH_BASELINES", "1").strip() not in ("0", "false
 RETRY_S = 30
 
 _stop = False
+_carry = {}     # sensor_id -> (dirty_from, dirty_since) taken by a refresh that failed
+
+
+def _restore_marks(conn):
+    """Put carried marks back (earliest wins); a mark leaves _carry only once written."""
+    for sid, (dfrom, dsince) in list(_carry.items()):
+        conn.execute(
+            "INSERT INTO ingest_state AS i (sensor_id, dirty_from, dirty_since, dirty_at) "
+            "VALUES (%s, %s, %s, now()) ON CONFLICT (sensor_id) DO UPDATE SET "
+            "dirty_from = least(i.dirty_from, EXCLUDED.dirty_from), "
+            "dirty_since = coalesce(least(i.dirty_since, EXCLUDED.dirty_since), EXCLUDED.dirty_since)",
+            (sid, dfrom, dsince), prepare=False)
+        del _carry[sid]
 
 
 def _on_signal(signum, frame):
@@ -62,6 +77,9 @@ def round_once(conn, baseline_dates):
     """One round; returns the duration of steps 1-2 in seconds (the nightly
     baselines are not paced by the duty cycle)."""
     t0 = time.monotonic()
+    if _carry:
+        log.info("restoring %d dirty mark(s) of a failed refresh", len(_carry))
+        _restore_marks(conn)
     dirty = conn.execute(
         "SELECT i.sensor_id, s.name, i.dirty_from, i.dirty_at, i.dirty_since "
         "FROM ingest_state i JOIN sensors s ON s.id = i.sensor_id "
@@ -80,13 +98,17 @@ def round_once(conn, baseline_dates):
             r = conn.execute("SELECT * FROM refresh_rollups(%s, %s)", (d["sensor_id"], taken["dirty_from"]),
                              prepare=False).fetchone()
         except psycopg.Error:
+            old = _carry.get(d["sensor_id"])
+            dfrom, dsince = taken["dirty_from"], taken["dirty_since"]
+            if old is not None:
+                dfrom = min(dfrom, old[0])
+                dsince = min(x for x in (dsince, old[1]) if x is not None) if (dsince or old[1]) else None
+            _carry[d["sensor_id"]] = (dfrom, dsince)
             if not conn.closed:
-                conn.execute(
-                    "INSERT INTO ingest_state AS i (sensor_id, dirty_from, dirty_since, dirty_at) "
-                    "VALUES (%s, %s, %s, now()) ON CONFLICT (sensor_id) DO UPDATE SET "
-                    "dirty_from = least(i.dirty_from, EXCLUDED.dirty_from), "
-                    "dirty_since = coalesce(least(i.dirty_since, EXCLUDED.dirty_since), EXCLUDED.dirty_since)",
-                    (d["sensor_id"], taken["dirty_from"], taken["dirty_since"]), prepare=False)
+                try:
+                    _restore_marks(conn)
+                except psycopg.Error:
+                    pass        # stays in _carry for the next round
             raise
         log.info("refresh_rollups sensor=%s from=%s s=%.2f ap_hours=%s sensor_hours=%s waited_s=%.0f",
                  d["name"], taken["dirty_from"].isoformat(), time.monotonic() - t, r["ap_hours"], r["sensor_hours"],
