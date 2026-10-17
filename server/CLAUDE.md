@@ -49,11 +49,13 @@ Conventions for the stack:
 
 ## Current scope (respect these boundaries)
 
-- **Milestone 3, step 1 (now): a demo dashboard on REAL data, seeded from a
-  one-time export of the Pi buffer.** No live ingest yet. No full firehose.
-- Later: a live ingest API + the collector's upload step, sending a SUBSET (current
-  AP inventory, per-AP RSSI over time, config-change events, alerts) — never the raw
-  per-poll firehose (associations/probes are millions of rows).
+- **Milestone 3: the dashboard on REAL data**, built (dashboard v2).
+- **Live upload (now, approved 2026-10-17): `docs/live-upload.md`** - the
+  sensor uploads each poll (AP devices, polls, configuration history, AP
+  observations, AP load, AP frequency histogram, alerts; never the client
+  tables) to `/api/ingest/v1`; one merge for ingest and snapshot import
+  (`ingest_merge()`); the snapshot import is a recovery tool from then on.
+  Rolled out in the order of its section 14.
 - Later still: detection. For the demo, at most ONE illustrative, honest detection
   (unknown BSSID advertising a protected SSID, gated by an operator-approved
   known-good whitelist). Rigorous detection + ROC vs staged attacks is thesis work
@@ -231,28 +233,43 @@ Conventions for the stack:
 
 ## Operating rules for Claude Code (the server box)
 
-Same split as on the Pi: Claude Code writes files in this repo on the Mac; the
-developer runs anything that changes the box. Rules set 2026-09-29.
+Rules set 2026-10-17 (live-upload rollout mode; they replace those of
+2026-09-29). Claude Code writes the code in this repo on the Mac and rolls it
+out itself; the developer keeps the items under "Stays the developer's".
 
-- **Allowed:** read-only exploration over `ssh google`: `docker compose
+- **Allowed - git:** commit and push its own commits (never force-push, never
+  rewrite history); `git pull` on the box.
+- **Allowed - read-only:** exploration over `ssh google` (`docker compose
   ps/logs/stats/top`, `docker system df`, `free`, `df`, `vmstat`, `iostat`,
-  `uptime`, `lscpu`, `dmesg`, `journalctl`, reading files.
-- **Allowed:** psql **only as the role `claude_ro`**
-  (`ops/create_ro_role.sql`: login without a password - local socket inside
-  the db container only -, `pg_read_all_data` + `pg_monitor`, read-only
-  transactions, 120 s statement timeout, may set `track_io_timing`):
-  `docker compose exec -T db psql -U claude_ro -d "$POSTGRES_DB"`.
-- **Allowed:** running `tests/perf/measure.sh`, including its db restarts and
-  page-cache drops (nobody else uses the box).
-- **Allowed:** creating and running temporary test scripts in
-  `/tmp/wifi-audit-testing` on the server (create it there; delete its
-  contents when done). Nothing outside that folder. Scripts that touch the
-  database still use only `claude_ro`; anything that would write, restart or
-  deploy stays under "Not allowed" - a script does not change that.
-- **Allowed:** `docker compose up/down/build/rm`, package or service changes,
-  you may runs those (schema, imports, backups, deploys).
-- **Not allowed:** database writes, editing
-  or deleting files on the server or package changes.
+  `uptime`, `lscpu`, `dmesg`, `journalctl`, reading files); psql as the
+  read-only role `claude_ro` (`ops/create_ro_role.sql`) for every check;
+  `tests/perf/measure.sh` incl. its db restarts and page-cache drops;
+  temporary scripts in `/tmp/wifi-audit-testing` (delete them when done).
+- **Allowed - operations, only through the repo's scripts and compose:**
+  `./backup.sh`; migrations and rollbacks via `ops/` (`migrate_schemaN.sh`,
+  `rollback_schemaN.sql`); `docker compose build` / `up -d` of the stack's
+  services; `caddy reload`; smoke tests; the SQL fixture tests and checks;
+  the N8 refresh measurement (`refresh_rollups()`); snapshot imports
+  (`seed/import_snapshot.py`); `ops/sensor_token.sh` - the token is written
+  straight into the Pi's `/etc/wifi-sensor/uploader.conf` in one pipeline,
+  never printed into the session or a log (if it leaks: revoke it, make a new
+  one); `INGEST_ENABLED` in `.env` (no other `.env` value).
+- **Allowed - disk cleanup (live-upload 9.4 A):** copy the older buffer
+  snapshots to the developer's Mac (`~/wifi-audit-snapshots/`), compare
+  sha256 on both sides, delete them on the box only if every hash matches;
+  `docker image prune` and `docker builder prune -a`.
+- **Guardrails:** before every migration a fresh `./backup.sh`, copied to the
+  Mac (`~/wifi-audit-backups/`) with matching sha256, before it starts. One
+  step at a time, verified (fixture tests, check scripts, smoke test, logs)
+  before the next. If something fails: stop, roll back with the prepared
+  rollback if needed, report - never improvise fixes on the live database.
+- **Never:** delete database data or Docker volumes (`docker volume prune`,
+  `docker system prune --volumes`, `down -v`); run `ops/delete_client_rows.sh`;
+  edit `.env` secrets; run `gcloud` or touch disks; write to the database
+  outside the scripts above.
+- **Stays the developer's:** deleting client rows, any decision outside the
+  approved design (`docs/live-upload.md`), and the clock-validation runs on
+  the Pi (`wifi-sensor/CLAUDE.md`).
 
 ## Privacy (same rule as the sensor)
 
@@ -263,5 +280,5 @@ sensor already excludes these; the server must not reintroduce them.
 
 - English only for identifiers/comments/commits. No credentials in git (DB URL,
   secrets via a gitignored `.env`). Commit often, keep changes reviewable.
-- Claude Code writes/edits files here; the developer runs docker compose / psql writes /
-  the deploy (see "Operating rules" above for what Claude may run on the box).
+- Claude Code writes/edits files here and runs the operations listed under
+  "Operating rules" above; everything else on the box is the developer's.

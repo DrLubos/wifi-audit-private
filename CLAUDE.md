@@ -12,11 +12,10 @@ Read the one for the folder you are working in.
   `wifi-sensor/CLAUDE.md` before touching anything in it.** Every relative path
   and command in that file is relative to `wifi-sensor/`; on the Pi the
   installers are run from that folder.
-- `server/` — the **backend** that will receive store-and-forward uploads from
-  sensors and store/analyse them. **Placeholder only** — nothing is built until
-  the thesis contribution has been chosen from the accumulated data (see the
-  scope rules in `wifi-sensor/CLAUDE.md`). Do not create server code unless
-  explicitly asked.
+- `server/` — the **backend**: PostgreSQL + FastAPI + Caddy/React on the GCP
+  box, the dashboard, the batch detectors and (being rolled out) the live
+  upload from the sensor (`server/docs/live-upload.md`). **Read
+  `server/CLAUDE.md` before touching anything in it.**
 
 ## Shared conventions
 
@@ -25,8 +24,9 @@ Read the one for the folder you are working in.
   httpd config are gitignored) and never collect bystander PII on the sensor.
 - One git repository, one history: commit sensor and server changes as
   separate, reviewable commits; do not split into submodules.
-- Claude Code runs on the developer's Mac. Read-only SSH exploration of the Pi
-  (`ssh pi`) and server (`ssh google`) is allowed; installers are run
-  by the developer, never by Claude. On the server, psql only as the read-only
-  role `claude_ro` - the full list is under "Operating rules" in
-  `server/CLAUDE.md`.
+- Claude Code runs on the developer's Mac and reaches the Pi (`ssh pi`) and
+  the server (`ssh google`). Since 2026-10-17 (live-upload rollout) it may
+  commit and push its own commits (never force-push or rewrite history) and
+  run the rollout's operations itself - exactly those listed under
+  "Operating rules" in `server/CLAUDE.md` and `wifi-sensor/CLAUDE.md`; every
+  other change on either machine stays the developer's.

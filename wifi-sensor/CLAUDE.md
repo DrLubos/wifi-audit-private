@@ -39,8 +39,12 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   has NOT been chosen yet - it will be selected from the accumulated data, not
   guessed in advance. Let the sensor run and collect before building anything more.
 - **Out of scope until the contribution is chosen:** anomaly/threat detection,
-  self-learning baselines, server upload, dashboard. Do not build these unless
-  explicitly asked.
+  self-learning baselines. Do not build these unless explicitly asked.
+- **Live upload (approved 2026-10-17, being rolled out):
+  `../server/docs/live-upload.md`** - collector buffer v8 (clock correction
+  data: monotonic time, boot id, clock-synced flag, one anchor per boot; N11
+  saves the boot clock) and a separate uploader daemon that reads the buffer
+  read-only and sends each poll to the server.
 - **Never** in the deployed sensor: active attacks, deauth, handshake capture,
   password cracking, GPS, or a Flask web UI. This sensor is passive-only.
 
@@ -386,19 +390,34 @@ Eventbus (push) for alerts later. Fields of interest:
 - Claude Code runs on the developer's **PC (Mac)**, not on the Pi.
 - The Pi is reachable as `ssh pi` (configured in the PC's `~/.ssh/config`;
   IP, user, and key path live there - never in this repo).
-- Claude Code may SSH to the Pi ONLY for **read-only exploration** to gather facts
-  for writing scripts: e.g. `lsusb`, `iw list`, `iw dev`, `rfkill list`,
-  `cat /etc/os-release`, `lspci`, `ip link`. Nothing that installs or changes state.
-- Claude Code **writes** scripts (e.g. `install_sensor.sh`) locally into this repo.
-  Script might be executed on Pi by Claude Code, when Claude Code is sure, that script is correct.
-- The only local action on the PC is writing/editing files in this repo.
-  No installs or other side effects on the PC.
+- Rules set 2026-10-17 (live-upload rollout mode; they replace the earlier
+  read-only rule). Claude Code writes scripts locally into this repo and may
+  run these on the Pi itself:
+  - read-only exploration (e.g. `lsusb`, `iw dev`, `ip link`, `journalctl`,
+    `systemctl status`, reading the buffer with `mode=ro`);
+  - `git pull` in the clone (`~/wifi-audit-private`), the unit tests;
+  - the live-upload installers `install_collector.sh` (collector v8) and
+    `install_uploader.sh`, the N11 clock-save timer of step 3,
+    `uploader.py --check`, enabling the uploader, writing the ingest token into
+    `/etc/wifi-sensor/uploader.conf` (from `ops/sensor_token.sh` on the server
+    in one pipeline - never printed).
+  - sudo needs the developer's password (`ssh -t pi`): when a step needs sudo
+    and no password can be given, stop and hand the developer the exact
+    commands.
+- **Never on the Pi:** change network, Tailscale, SSH, firewall or chrony
+  configuration (beyond the N11 timer), reboot it, or change capture settings
+  beyond the planned collector v8. The sensor stays strictly passive.
+- **Stays the developer's:** the clock-validation runs
+  (`docs/clock-validation.md` - they reboot the Pi: ask first, for each run)
+  and `install_sensor.sh` changes outside the live-upload plan.
+- On the Mac: writing/editing files in this repo, running the tests. No
+  installs or other side effects on the PC.
 
 ## Repository philosophy
 
 - This folder holds everything implemented on the Pi: the install scripts, the
   collector, configs, systemd units, docs. It is the developer's own work. The
-  server half lives in `../server/` (placeholder until the contribution is chosen).
+  server half lives in `../server/`.
 - Any prior/reference code (e.g. the old `wifi-audit-tool` fork) stays **outside**
   this repo and is used only as read-only reference when explicitly requested.
   Do not copy from it, and do not commit it here.
