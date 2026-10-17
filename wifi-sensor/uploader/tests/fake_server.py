@@ -35,15 +35,23 @@ def make_certs(d):
     test CA; a second, self-signed server cert for the refusal test."""
     def run(*args):
         subprocess.run(["openssl"] + list(args), cwd=d, check=True, capture_output=True)
-    run("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "2",
-        "-subj", "/CN=wifi-audit test CA")
-    run("req", "-newkey", "rsa:2048", "-nodes", "-keyout", "srv.key", "-out", "srv.csr", "-subj", "/CN=localhost")
+    # extensions as a strict verifier (Python 3.13: VERIFY_X509_STRICT) requires them
+    with open(os.path.join(d, "openssl.cnf"), "w") as f:
+        f.write("[req]\ndistinguished_name = dn\n[dn]\n"
+                "[v3_ca]\nbasicConstraints = critical, CA:TRUE\nkeyUsage = critical, keyCertSign, cRLSign\n"
+                "subjectKeyIdentifier = hash\n")
     with open(os.path.join(d, "ext.cnf"), "w") as f:
-        f.write("subjectAltName=DNS:localhost,IP:127.0.0.1\n")
+        f.write("subjectAltName = DNS:localhost, IP:127.0.0.1\nbasicConstraints = CA:FALSE\n"
+                "keyUsage = critical, digitalSignature, keyEncipherment\nextendedKeyUsage = serverAuth\n"
+                "subjectKeyIdentifier = hash\nauthorityKeyIdentifier = keyid\n")
+    run("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "2",
+        "-subj", "/CN=wifi-audit test CA", "-config", "openssl.cnf", "-extensions", "v3_ca")
+    run("req", "-newkey", "rsa:2048", "-nodes", "-keyout", "srv.key", "-out", "srv.csr", "-subj", "/CN=localhost",
+        "-config", "openssl.cnf")
     run("x509", "-req", "-in", "srv.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "srv.pem",
         "-days", "2", "-extfile", "ext.cnf")
     run("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "self.key", "-out", "self.pem", "-days", "2",
-        "-subj", "/CN=localhost")
+        "-subj", "/CN=localhost", "-config", "openssl.cnf")
     return tuple(os.path.join(d, n) for n in ("ca.pem", "srv.pem", "srv.key", "self.pem", "self.key"))
 
 
