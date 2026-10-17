@@ -500,18 +500,42 @@ def day_coverage(days, hours, sensor, now, limited_windows=(), poll_s=POLL_S):
     return out
 
 
-def sensor_status(last_capture_at, last_poll, now, offline_min):
-    """online | offline | no_data and the seconds since the last collecting poll.
+BACKLOG_CATCHING_UP = 10     # polls waiting on the sensor before it reads "catching up"
 
-    Until live ingest the data ends at the last import, so every sensor reads
-    offline between imports (SPEC Q7: the Sensors page shows "data until").
+
+def sensor_status(last_capture_at, last_poll, now, offline_min, contact=None):
+    """(status, seconds) of a sensor (docs/live-upload.md 8.2).
+
+    With live contact (sensor_status: last_contact_at, backlog_polls,
+    held_polls - written by every ingest request, read directly, never
+    through the rollups): unreachable (no contact for > offline_min; seconds
+    since the contact), clock_unverified (polls held back for their boot's
+    clock anchor), catching_up (more than BACKLOG_CATCHING_UP polls waiting),
+    not_capturing (in contact, but the newest received poll is not
+    collecting), online; the seconds are those since the last collecting
+    poll. Without contact (snapshot imports only): online | offline | no_data
+    from the last collecting poll - every such sensor reads offline between
+    imports (SPEC Q7: the page shows "data until").
     """
+    limit = offline_min * 60
+    since_capture = (None if last_capture_at is None
+                     else max(0, int((now - last_capture_at).total_seconds())))
+    if contact is not None and contact.get("last_contact_at") is not None:
+        silent = max(0, int((now - contact["last_contact_at"]).total_seconds()))
+        if silent > limit:
+            return "unreachable", silent
+        if contact.get("held_polls"):
+            return "clock_unverified", since_capture
+        if (contact.get("backlog_polls") or 0) > BACKLOG_CATCHING_UP:
+            return "catching_up", since_capture
+        if since_capture is None or since_capture > limit:
+            return "not_capturing", since_capture
+        return "online", since_capture
     if last_poll is None:
         return "no_data", None
-    if last_capture_at is None:
+    if since_capture is None:
         return "offline", None
-    offline_s = max(0, int((now - last_capture_at).total_seconds()))
-    return ("online" if offline_s <= offline_min * 60 else "offline"), offline_s
+    return ("online" if since_capture <= limit else "offline"), since_capture
 
 
 def severity_counts(rows):

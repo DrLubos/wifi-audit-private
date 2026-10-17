@@ -74,7 +74,8 @@ ORDER BY o, d.manuf
 
 -- name: sensor_data_tables
 -- The tables with a sensor_id column (not its configuration: sensor_config,
--- sensor_annotations, sensor_adapters) and whether one has a row of the sensor;
+-- sensor_annotations, sensor_adapters, sensor_tokens) and whether one has a row
+-- of the sensor (a sensor that ever uploaded has sensor_status / heartbeat rows);
 -- the guard of "Delete sensor": a sensor with any observation, poll, device
 -- or rollup row is never deleted. Table names come from the catalog and are
 -- quoted as identifiers by format().
@@ -86,5 +87,5 @@ FROM information_schema.tables t
 WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
   AND EXISTS (SELECT 1 FROM information_schema.columns c
               WHERE c.table_schema = t.table_schema AND c.table_name = t.table_name AND c.column_name = 'sensor_id')
-  AND t.table_name NOT IN ('sensor_config', 'sensor_annotations', 'sensor_adapters')
+  AND t.table_name NOT IN ('sensor_config', 'sensor_annotations', 'sensor_adapters', 'sensor_tokens')
 ORDER BY t.table_name

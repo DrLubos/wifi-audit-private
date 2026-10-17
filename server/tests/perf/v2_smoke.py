@@ -7,6 +7,9 @@ reads the body - nothing is written:
 - every endpoint answers 200 with JSON (and the documented 404 / 422 cases);
 - every write endpoint refuses a request without the token (401, or 403 when
   WRITE_TOKEN is not set);
+- the ingest (/api/ingest/v1, docs/live-upload.md) refuses a request without
+  a token, with a malformed one and with an unknown one (401; 503 while
+  INGEST_ENABLED=0), and an oversized body (413) - nothing is merged;
 - the ETag round trip: the same request with If-None-Match is a 304;
 - the privacy scan: every MAC in every response is a BSSID of the account's
   APs (the comma-separated argument; measure.sh reads it as claude_ro).
@@ -24,6 +27,7 @@ sys.path.insert(0, "/app")
 from app.v2 import privacy  # noqa: E402
 
 BASE = "http://127.0.0.1:8000/api/v2"
+INGEST = "http://127.0.0.1:8000/api/ingest/v1"
 
 
 def get(path, headers=None):
@@ -54,6 +58,22 @@ WRITES = (("POST", "/auth/check"), ("PUT", "/settings/networks"), ("POST", "/set
           ("PUT", "/aps/EC:58:EA:55:88:FC/classification"), ("PUT", "/aps/EC:58:EA:55:88:FC/note"),
           ("POST", "/settings/sensors/new"), ("DELETE", "/settings/sensors/pi-fri?confirm=pi-fri"),
           ("GET", "/events/export/labels.csv"), ("GET", "/events/export/label-history.csv"))   # reads, but token-gated
+
+
+def ingest(path, token=None, body=b"{}"):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    req = urllib.request.Request(INGEST + path, data=body, method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+# an id no token has (the table's ids start at 1) and a well-formed secret
+UNKNOWN_TOKEN = "wsi1.999999999." + "0" * 64
 
 
 def main(argv):
@@ -150,6 +170,16 @@ def main(argv):
             print("%-4s %3d %s %s (%s token)" % ("ok" if ok else "FAIL", code, method, path, "a wrong" if token else "no"))
             if not ok:
                 failures.append("%s %s accepted without the token (%d)" % (method, path, code))
+    for path in ("/batch", "/heartbeat"):
+        for label, token, body, want in (("no token", None, b"{}", (401, 503)),
+                                         ("a malformed token", "not-a-token", b"{}", (401, 503)),
+                                         ("an unknown token", UNKNOWN_TOKEN, b"{}", (401, 503)),
+                                         ("a 3 MB body", UNKNOWN_TOKEN, b" " * (3 * 1024 * 1024), (413, 503))):
+            code = ingest(path, token, body)
+            ok = code in want
+            print("%-4s %3d POST /api/ingest/v1%s (%s)" % ("ok" if ok else "FAIL", code, path, label))
+            if not ok:
+                failures.append("ingest %s with %s: %d" % (path, label, code))
     check("/overview/period?range=90d", 422)
     check("/overview/period?sensor=no-such-sensor", 422)
     print("%d failure(s)" % len(failures))

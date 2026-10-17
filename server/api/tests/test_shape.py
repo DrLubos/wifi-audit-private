@@ -93,6 +93,26 @@ class StatusAndLists(unittest.TestCase):
         self.assertEqual(shape.sensor_status(now - timedelta(minutes=16), now, now, 15), ("offline", 960))
         self.assertEqual(shape.sensor_status(None, now, now, 15), ("offline", None))
 
+    def test_sensor_status_with_live_contact(self):
+        # docs/live-upload.md 8.2: once a sensor uploads, its contact decides
+        now = utc(2026, 10, 18, 12)
+        cap = now - timedelta(minutes=1)
+
+        def c(minutes_ago, backlog=0, held=0):
+            return {"last_contact_at": now - timedelta(minutes=minutes_ago), "backlog_polls": backlog,
+                    "held_polls": held}
+        self.assertEqual(shape.sensor_status(cap, cap, now, 15, c(0.5)), ("online", 60))
+        self.assertEqual(shape.sensor_status(cap, cap, now, 15, c(0.5, backlog=11)), ("catching_up", 60))
+        self.assertEqual(shape.sensor_status(cap, cap, now, 15, c(0.5, backlog=10)), ("online", 60))
+        self.assertEqual(shape.sensor_status(cap, cap, now, 15, c(0.5, held=3)), ("clock_unverified", 60))
+        old = now - timedelta(minutes=20)
+        self.assertEqual(shape.sensor_status(old, cap, now, 15, c(0.5)), ("not_capturing", 1200))
+        self.assertEqual(shape.sensor_status(None, cap, now, 15, c(0.5)), ("not_capturing", None))
+        # no contact for longer than the offline threshold: unreachable, counted from the contact
+        self.assertEqual(shape.sensor_status(cap, cap, now, 15, c(16)), ("unreachable", 960))
+        # a sensor without live contact keeps the snapshot-era states
+        self.assertEqual(shape.sensor_status(cap, cap, now, 15, None), ("online", 60))
+
     def test_security_rows_fixed_order(self):
         rows = shape.security_rows([{"level": "strong", "n": 1}, {"level": "open", "n": 3}])
         self.assertEqual([r["level"] for r in rows], ["open", "legacy", "psk_no_mfp", "strong", "unknown"])

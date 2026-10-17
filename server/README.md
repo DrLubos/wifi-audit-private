@@ -17,7 +17,7 @@ docker-compose stack.
 | dashboard v2 frontend | done - `docs/dashboard-v2/PLAN.md` section 10: the shell (sidebar, top bar, filters in the URL) and the pages Overview `/`, Events `/events`, Networks `/networks`, Spectrum `/spectrum`, Access points `/aps` and `/aps/<bssid>`, Sensors `/sensors`, Settings `/settings`; writes behind the write token (unlocked once per tab). The first dashboard's pages were removed in phase 5c; `/detections` redirects to `/events`, `/legacy` to `/`, and `/aps/<Kismet device key>` links to the BSSID page. Logic tests (`frontend/src/**/*.test.js`) run with `node --test` in the image's build stage |
 | dashboard v2 API (read) | done, phase 3 of `docs/dashboard-v2/PLAN.md` - `/api/v2/...` (sensors, overview status and period, events feed with keyset cursors and event detail, networks + timeseries + clients heatmap, access points list / page / RSSI / load, spectrum + utilization, sensor coverage and outages, settings reads); period buckets in the account's time zone, weak ETag with the bucket epoch, no client MAC in any response (redacted, checked by `tests/perf/v2_smoke.py`). Code in `api/app/v2/`, its SQL in `api/app/v2/sql/*.sql` (run as is by `tests/perf/ep_v2.py`). The `/api/...` endpoints above stay until the frontend switch |
 | `detection/` | prototype - batch detectors run on demand over a time window, writing only `detections`; one detector so far, `deauth-flood` (Kismet DEAUTHFLOOD alerts + burst events of the polled `client_disconnects` counter, per-AP baseline, idempotent re-runs). See `detection/README.md` |
-| live ingest | later; see `CLAUDE.md` for the scope rules |
+| live ingest | being built (`docs/live-upload.md`, steps 1-6): schema 14 and `ingest_merge()` - the one merge of the snapshot import and the live ingest - (step 1); `/api/ingest/v1/batch` and `/heartbeat` with per-sensor tokens (`ops/sensor_token.sh`), stall events, the `refresher` service (step 2); the Pi's collector v8 and uploader (steps 3-4) |
 
 ## Stack
 
@@ -36,7 +36,8 @@ docker-compose stack.
 |---|---|---|
 | `db` | `postgres:17` | `schema.sql` mounted read-only into `/docker-entrypoint-initdb.d/`, runs on the first init of the `db-data` volume. No published port. `shared_buffers=128MB` for the 1 GB box. |
 | `api` | `api/Dockerfile` (`python:3.13-slim`, non-root) | `DATABASE_URL` from the environment (compose derives it from `.env`). psycopg 3 pool, plain SQL. Routes carry the `/api` prefix themselves; docs at `/api/docs`. |
-| `frontend` | `frontend/Dockerfile` (`node:22-alpine` build stage -> `caddy:2-alpine`) | Caddy serves `dist` and proxies `/api/*` to `api:8000`; the only container publishing ports. `frontend/Caddyfile` is bind-mounted. |
+| `refresher` | the api image, `python -m app.refresher` | The dashboard rollups after live ingest (`refresh_rollups()` of the sensors the ingest marked dirty, contact periods, nightly baselines); waits max(`REFRESH_INTERVAL_S`, 4 x its last round). `docs/live-upload.md` 6.4 |
+| `frontend` | `frontend/Dockerfile` (`node:22-alpine` build stage -> `caddy:2-alpine`) | Caddy serves `dist` and proxies `/api/*` to `api:8000` (`/api/ingest/*` with a 2 MB body limit); the only container publishing ports. `frontend/Caddyfile` is bind-mounted. |
 
 Credentials live only in the gitignored `.env` (template: `.env.example`).
 

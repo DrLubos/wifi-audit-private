@@ -302,8 +302,9 @@ def delete_sensor(name: str = Path(max_length=64), confirm: str = Query("", max_
     """Delete a sensor - never one with data, never unconfirmed: the sensor's
     name must be typed (?confirm=NAME) and no poll, device, observation,
     alert, event or rollup row may belong to it (409 names the tables); only
-    its configuration (adapter record, capture configurations, history) goes
-    with it, and the audit row keeps what was there."""
+    its configuration (adapter record, capture configurations, history, and
+    its ingest tokens - revoked by the deletion, live upload amendment 4) goes
+    with it, and the audit row keeps what was there (the token ids)."""
     s = _sensor_of(acc, name)
     if confirm != name:
         raise HTTPException(status_code=422, detail="type the sensor's name to confirm the deletion")

@@ -4,13 +4,17 @@
 
 -- name: account
 -- refreshed_at: the newest refresh_rollups() of its sensors; events_at: the
--- newest change of an event row (detectors, refresh_events(), status writes).
+-- newest change of an event row (detectors, refresh_events(), status writes);
+-- contact_at: the newest ingest request of its sensors (sensor_status).
 SELECT a.id, a.name, a.tz, a.write_version,
        st.sensor_offline_min AS offline_min, st.ignore_random_bssid,
        (SELECT max(ss.refreshed_at) FROM sensor_summary ss JOIN sensors s ON s.id = ss.sensor_id
         WHERE s.account_id = a.id) AS refreshed_at,
        (SELECT max(d.updated_at) FROM detections d JOIN sensors s ON s.id = d.sensor_id
         WHERE s.account_id = a.id) AS events_at,
+       -- the newest live contact (schema 14): part of the status endpoints' ETag
+       (SELECT max(st.updated_at) FROM sensor_status st JOIN sensors s ON s.id = st.sensor_id
+        WHERE s.account_id = a.id) AS contact_at,
        (SELECT coalesce(json_agg(json_build_object(
                  'id', s.id, 'name', s.name, 'first_poll', ss.first_poll, 'last_poll', ss.last_poll,
                  'last_capture_at', ss.last_capture_at) ORDER BY s.id), '[]'::json)

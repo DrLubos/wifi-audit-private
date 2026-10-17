@@ -1,7 +1,8 @@
 -- GET /api/v2/sensors (sidebar, top bar, the sensor cards of Overview and
--- Sensors). Windows ("7 days", "24 h") end at the sensor's last poll: until
--- live ingest the data ends at the last import (SPEC Q7), and a window ending
--- now would read empty between imports.
+-- Sensors). Windows ("7 days", "24 h") end at the sensor's last poll: a
+-- sensor without live upload has data up to its last import (SPEC Q7), and a
+-- window ending now would read empty between imports. The live contact
+-- (schema 14) is read from sensor_status directly, never through the rollups.
 
 -- name: sensors
 SELECT se.id, se.name, se.location, se.hardware,
@@ -28,6 +29,18 @@ SELECT se.id, se.name, se.location, se.hardware,
         FROM sensor_adapters a WHERE a.sensor_id = se.id) AS adapter,
        (SELECT max(h.starts_at) FROM sensor_annotations h
         WHERE h.sensor_id = se.id AND h.kind = 'hardware_change') AS last_hardware_change,
+       -- live upload (schema 14): the latest contact and what it reported
+       st.last_contact_at, st.last_batch_at,
+       (st.heartbeat ->> 'backlog_polls')::int AS backlog_polls,
+       (st.heartbeat ->> 'held_polls')::int AS held_polls,
+       (st.heartbeat ->> 'unverified_polls')::int AS unverified_now,
+       to_timestamp((st.heartbeat ->> 'backlog_oldest_ts')::double precision) AS backlog_oldest,
+       (SELECT h.clock_offset_s FROM sensor_heartbeats h
+        WHERE h.sensor_id = se.id ORDER BY h.received_at DESC LIMIT 1) AS clock_offset_s,
+       (SELECT json_build_object('lost', coalesce(sum(g.polls) FILTER (WHERE g.reason = 'lost'), 0),
+                                 'unverified', coalesce(sum(g.polls) FILTER (WHERE g.reason = 'unverified'), 0))
+        FROM sensor_seq_gaps g WHERE g.sensor_id = se.id) AS missing_polls,
+       ist.dirty_since AS refresh_pending_since,
        (SELECT json_build_object('version', c.version, 'plan', c.channel_plan, 'channels', c.channels,
                                  'n_channels', c.n_channels, 'dwell_s', c.dwell_s, 'poll_s', c.poll_s,
                                  'confirmed_at', c.confirmed_at)
@@ -42,6 +55,8 @@ SELECT se.id, se.name, se.location, se.hardware,
         ORDER BY c.version DESC LIMIT 1) AS pending
 FROM sensors se
 LEFT JOIN sensor_summary ss ON ss.sensor_id = se.id
+LEFT JOIN sensor_status st ON st.sensor_id = se.id
+LEFT JOIN ingest_state ist ON ist.sensor_id = se.id
 -- capture crashes in the 24 h before the last poll: Kismet re-opened the
 -- source (SOURCEOPEN) after a SOURCEERROR; recovery = from the first
 -- SOURCEERROR after the previous SOURCEOPEN to this one (the end of a long

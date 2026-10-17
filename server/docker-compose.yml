@@ -53,6 +53,10 @@ services:
       # dashboard v2 writes (Settings, labels, classification): the bearer token
       # of every write endpoint; empty or unset = writes disabled (403)
       WRITE_TOKEN: "${WRITE_TOKEN:-}"
+      # sensor ingest (/api/ingest/v1, docs/live-upload.md): per-sensor tokens
+      # in the database (ops/sensor_token.sh); 0 = every ingest route 503, the
+      # sensors keep their data and retry
+      INGEST_ENABLED: "${INGEST_ENABLED:-1}"
     depends_on:
       db:
         condition: service_healthy
@@ -67,6 +71,25 @@ services:
     networks:
       - backend
       - frontend
+    logging: *logging
+
+  # Dashboard rollups after live ingest (docs/live-upload.md 6.4): the api
+  # image, `python -m app.refresher`. Refreshes the sensors the ingest marked
+  # dirty, the contact periods, and the RSSI baselines nightly; the next round
+  # waits max(REFRESH_INTERVAL_S, 4 x the last round) - at most a fifth of the
+  # core. Built with the api (`docker compose build api`).
+  refresher:
+    image: wifi-audit-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}}"
+      REFRESH_INTERVAL_S: "${REFRESH_INTERVAL_S:-60}"
+    entrypoint: ["python", "-m", "app.refresher"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
     logging: *logging
 
   # On-demand batch detectors (server/detection/). Behind a profile, so

@@ -910,11 +910,45 @@ schema-13 `schema.sql` (`git show 9a33634:server/schema.sql | docker compose
 exec -T db psql …`) and the schema-13 importer (`git checkout 9a33634 --
 seed/import_snapshot.py`).
 
-### 15.2 Later steps
+### 15.2 Step 2 – ingest api, refresher, Caddy limit (server)
 
-Recorded at their stops (server step 2: build api, migrate nothing, `up -d
-api refresher`, Caddy reload, token; Pi steps 3–4: `install_collector.sh`,
-`install_uploader.sh`, `--check` after a fresh backup, enable).
+Needs step 1 (schema 14) applied first: the new api reads its tables.
+
+```sh
+cd ~/wifi-audit && git pull && cd server
+docker compose build api                                   # the api and the refresher's image
+docker compose up -d api refresher
+docker compose exec frontend caddy reload --config /etc/caddy/Caddyfile
+```
+
+No token is created yet (step 4): without one every ingest request is a
+401, so nothing changes for the dashboard except the Sensors endpoint's
+`contact` field (null) and the nightly baseline refresh. Then Claude,
+read-only: `measure.sh MODE=v2` (its `v2_smoke.py` now also checks the
+ingest refusals: 401 for no / malformed / unknown token, 413 for 3 MB).
+
+**N8 measurement at this stop** (the incremental refresh is a write, so the
+developer runs it; Claude watches `vmstat 5` and `docker stats` read-only
+meanwhile): three times, a few minutes apart -
+
+```sh
+docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c '\timing on' \
+  -c "SELECT * FROM refresh_rollups(1, now() - interval '1 hour')"
+```
+
+If it takes more than ~15 s, steps 4–8 become incremental (6.4) before the
+uploader is enabled; otherwise `REFRESH_INTERVAL_S` stays 60.
+
+Rollback: `INGEST_ENABLED=0` in `.env` + `docker compose up -d api` stops
+every ingest at once. Full: `git checkout 7edf108 -- api docker-compose.yml
+frontend/Caddyfile tests/perf/v2_smoke.py`, `docker compose stop refresher &&
+docker compose rm -f refresher`, `docker compose build api && docker compose
+up -d api`, Caddy reload.
+
+### 15.3 Later steps
+
+Recorded at their stops (Pi steps 3–4: `install_collector.sh`,
+`install_uploader.sh`, the token, `--check` after a fresh backup, enable).
 
 ---
 

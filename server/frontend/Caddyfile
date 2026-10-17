@@ -9,6 +9,16 @@
 {$SITE_ADDRESS} {
 	encode zstd gzip
 
+	# Sensor uploads (docs/live-upload.md 9.2): gzip batches of one poll, catch-up
+	# batches of 120 polls; nothing larger is accepted (the api checks again).
+	# The more specific path is matched before /api/*.
+	handle /api/ingest/* {
+		request_body {
+			max_size 2MB
+		}
+		reverse_proxy api:8000
+	}
+
 	# The api keeps the /api prefix in its own routes: paths pass through unchanged.
 	handle /api/* {
 		reverse_proxy api:8000

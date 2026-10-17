@@ -73,12 +73,17 @@ RETURNING id
 -- name: sensor_delete_config
 -- The configuration rows of a sensor without data, with the sensor (the only
 -- rows that go with it - sensor_data_tables found nothing else); the history
--- entries include its hardware changes
+-- entries include its hardware changes; its ingest tokens are revoked by
+-- deleting them
 WITH d AS (DELETE FROM sensor_adapters WHERE sensor_id = %(id)s RETURNING 1),
      c AS (DELETE FROM sensor_config WHERE sensor_id = %(id)s RETURNING 1),
-     a AS (DELETE FROM sensor_annotations WHERE sensor_id = %(id)s RETURNING 1)
+     a AS (DELETE FROM sensor_annotations WHERE sensor_id = %(id)s RETURNING 1),
+     t AS (DELETE FROM sensor_tokens WHERE sensor_id = %(id)s RETURNING id)
 SELECT (SELECT count(*) FROM d)::int AS adapter, (SELECT count(*) FROM c)::int AS config,
-       (SELECT count(*) FROM a)::int AS history
+       (SELECT count(*) FROM a)::int AS history,
+       -- live upload (schema 14): the sensor's ingest tokens go with it (amendment 4) -
+       -- a token cannot outlive its sensor; the audit row lists their ids
+       (SELECT coalesce(array_agg(id ORDER BY id), '{}') FROM t) AS tokens_revoked
 
 -- name: sensor_delete
 DELETE FROM sensors WHERE account_id = %(account_id)s AND id = %(id)s RETURNING id

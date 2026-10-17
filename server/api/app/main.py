@@ -3,8 +3,9 @@
 Every route lives under /api: Caddy proxies /api/* to this container with the
 path unchanged, everything else is the React app. The health endpoint and the
 dashboard endpoints (/api/v2, v2/: the reads of docs/dashboard-v2/PLAN.md
-section 7.3 and the token-gated writes of 7.5); the sensor ingest endpoints
-are added here later. The first dashboard's endpoints (/api/overview, /aps,
+section 7.3 and the token-gated writes of 7.5) and the sensor ingest
+(/api/ingest/v1, ingest/: docs/live-upload.md - per-sensor tokens, never the
+write token). The first dashboard's endpoints (/api/overview, /aps,
 /alerts, /findings, /detections) were removed in phase 5c.
 """
 
@@ -17,6 +18,7 @@ from psycopg import OperationalError
 from psycopg_pool import PoolTimeout
 
 from . import cache, db
+from .ingest import routes as ingest
 from .v2 import routes as v2
 
 log = logging.getLogger("api")
@@ -24,7 +26,7 @@ log = logging.getLogger("api")
 # Read responses that may be cached briefly: the seeded data is static and the
 # box has one core. Health is always fresh. The endpoints on the schema-6
 # dashboard tables set Cache-Control and an ETag themselves (cache.py).
-UNCACHED = {"/api/health", "/api/docs", "/api/openapi.json"}
+UNCACHED = {"/api/health", "/api/docs", "/api/openapi.json"}   # (ingest is POST only)
 
 
 @asynccontextmanager
@@ -91,3 +93,4 @@ def health():
 
 app.include_router(router)
 app.include_router(v2.router)
+app.include_router(ingest.router)

@@ -1,11 +1,15 @@
 """GET /api/v2/sensors - status, capture, uploads and configuration per sensor.
 
 Feeds the sidebar, the top bar ("Latest data") and the sensor cards of
-Overview and Sensors. Status is online / offline against the account's
-sensor_offline_min from the last collecting poll, no_data before the first
-poll; until live ingest every sensor reads offline between imports, so the
-cards show data_until (SPEC Q7). The 7-day and 24-hour windows end at the
-sensor's last poll (sql/sensors.sql). ETag epoch: the current minute.
+Overview and Sensors. A sensor that uploads live (schema 14) has a status
+from its contact (shape.sensor_status: online, catching_up,
+clock_unverified, not_capturing, unreachable - docs/live-upload.md 8.2),
+read from sensor_status directly; a sensor seen only through snapshot
+imports reads online / offline against the account's sensor_offline_min from
+the last collecting poll (offline between imports, so the cards show
+data_until - SPEC Q7), no_data before the first poll. The 7-day and 24-hour
+windows end at the sensor's last poll (sql/sensors.sql). ETag epoch: the
+current minute and the newest contact.
 """
 
 from datetime import timedelta
@@ -37,7 +41,7 @@ def _config(c):
 
 @router.get("/sensors")
 def sensors(request: Request, acc=Depends(deps.get_account)):
-    tag, cached = deps.etag(request, acc, deps.minute_epoch())
+    tag, cached = deps.etag(request, acc, deps.minute_epoch(), _us(acc.get("contact_at")))
     if cached:
         return cached
     now = shape.utc_now()
@@ -52,7 +56,11 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
     by_id = {s["id"]: s for s in acc["sensors"]}
     out = []
     for r in rows:
-        status, offline_s = shape.sensor_status(r["last_capture_at"], r["last_poll"], now, acc["offline_min"])
+        contact = None if r["last_contact_at"] is None else {
+            "last_contact_at": r["last_contact_at"], "backlog_polls": r["backlog_polls"],
+            "held_polls": r["held_polls"]}
+        status, offline_s = shape.sensor_status(r["last_capture_at"], r["last_poll"], now, acc["offline_min"],
+                                                contact)
         coverage, window = None, None
         if r["last_poll"] is not None:
             start = r["last_poll"].replace(minute=0, second=0, microsecond=0) - timedelta(hours=167)
@@ -80,6 +88,15 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
             "config": _config(r["config"]), "pending": _config(r["pending"]),
             # the adapter (read-only, schema 13) and the last hand-entered hardware change
             "adapter": r["adapter"], "last_hardware_change": iso(r["last_hardware_change"]),
+            # live upload (schema 14; null for a sensor without it)
+            "contact": None if contact is None else {
+                "last_contact_at": iso(r["last_contact_at"]), "last_batch_at": iso(r["last_batch_at"]),
+                "backlog_polls": r["backlog_polls"], "held_polls": r["held_polls"],
+                "backlog_oldest": iso(r["backlog_oldest"]),
+                "clock_offset_s": None if r["clock_offset_s"] is None else round(float(r["clock_offset_s"]), 1),
+                "unverified_now": r["unverified_now"],
+                "missing_polls": r["missing_polls"] or {"lost": 0, "unverified": 0},
+                "refresh_pending_since": iso(r["refresh_pending_since"])},
         })
     last_polls = [s["last_poll"] for s in acc["sensors"] if s["last_poll"]]
     body = {
@@ -91,6 +108,11 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
         "sensors": out,
     }
     return deps.respond(body, tag)
+
+
+def _us(t):
+    """A timestamp as integer microseconds (an ETag part), None for None."""
+    return None if t is None else round(shape.parse_ts(t).timestamp() * 1_000_000)
 
 
 def _sensor(conn, acc, name):
