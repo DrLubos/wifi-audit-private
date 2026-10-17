@@ -9,6 +9,12 @@
 {$SITE_ADDRESS} {
 	encode zstd gzip
 
+	# HTTPS only (since 2026-10-17, SITE_ADDRESS = the box's sslip.io name):
+	# Caddy redirects http:// to https://, and HSTS keeps a browser from
+	# ever sending a request - the write token, the dashboard's cookies -
+	# over plain HTTP again (ignored while SITE_ADDRESS is ':80').
+	header Strict-Transport-Security "max-age=31536000"
+
 	# Sensor uploads (docs/live-upload.md 9.2): gzip batches of one poll, catch-up
 	# batches of 120 polls; nothing larger is accepted (the api checks again).
 	# The more specific path is matched before /api/*.
