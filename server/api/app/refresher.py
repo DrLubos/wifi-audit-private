@@ -94,11 +94,16 @@ def round_once(conn, baseline_dates):
         log.info("refresh_contact_periods sensors=%d gaps=%d s=%.2f", len(contact),
                  sum(c["gaps"] for c in contact), time.monotonic() - t)
     if BASELINES:
+        # the last run's local day from the table itself (computed_at), so a
+        # restart of the container does not repeat a ~4-min refresh
         sensors = conn.execute(
-            "SELECT s.id, s.name, a.tz FROM sensors s JOIN accounts a ON a.id = s.account_id "
+            "SELECT s.id, s.name, a.tz, "
+            "       (SELECT max(b.computed_at) FROM ap_baselines b WHERE b.sensor_id = s.id) AS last_run "
+            "FROM sensors s JOIN accounts a ON a.id = s.account_id "
             "JOIN sensor_summary ss ON ss.sensor_id = s.id ORDER BY s.id", prepare=False).fetchall()
         for s in sensors:
-            due, day = rs.baseline_due(rs.utc_now(), s["tz"], baseline_dates.get(s["id"]))
+            last = baseline_dates.get(s["id"]) or rs.local_day(s["last_run"], s["tz"])
+            due, day = rs.baseline_due(rs.utc_now(), s["tz"], last)
             if not due:
                 continue
             t = time.monotonic()

@@ -145,6 +145,10 @@ class Schedule(unittest.TestCase):
         self.assertEqual(rs.baseline_due(late, tz, None), (True, "2026-10-17"))
         self.assertEqual(rs.baseline_due(late, tz, "2026-10-17"), (False, "2026-10-17"))
         self.assertEqual(rs.baseline_due(late, tz, "2026-10-16"), (True, "2026-10-17"))
+        # the last run's day read back from the table after a restart
+        ran = datetime(2026, 10, 17, 1, 40, tzinfo=timezone.utc)
+        self.assertEqual(rs.baseline_due(late, tz, rs.local_day(ran, tz)), (False, "2026-10-17"))
+        self.assertIsNone(rs.local_day(None, tz))
 
 
 if __name__ == "__main__":

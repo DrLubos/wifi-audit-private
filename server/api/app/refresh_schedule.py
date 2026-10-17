@@ -27,6 +27,11 @@ def baseline_due(now_utc, tz, last_date, at=BASELINE_AT):
     return (past and last_date != day), day
 
 
+def local_day(ts, tz):
+    """The local date (ISO) of a timestamp, None for None."""
+    return None if ts is None else ts.astimezone(ZoneInfo(tz)).date().isoformat()
+
+
 def utc_now():
     from datetime import timezone
     return datetime.now(timezone.utc)
