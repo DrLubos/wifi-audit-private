@@ -13,8 +13,8 @@ Read the one for the folder you are working in.
   and command in that file is relative to `wifi-sensor/`; on the Pi the
   installers are run from that folder.
 - `server/` — the **backend**: PostgreSQL + FastAPI + Caddy/React on the GCP
-  box, the dashboard, the batch detectors and (being rolled out) the live
-  upload from the sensor (`server/docs/live-upload.md`). **Read
+  box, the dashboard, the batch detectors and the live upload from the sensor
+  (`server/docs/live-upload.md`, live since 2026-10-17). **Read
   `server/CLAUDE.md` before touching anything in it.**
 
 ## Shared conventions
