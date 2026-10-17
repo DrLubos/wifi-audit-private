@@ -17,7 +17,10 @@ it inserted; ingest_merge()) instead of refreshing per request. Each round:
 
 The next round starts no earlier than max(REFRESH_INTERVAL_S, 4 x the last
 round's duration) after this one started (refresh_schedule.next_delay(): at
-most a fifth of the e2-micro's core, however slow a refresh gets). Every
+most a fifth of the e2-micro's core, however slow a refresh gets). The
+duration excludes the nightly baselines: one ~5-11 min run would otherwise
+hold the next rollup round back by four times that (found on the first
+night). Every
 round logs one line per step with its duration - the measurement the
 interval is chosen from (N8). Statements run in autocommit: each function is
 its own transaction (refresh_rollups() takes its own per-sensor lock).
@@ -56,7 +59,8 @@ def connect():
 
 
 def round_once(conn, baseline_dates):
-    """One round; returns its duration in seconds."""
+    """One round; returns the duration of steps 1-2 in seconds (the nightly
+    baselines are not paced by the duty cycle)."""
     t0 = time.monotonic()
     dirty = conn.execute(
         "SELECT i.sensor_id, s.name, i.dirty_from, i.dirty_at, i.dirty_since "
@@ -93,6 +97,7 @@ def round_once(conn, baseline_dates):
     if contact:
         log.info("refresh_contact_periods sensors=%d gaps=%d s=%.2f", len(contact),
                  sum(c["gaps"] for c in contact), time.monotonic() - t)
+    took = time.monotonic() - t0
     if BASELINES:
         # the last run's local day from the table itself (computed_at), so a
         # restart of the container does not repeat a ~4-min refresh
@@ -111,7 +116,7 @@ def round_once(conn, baseline_dates):
             baseline_dates[s["id"]] = day
             log.info("refresh_ap_baselines sensor=%s day=%s baselines=%s s=%.2f", s["name"], day, n,
                      time.monotonic() - t)
-    return time.monotonic() - t0
+    return took
 
 
 def main():

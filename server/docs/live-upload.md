@@ -1009,8 +1009,11 @@ sudo steps by the developer. Times UTC.
 - *Frequency histograms* went with every batch (~1,200 rows, ~3.5 M updates
   a day): now at most once per UTC hour - **deployed to the Pi with the next
   `sudo ./install_uploader.sh`** (the developer's).
-- *Nightly baselines* re-ran after every refresher restart (~4 min): the last
-  run's day now comes from `ap_baselines.computed_at`.
+- *Nightly baselines* re-ran after every refresher restart: the last run's
+  day now comes from `ap_baselines.computed_at`. The first live run took
+  663 s (257 s in the step-2 measurement, uncontended), and the duty-cycle
+  cap counted it, holding the next rollup round back 41 min: the cap now
+  paces the rollups and contact periods only.
 
 **Open (the developer's):** whether the external IP `34.42.184.97` is static
 (Console -> VPC network -> IP addresses; promote it if ephemeral - the
