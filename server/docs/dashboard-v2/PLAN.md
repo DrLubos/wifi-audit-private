@@ -1794,6 +1794,10 @@ with config delivery, ranges beyond 30 days, live updates, login.
 
 ### 11.1 Upload after every poll + config delivery
 
+*Superseded for the upload by `../live-upload.md` (design 2026-10-13, approved
+with changes 2026-10-17: upload after every poll); config delivery stays
+deferred there (D9). Kept below for the record.*
+
 Capture hardware (decided 2026-10-13, schema 13): the upload reports the adapter
 (USB VID:PID + MAC as identity; driver / interface / chipset for display) into
 `sensor_adapters` (`reported_by` = sensor) and records an adapter change as a
@@ -1836,6 +1840,45 @@ scope; Caddy `flush_interval -1` on that route.
 
 `users`, `sessions`, membership per account; `deps.get_account()` reads the
 session instead of returning account 1; the write token is retired.
+
+### 11.5 Pseudonymised client MACs in alerts (follow-up of live upload D3; assessed, not built)
+
+Today the alerts reach the server unchanged: `source_mac`, `dest_mac`,
+`other_mac`, `text` and `raw` can name client devices (the API keeps them out
+of every response with `privacy.redact()`, the export leaves them out). The
+option: replace every client MAC with a keyed pseudonym **on the Pi**, in
+the uploader, before the alert leaves the sensor.
+
+- *Function*: `HMAC-SHA256(key, mac)`, the first 6 bytes, with the
+  locally-administered bit set and the multicast bit cleared – still a valid
+  `macaddr`, recognisable as synthetic, stable for one key (the same client
+  maps to the same pseudonym across alerts and batches, so "the same
+  deauth source again" stays countable).
+- *Kept as they are*: the broadcast/multicast addresses and every BSSID the
+  Pi knows as an AP (the importer's `_AP_EVIDENCE` rule on the buffer's
+  `devices`). `deauth_flood.py`'s direction (`source = transmitter` ->
+  from AP, `dest = transmitter` -> to AP, `dest = ff:..` -> broadcast) and
+  the attribution of episodes to the account AP (`transmitter_mac`) keep
+  working unchanged.
+- *Every place a MAC appears*: the three columns; `text` (regex
+  replacement of MAC-shaped substrings by the same mapping); `raw` (walk the
+  JSON, replace every MAC-shaped string value, and the byte-reversed form
+  inside Kismet device keys). The `hash` stays (Kismet's own, the dedupe
+  key).
+- *Key*: 32 random bytes per sensor in `/etc/wifi-sensor/uploader.conf`
+  (`ALERT_MAC_KEY`), never sent; rotating it breaks continuity on purpose.
+- *Gaps*: an AP that is not yet known as one when the alert is uploaded
+  gets a pseudonym (its later alerts keep the real BSSID) – an
+  attribution miss, countable on the Pi; a MAC split oddly inside `text`
+  would survive (tests on every header seen live).
+- *Existing data*: the server's alert rows from the snapshots keep their
+  real MACs unless rewritten once with the same key (a one-off ops script,
+  after a backup) – otherwise the pseudonyms only start at the switch.
+- *Cost*: ~150 lines in the uploader + tests with every live header
+  (~0.5 day), the one-off server rewrite script + check (~0.5 day), a
+  findings row (dataset change: alert MACs pseudonymous from date X).
+  **About 1–1.5 days.** No server code change: nothing on the server needs
+  a real client MAC.
 
 ---
 
