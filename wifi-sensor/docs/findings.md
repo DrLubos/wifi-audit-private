@@ -248,6 +248,7 @@ in section 7.
 | 2026-10-06 12:23:51 (last ok poll) | 2026-10-06 13:24:45 (next poll) | 1 h 1 m | No polls; the collector service started again at 13:24:44 (systemd). Not investigated (found 2026-10-11, as above) |
 | 2026-10-06 19:33:15 (last poll with devices; adapter lost at 19:32:53) | 2026-10-10 21:53:47 (first poll with devices) | 4 d 2 h 21 m | Capture adapter gone from the USB bus (below) |
 | 2026-10-13 09:50:12 (last poll) | 2026-10-13 14:22:28 (first poll) | 4 h 32 m | Pi off: the boot's journal ends mid-capture (09:50:27) with no shutdown messages - a power cut or an unplug. Found 2026-10-17 in the buffer's `polls` (gaps > 90 s) |
+| 2026-10-18 21:11:38 (last poll) | 2026-10-18 21:12:54 (first poll) | 1 m 16 s | Reboot for clock-validation run A30, second attempt (aborted, section 13); planned, buffer seq continuous (92391 -> 92392), nothing lost |
 | 2026-10-18 21:02:45 (last poll) | 2026-10-18 21:04:08 (first poll) | 1 m 23 s | Reboot for clock-validation run A30 (aborted, section 13); planned, buffer seq continuous (92375 -> 92376), nothing lost |
 | 2026-10-14 05:30:28 (last poll) | 2026-10-14 08:51:37 (first poll) | 3 h 21 m | Pi off, as above (journal ends 05:30:36). After this boot the capture watchdog found the adapter on another USB port: "wlan1 is on hub port 1-1-port3 (was 1-1.1-port2)" (08:54:57) - the hardware was re-plugged during the gap. Whether cable, antenna or position changed (an RSSI boundary, `hardware_change`) is the developer's to record |
 
@@ -1122,3 +1123,19 @@ Read-only on the Pi: `journalctl --list-boots`, the boots' journals,
   server holds every poll (0 seq gaps). Stopped by the run's abort rule
   (disarmed 21:04:51). Fix: the hook runs as `ExecStartPost=-+` (root, outside
   the sandbox), tested; the run is to be repeated.
+- **Run A30, second attempt 2026-10-18 (aborted):** armed 21:11:46 (boot clock
+  15:11:44), reboot 21:11:57; boot `49eba2d7`. The `-+` hook worked: flag
+  consumed, "chrony offline (Not synchronised)" at 15:11:57, hold unit
+  started. But chrony had no sources yet at that moment - the `pool
+  2.debian.pool.ntp.org` name resolves asynchronously - and **the pool's
+  servers, added after `chronyc offline`, came up online**: source selected
+  15:12:21 (24 s after start), clock stepped by 21630.27 s at 21:12:51, 6 s
+  before the hold's next `offline` (every 30 s; afterwards "Can't
+  synchronise: no selectable sources"). Kismet's prestart waited for the
+  step (21:12:52), so again **no stale-clock poll** (0 unsynchronised; NTP
+  anchor at poll 92393, 21:13:24), 0 seq gaps on the server. Disarmed
+  21:13:29; no further fix tried (the developer's rule for the night).
+  Needed: the hold must also cover sources added after the hook - re-assert
+  `offline` every second until the pool has resolved, or start chronyd for
+  that boot with `offline` on its sources (a one-boot chrony configuration,
+  the developer's call).
