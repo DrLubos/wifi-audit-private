@@ -78,7 +78,10 @@ ORDER BY o, d.manuf
 -- of the sensor (a sensor that ever uploaded has sensor_status / heartbeat rows);
 -- the guard of "Delete sensor": a sensor with any observation, poll, device
 -- or rollup row is never deleted. Table names come from the catalog and are
--- quoted as identifiers by format().
+-- quoted as identifiers by format(). sensor_summary counts only when it
+-- summarises something: refresh_rollups() writes an all-zero row for a sensor
+-- without data (the schema-15 migration did for 'test', 2026-10-17), which
+-- blocked deleting it; that row goes with the sensor (sensor_delete_config).
 SELECT t.table_name,
        (xpath('/row/c/text()', query_to_xml(
           format('SELECT count(*) AS c FROM (SELECT 1 FROM public.%%I WHERE sensor_id = %%s LIMIT 1) x',
@@ -87,5 +90,12 @@ FROM information_schema.tables t
 WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
   AND EXISTS (SELECT 1 FROM information_schema.columns c
               WHERE c.table_schema = t.table_schema AND c.table_name = t.table_name AND c.column_name = 'sensor_id')
-  AND t.table_name NOT IN ('sensor_config', 'sensor_annotations', 'sensor_adapters', 'sensor_tokens')
-ORDER BY t.table_name
+  AND t.table_name NOT IN ('sensor_config', 'sensor_annotations', 'sensor_adapters', 'sensor_tokens',
+                           'sensor_summary')
+UNION ALL
+SELECT 'sensor_summary', count(*)::int
+FROM sensor_summary
+WHERE sensor_id = %(sensor_id)s
+  AND (polls > 0 OR obs_total > 0 OR alerts > 0 OR baselines > 0 OR first_poll IS NOT NULL
+       OR devices_by_type <> '{}'::jsonb)
+ORDER BY 1
