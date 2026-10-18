@@ -1036,3 +1036,13 @@ sslip.io name and the uploader depend on it); the clock-validation runs
 `clock-test.sh`, `clock_validation.py`, `clock_truth.py` are still to be
 written); deleting client rows (`ops/delete_client_rows.sh`, D4).
 
+**2026-10-18 (follow-up):** the external IP promoted to static (developer);
+`http://<IP>` now redirects to the HTTPS name (`PUBLIC_IP` in `.env`, the
+Caddyfile); no retention-risk event for a backlog the server already holds
+(the false one of the first `--check` was labelled a false positive);
+deleting an empty sensor works again (an all-zero `sensor_summary` row no
+longer counts as data; `test` deleted); Postgres diagnostic logging for the
+crash-restarts (`docs/postgres-crashes.md`); clock-validation helpers built
+(`wifi-sensor/docs/clock-validation.md`); pipeline metrics export
+(`evaluation/pipeline/`).
+
