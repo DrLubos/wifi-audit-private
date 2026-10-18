@@ -705,7 +705,7 @@ CREATE TABLE IF NOT EXISTS sensor_heartbeats (
   received_at       timestamptz NOT NULL,
   sensor_ts         timestamptz NOT NULL,        -- the sensor's corrected clock at sending
   rtt_ms            integer,                     -- of the uploader's previous request
-  clock_offset_s    real,                        -- received_at - sensor_ts - rtt/2
+  clock_offset_s    real,                        -- received_at - sensor_ts (offset + one-way latency; - rtt/2 until 2026-10-17 21:08)
   chrony_synced     boolean,
   chrony_offset_s   real,
   boot_id           uuid,
