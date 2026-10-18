@@ -37,6 +37,20 @@ idle, or still starting up).
 - Not the healthcheck itself: `pg_isready` is a client; a killed probe cannot
   take a backend down.
 
+**Memory pressure in every case** (sysstat, 10-min samples of the interval
+holding the crash vs the one before):
+
+| Crash | swap in/out per s | pages scanned (kswapd / direct) per s | before |
+|---|---|---|---|
+| 10-14 06:05 | 121 / 138 | 2156 / 78 | 0.4 / 0, no scanning |
+| 10-16 05:05 | 29 / 37 | 738 / 56 | 0 / 0, no scanning |
+| 10-17 21:04 and 21:23 | 113 / 188 | 1532 / 46 | 21 / 5 |
+
+Direct reclaim (`pgscand`) - processes stalling to free memory themselves -
+appears only in those intervals. No userspace OOM daemon runs on the box
+(no systemd-oomd, earlyoom); the image builds of 10-18 (14:10, 14:34) did not
+trigger one, so it is not reproducible on demand.
+
 In PostgreSQL 17 a backend `_exit(2)`s in its SIGQUIT handler (`quickdie`),
 which the postmaster sends to all children only *after* a crash - here the
 first child exits with 2 by itself, so either something else delivered a
@@ -55,10 +69,24 @@ Each connection is logged with its PID, user, database, application name and
 client address (the api, the refresher - `wifi-audit-refresher` -, the
 healthcheck's local socket), so the PID of the next "exited with exit code 2"
 can be traced to who opened it, when, and whether it ever got past
-authentication. Volume: about 1-2 MB of container log a day (json-file,
-3 x 10 MB rotation). **Revert:** remove the four log flags and
+authentication. Volume: about 4 MB of container log a day (the healthcheck's
+connection every 30 s is most of it; json-file 3 x 10 MB rotation keeps
+about a week - recreating the db container deletes it). **Revert:** remove the four log flags and
 `docker compose up -d db`.
 
 On the next crash: `docker compose logs db | grep -B50 "exit code 2"`, find
 the PID's "connection received" / "connection authorized" lines, and note
 `free -m`, `/proc/pressure/memory` and what ran on the box at the time.
+
+## Candidate fixes (for the developer's OK once the cause is known)
+
+- If the crashed PID turns out to be a healthcheck connection under memory
+  pressure: a longer healthcheck `timeout` / `interval` (compose).
+- If it is a client backend (api, refresher, uploads): less memory pressure
+  on the box - image builds are the one heavy thing we start ourselves
+  (build less often, or with the api/refresher stopped), and the box's own
+  snapd / unattended-upgrades runs (the developer's call).
+- Either way the pipeline already rides through a reset: the uploader
+  retries (0 lost polls in all four), the refresher keeps its dirty mark
+  across a dead connection (since 2026-10-17).
+
