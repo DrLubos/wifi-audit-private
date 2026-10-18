@@ -80,9 +80,12 @@ WITH d AS (DELETE FROM sensor_adapters WHERE sensor_id = %(id)s RETURNING 1),
      a AS (DELETE FROM sensor_annotations WHERE sensor_id = %(id)s RETURNING 1),
      t AS (DELETE FROM sensor_tokens WHERE sensor_id = %(id)s RETURNING id),
      -- an all-zero summary (sensor_data_tables lets only that one through)
-     s AS (DELETE FROM sensor_summary WHERE sensor_id = %(id)s RETURNING 1)
+     s AS (DELETE FROM sensor_summary WHERE sensor_id = %(id)s RETURNING 1),
+     -- the refresher's log rows of the sensor (schema 16; e.g. its nightly baseline runs)
+     r AS (DELETE FROM refresh_runs WHERE sensor_id = %(id)s RETURNING 1)
 SELECT (SELECT count(*) FROM d)::int AS adapter, (SELECT count(*) FROM c)::int AS config,
        (SELECT count(*) FROM a)::int AS history, (SELECT count(*) FROM s)::int AS empty_summary,
+       (SELECT count(*) FROM r)::int AS refresh_runs,
        -- live upload (schema 14): the sensor's ingest tokens go with it (amendment 4) -
        -- a token cannot outlive its sensor; the audit row lists their ids
        (SELECT coalesce(array_agg(id ORDER BY id), '{}') FROM t) AS tokens_revoked

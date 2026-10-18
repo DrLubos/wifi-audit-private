@@ -17,6 +17,8 @@ if "psycopg" not in sys.modules:
     except ImportError:
         stub = types.ModuleType("psycopg")
         stub.Error = type("Error", (Exception,), {})
+        stub.errors = types.ModuleType("psycopg.errors")
+        stub.errors.UndefinedTable = type("UndefinedTable", (stub.Error,), {})
         stub.connect = None
         rows = types.ModuleType("psycopg.rows")
         rows.dict_row = None
@@ -46,7 +48,8 @@ class FakeConn:
     """ingest_state as a dict; refresh_rollups() fails (and closes) on demand."""
 
     def __init__(self, marks, fail=False):
-        self.marks, self.fail, self.closed, self.refreshed = dict(marks), fail, False, []
+        self.marks, self.fail, self.closed, self.refreshed, self.runs = dict(marks), fail, False, [], []
+        self.no_table = False
 
     def execute(self, sql, params=(), prepare=None):
         if self.closed:
@@ -72,6 +75,12 @@ class FakeConn:
             self.marks[sid] = f if cur is None else min(cur, f)
             return Result([])
         if "refresh_contact_periods" in sql:
+            return Result([{"sensor_id": 1, "gaps": 0}])
+        if sql.startswith("INSERT INTO refresh_runs"):
+            if self.no_table:
+                raise psycopg.errors.UndefinedTable("relation refresh_runs does not exist")
+            cols = sql.split("(", 1)[1].split(")", 1)[0].replace(" ", "").split(",")
+            self.runs.append(dict(zip(cols, params)))
             return Result([])
         raise AssertionError(sql)
 
@@ -79,6 +88,7 @@ class FakeConn:
 class DirtyMarks(unittest.TestCase):
     def setUp(self):
         refresher._carry.clear()
+        refresher._recording = True
         self._baselines, refresher.BASELINES = refresher.BASELINES, False
 
     def tearDown(self):
@@ -93,6 +103,9 @@ class DirtyMarks(unittest.TestCase):
         fresh = FakeConn({1: T2})                     # an ingest marked a later window meanwhile
         refresher.round_once(fresh, {})
         self.assertEqual(fresh.refreshed, [(1, T1)])  # the earlier, lost window is refreshed
+        self.assertEqual([(r["step"], r["ok"]) for r in fresh.runs], [("rollups", True), ("contact_periods", True)])
+        self.assertEqual(fresh.runs[0]["refresh_from"], T1)
+        self.assertEqual(fresh.runs[0]["sensor_id"], 1)
         self.assertEqual(refresher._carry, {})
         self.assertEqual(fresh.marks, {1: None})
 
@@ -109,6 +122,49 @@ class DirtyMarks(unittest.TestCase):
             refresher.round_once(conn, {})
         self.assertEqual(conn.marks, {1: T1})
         self.assertEqual(refresher._carry, {})
+
+
+class Recording(unittest.TestCase):
+    def setUp(self):
+        refresher._carry.clear()
+        refresher._recording = True
+        self._baselines, refresher.BASELINES = refresher.BASELINES, False
+
+    def tearDown(self):
+        refresher.BASELINES = self._baselines
+        refresher._recording = True
+
+    def test_failed_refresh_is_recorded(self):
+        conn = FakeConn({1: T1})
+
+        def fail_but_stay_open(sql, params=(), prepare=None, _orig=conn.execute):
+            if sql.startswith("SELECT * FROM refresh_rollups"):
+                raise psycopg.Error("canceling statement due to statement timeout")
+            return _orig(sql, params, prepare)
+        conn.execute = fail_but_stay_open
+        with self.assertRaises(psycopg.Error):
+            refresher.round_once(conn, {})
+        self.assertEqual(len(conn.runs), 1)
+        self.assertEqual((conn.runs[0]["step"], conn.runs[0]["ok"]), ("rollups", False))
+        self.assertIn("statement timeout", conn.runs[0]["error"])
+
+    def test_missing_table_turns_recording_off(self):
+        conn = FakeConn({1: T1})
+        conn.no_table = True
+        refresher.round_once(conn, {})           # the refresh itself goes on
+        self.assertEqual(conn.refreshed, [(1, T1)])
+        self.assertFalse(refresher._recording)
+        conn.no_table = False
+        refresher.round_once(conn, {})
+        self.assertEqual(conn.runs, [])          # stays off until the next start
+
+    def test_round_row(self):
+        conn = FakeConn({})
+        refresher.record(conn, "round", T2, 3.14159, next_in_s=56.9)
+        self.assertEqual(conn.runs, [{"started_at": T2, "step": "round", "sensor_id": None, "duration_s": 3.142,
+                                      "ok": True, "refresh_from": None, "waited_s": None, "ap_hours": None,
+                                      "sensor_hours": None, "gaps": None, "baselines": None, "next_in_s": 56.9,
+                                      "error": None}])
 
 
 if __name__ == "__main__":

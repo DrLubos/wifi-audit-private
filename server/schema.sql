@@ -94,7 +94,10 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 --    constant bound; security_level()/security_label() run once per
 --    distinct input in ap_summary and ap_security_periods
 --    (ops/migrate_schema15.sh)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '15')
+-- 16: refresh_runs - one row per refresher step, the refresh-duration series
+--    of the system evaluation (evaluation/pipeline/), which the container log
+--    lost on every recreate (ops/migrate_schema16.sh)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '16')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- accounts and sensors ------------------------------------------------------------
@@ -705,7 +708,7 @@ CREATE TABLE IF NOT EXISTS sensor_heartbeats (
   received_at       timestamptz NOT NULL,
   sensor_ts         timestamptz NOT NULL,        -- the sensor's corrected clock at sending
   rtt_ms            integer,                     -- of the uploader's previous request
-  clock_offset_s    real,                        -- received_at - sensor_ts (offset + one-way latency; - rtt/2 until 2026-10-17 21:08)
+  clock_offset_s    real,                        -- received_at - sensor_ts - rtt/2
   chrony_synced     boolean,
   chrony_offset_s   real,
   boot_id           uuid,
@@ -760,6 +763,28 @@ CREATE TABLE IF NOT EXISTS sensor_seq_gaps (
   raw_to      timestamptz,
   recorded_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (sensor_id, buffer_id, seq_from));
+
+-- One row per step of the refresher (schema 16; api/app/refresher.py): the
+-- refresh-duration series of the system evaluation (evaluation/pipeline/),
+-- kept here because the container log goes with every recreate. A log, not
+-- sensor data: the delete-sensor guard ignores it and its rows go with the
+-- sensor. sensor_id NULL = a step over all sensors (contact periods, the round).
+CREATE TABLE IF NOT EXISTS refresh_runs (
+  id           bigserial PRIMARY KEY,
+  started_at   timestamptz NOT NULL,
+  step         text NOT NULL CHECK (step IN ('rollups', 'contact_periods', 'ap_baselines', 'round')),
+  sensor_id    integer REFERENCES sensors(id),
+  duration_s   real NOT NULL,
+  ok           boolean NOT NULL DEFAULT true,
+  refresh_from timestamptz,                    -- rollups: the dirty mark refreshed from
+  waited_s     real,                           -- rollups: how long the oldest new data waited
+  ap_hours     integer,                        -- rollups
+  sensor_hours integer,                        -- rollups
+  gaps         integer,                        -- contact_periods: unreachable periods written
+  baselines    integer,                        -- ap_baselines
+  next_in_s    real,                           -- round: delay to the next (duty-cycle cap when > the interval)
+  error        text);
+CREATE INDEX IF NOT EXISTS refresh_runs_started ON refresh_runs (started_at);
 
 -- --- helpers ------------------------------------------------------------------------------
 

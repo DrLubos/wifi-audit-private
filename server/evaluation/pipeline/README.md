@@ -101,26 +101,26 @@ unverified polls, buffer size, free disk.
   path that is down. The polls themselves arrive later (store-and-forward),
   so loss is measured separately, in `gaps.csv`.
 
-### `refresh.csv` – refresher steps (from its log)
+### `refresh.csv` – refresher steps
 
-One row per log line of `app/refresher.py`:
+Since schema 16 the refresher writes one `refresh_runs` row per step
+(`api/app/refresher.py`); `source` = `db`. For times before the table's
+first row, the export falls back to the refresher's container log
+(`source` = `log`). That log is lost whenever the container is recreated:
+for the first live days it starts at 2026-10-18 14:35, and
+`refresh_first_row` in the summary says where the series begins.
+`--refresher-log FILE` reads an archived log instead.
 
-- `refresh_rollups` (`duration_s`; `refresh_from` = the dirty mark; `waited_s`
-  = how long the oldest new data waited for a refresh);
-- `refresh_contact_periods`;
-- `refresh_ap_baselines` (nightly; `baselines` > 0 for a real run);
-- `round_capped` (the duty-cycle cap delayed the next round: `next_in_s`);
-- `database_error`.
+| `step` | Row |
+|---|---|
+| `rollups` | `refresh_rollups()` of one dirty sensor. `duration_s`; `refresh_from` = the dirty mark; `waited_s` = how long the oldest new data waited for a refresh; `ap_hours`/`sensor_hours` recomputed. |
+| `contact_periods` | `refresh_contact_periods()` for all sensors (`sensor` empty). `gaps` = unreachable periods written. |
+| `ap_baselines` | The nightly `refresh_ap_baselines()` (`baselines` = baselines learned). |
+| `round` | The round's steps 1-2 (`duration_s`) and the delay to the next round (`next_in_s`; above the interval = the duty-cycle cap). In the log only capped rounds appear. |
+| `error` | Log only: a database error (`ok` = f). In the table a failed step is its own row with `ok` = f and `error`. |
 
-**Refresh duration** in `summary.csv` = p50/p95/max of `refresh_rollups`.
-
-**Limitation:** the log lives in the container. Every `docker compose up -d`
-that recreates the refresher (any deploy of the api image) deletes it, and
-`refresh_log_first` in the summary says where the log starts. For a
-complete series, either archive the log before each deploy
-(`docker compose logs --no-log-prefix refresher >> ~/refresher-archive.log`,
-then pass it with `--refresher-log`), or store the runs in the database (a
-proposed `refresh_runs` table; not built).
+**Refresh duration** in `summary.csv` = p50/p95/max of the successful
+`rollups` rows; `refresh_rollups_failed` counts the failed ones.
 
 ### `summary.csv` – one row per aggregate
 

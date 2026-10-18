@@ -34,6 +34,8 @@ MIGRATION14 = open(os.path.join(HERE, "..", "ops", "migrate_schema14.sql"), enco
 ROLLBACK14 = open(os.path.join(HERE, "..", "ops", "rollback_schema14.sql"), encoding="utf-8").read()
 MIGRATION15 = open(os.path.join(HERE, "..", "ops", "migrate_schema15.sql"), encoding="utf-8").read()
 ROLLBACK15 = open(os.path.join(HERE, "..", "ops", "rollback_schema15.sql"), encoding="utf-8").read()
+MIGRATION16 = open(os.path.join(HERE, "..", "ops", "migrate_schema16.sql"), encoding="utf-8").read()
+ROLLBACK16 = open(os.path.join(HERE, "..", "ops", "rollback_schema16.sql"), encoding="utf-8").read()
 SCHEMA14_TABLES = ("sensor_tokens", "sensor_status", "sensor_heartbeats", "ingest_state",
                    "sensor_clock_boots", "sensor_seq_gaps")
 SCHEMA14_FUNCTIONS = ("ingest_stage_create", "ingest_merge", "refresh_contact_periods")
@@ -113,12 +115,13 @@ class SchemaFiles(unittest.TestCase):
     def test_version(self):
         def version(sql):
             return re.search(r"VALUES \('schema_version', '(\d+)'\)", sql).group(1)
-        self.assertEqual((version(SCHEMA), version(MIGRATION15), version(MIGRATION14), version(MIGRATION13),
-                          version(MIGRATION12), version(MIGRATION11), version(MIGRATION10), version(MIGRATION9),
-                          version(MIGRATION8), version(MIGRATION)),
-                         ("15", "15", "14", "13", "12", "11", "10", "9", "8", "7"))
+        self.assertEqual((version(SCHEMA), version(MIGRATION16), version(MIGRATION15), version(MIGRATION14),
+                          version(MIGRATION13), version(MIGRATION12), version(MIGRATION11), version(MIGRATION10),
+                          version(MIGRATION9), version(MIGRATION8), version(MIGRATION)),
+                         ("16", "16", "15", "14", "13", "12", "11", "10", "9", "8", "7"))
         self.assertEqual(version(ROLLBACK14), "13")
         self.assertEqual(version(ROLLBACK15), "14")
+        self.assertEqual(version(ROLLBACK16), "15")
 
     def test_schema11_reasons_and_hardware(self):
         body = re.sub(r"--[^\n]*", "", table_body(SCHEMA, "detections"))
@@ -294,6 +297,21 @@ class Schema15(unittest.TestCase):
             text = open(os.path.join(HERE, "sql", t + ".sql"), encoding="utf-8").read()
             self.assertNotIn("REFRESH MATERIALIZED", text, t)
             self.assertIn("pg_get_viewdef('public.ap_config_changes_v'::regclass)", text, t)
+
+
+class Schema16(unittest.TestCase):
+    def test_refresh_runs_same_in_migration_and_schema(self):
+        self.assertIsNotNone(table_body(SCHEMA, "refresh_runs"))
+        self.assertEqual(table_body(MIGRATION16, "refresh_runs"), table_body(SCHEMA, "refresh_runs"))
+        self.assertIn("CREATE INDEX refresh_runs_started ON refresh_runs (started_at);", MIGRATION16)
+        self.assertIn("CREATE INDEX IF NOT EXISTS refresh_runs_started ON refresh_runs (started_at);", SCHEMA)
+        self.assertIn("DROP TABLE refresh_runs;", ROLLBACK16)
+
+    def test_refresher_steps_match_the_check(self):
+        refresher = open(os.path.join(HERE, "..", "api", "app", "refresher.py"), encoding="utf-8").read()
+        steps = re.search(r"CHECK \(step IN \(([^)]*)\)\)", table_body(SCHEMA, "refresh_runs")).group(1)
+        for step in re.findall(r"'(\w+)'", steps):
+            self.assertIn('"%s"' % step, refresher, step)
 
 
 def stage_tables(fn):

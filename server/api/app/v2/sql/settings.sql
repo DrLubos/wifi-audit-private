@@ -91,7 +91,7 @@ WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
   AND EXISTS (SELECT 1 FROM information_schema.columns c
               WHERE c.table_schema = t.table_schema AND c.table_name = t.table_name AND c.column_name = 'sensor_id')
   AND t.table_name NOT IN ('sensor_config', 'sensor_annotations', 'sensor_adapters', 'sensor_tokens',
-                           'sensor_summary')
+                           'sensor_summary', 'refresh_runs')     -- refresh_runs: the refresher's log (schema 16)
 UNION ALL
 SELECT 'sensor_summary', count(*)::int
 FROM sensor_summary
