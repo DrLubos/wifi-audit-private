@@ -43,6 +43,11 @@ records the NTP anchor too. So every run A also gives run D's comparison -
   sshd are not changed. The clock is never moved by hand (`date -s`) while
   connected: moving it back breaks WireGuard handshakes initiated by the Pi
   (replay protection) and could stall the Tailscale path.
+- The hook is `ExecStartPost=-+`: `+` runs it as root outside chrony's
+  sandbox (chrony runs as `_chrony` with `ProtectSystem=strict`; the first
+  armed boot, 2026-10-18, had the hook fail on the read-only `/var` and
+  synchronised normally - `findings.md` section 13). An `arm` made before
+  that fix wrote the old drop-in: disarm and arm again.
 - **Self-recovering**: the arm flag is consumed by the first boot that reads
   it (a second reboot is a normal boot); the drop-in step is `ExecStartPost=-`
   (it can never stop chrony from starting); chrony goes online by itself

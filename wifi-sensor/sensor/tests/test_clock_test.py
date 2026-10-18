@@ -92,7 +92,7 @@ class ClockTest(unittest.TestCase):
         with open(os.path.join(self.state, "armed")) as f:
             self.assertIn("OFFLINE_MIN=30", f.read())
         with open(os.path.join(self.dropin, "50-wifi-sensor-clocktest.conf")) as f:
-            self.assertIn("ExecStartPost=-%s boot-hook" % self.installed, f.read())
+            self.assertIn("ExecStartPost=-+%s boot-hook" % self.installed, f.read())   # root, no sandbox
         self.assertTrue(os.access(self.installed, os.X_OK))
         self.assertIn("systemctl daemon-reload", self.calls_log())
         self.assertIn("armed", self.run_script("status").stdout)
@@ -132,6 +132,20 @@ class ClockTest(unittest.TestCase):
         open(self.calls, "w").close()
         self.run_script("boot-hook", script=self.installed)  # the next boot is a normal one
         self.assertEqual(self.calls_log(), [])
+
+    def test_boot_hook_without_write_access_stays_armed(self):
+        self.arm("--hours-back", "6", "--offline-min", "30")
+        self.set_leap("Not synchronised")
+        os.chmod(self.state, 0o555)                 # as inside chrony's sandbox: /var read-only
+        try:
+            open(self.calls, "w").close()
+            r = self.run_script("boot-hook", script=self.installed)
+        finally:
+            os.chmod(self.state, 0o755)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("cannot consume the arm flag", r.stdout)
+        self.assertNotIn("chronyc offline", self.calls_log())   # no hold without consuming the flag
+        self.assertTrue(os.path.exists(os.path.join(self.state, "armed")))
 
     def test_boot_hook_lost_race_is_a_normal_boot(self):
         self.arm("--hours-back", "6", "--offline-min", "30")

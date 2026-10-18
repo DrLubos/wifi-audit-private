@@ -22,8 +22,11 @@
 #   wifi-sensor-clocktest-hold, which re-asserts `chronyc offline` every 30 s
 #   (a source added later, e.g. by DHCP, would come up online) and runs
 #   `chronyc online` after N minutes; `makestep 1 3` then steps the clock at
-#   the first update. Every step is `ExecStartPost=-`: it can never keep chrony
-#   from starting. If chrony synchronised before the hook (lost race), the
+#   the first update. The hook is `ExecStartPost=-+`: '-' = a failure never
+#   keeps chrony from starting; '+' = run as root outside chrony's sandbox
+#   (User=_chrony, ProtectSystem=strict, ProcSubset=pid - inside it the hook
+#   could not write its state or read the boot id: the first armed boot,
+#   2026-10-18 21:03, synchronised normally). If chrony synchronised before the hook (lost race), the
 #   boot is a normal one - the log says so; disarm and arm again.
 set -eu
 
@@ -111,9 +114,10 @@ cmd_arm() {
   touch -d "@$target" "$CLOCK_FILE"
   cat >"$DROPIN" <<EOF
 # clock-test.sh (wifi-sensor, docs/clock-validation.md) - removed by 'clock-test.sh disarm'.
-# Does nothing unless $ARMED exists; '-' = a failure never stops chrony.
+# Does nothing unless $ARMED exists; '-' = a failure never stops chrony,
+# '+' = root, outside chrony's sandbox (it runs as _chrony, /var read-only).
 [Service]
-ExecStartPost=-$INSTALL_PATH boot-hook
+ExecStartPost=-+$INSTALL_PATH boot-hook
 EOF
   systemctl daemon-reload
   log "armed: next boot starts at $(iso "$target") ($(( (now - target) / 60 )) min behind now), NTP held off $offline min"
@@ -124,7 +128,10 @@ cmd_boot_hook() {
   [ -e "$ARMED" ] || exit 0
   . "$ARMED"
   boot=$(boot_id)
-  mv "$ARMED" "$STATE_DIR/consumed-$boot"
+  if ! mv "$ARMED" "$STATE_DIR/consumed-$boot" 2>/dev/null; then
+    say "boot $boot: cannot consume the arm flag (no write access to $STATE_DIR) - normal boot, still armed"
+    exit 0
+  fi
   i=0
   until chronyc offline >/dev/null 2>&1; do
     i=$((i + 1))

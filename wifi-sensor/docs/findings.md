@@ -248,6 +248,7 @@ in section 7.
 | 2026-10-06 12:23:51 (last ok poll) | 2026-10-06 13:24:45 (next poll) | 1 h 1 m | No polls; the collector service started again at 13:24:44 (systemd). Not investigated (found 2026-10-11, as above) |
 | 2026-10-06 19:33:15 (last poll with devices; adapter lost at 19:32:53) | 2026-10-10 21:53:47 (first poll with devices) | 4 d 2 h 21 m | Capture adapter gone from the USB bus (below) |
 | 2026-10-13 09:50:12 (last poll) | 2026-10-13 14:22:28 (first poll) | 4 h 32 m | Pi off: the boot's journal ends mid-capture (09:50:27) with no shutdown messages - a power cut or an unplug. Found 2026-10-17 in the buffer's `polls` (gaps > 90 s) |
+| 2026-10-18 21:02:45 (last poll) | 2026-10-18 21:04:08 (first poll) | 1 m 23 s | Reboot for clock-validation run A30 (aborted, section 13); planned, buffer seq continuous (92375 -> 92376), nothing lost |
 | 2026-10-14 05:30:28 (last poll) | 2026-10-14 08:51:37 (first poll) | 3 h 21 m | Pi off, as above (journal ends 05:30:36). After this boot the capture watchdog found the adapter on another USB port: "wlan1 is on hub port 1-1-port3 (was 1-1.1-port2)" (08:54:57) - the hardware was re-plugged during the gap. Whether cable, antenna or position changed (an RSSI boundary, `hardware_change`) is the developer's to record |
 
 **2026-09-22 disk-full gap** (boundaries read from `polls` in the live buffer):
@@ -1106,3 +1107,18 @@ Read-only on the Pi: `journalctl --list-boots`, the boots' journals,
   most an hour + its downtime behind. The validation runs of
   `docs/clock-validation.md` are still to be done (the developer's; each
   reboots the Pi).
+- **Run A30, first attempt 2026-10-18 (aborted, Claude, developer-approved
+  overnight run):** armed 21:02:55 (boot clock file 15:02:52), reboot 21:03:03.
+  The stale-clock half worked - the journal: "System time advanced to
+  timestamp on /var/lib/systemd/timesync/clock: 15:02:52"; the new boot
+  `5d2d7be9` ran 6 h behind. The NTP hold did not: the arm hook ran as
+  chrony's `ExecStartPost`, i.e. inside chrony's sandbox (`User=_chrony`,
+  `ProtectSystem=strict`, `ProcSubset=pid`) - "mv: cannot move .../armed:
+  Read-only file system", boot id "unknown" - so `chronyc offline` never ran;
+  chrony selected a source 25 s after start (15:03:29) and stepped the clock
+  by 21635.66 s at 21:04:04. Kismet's prestart waited for that ("clock
+  synchronised 21:04:06"), so **no poll of the boot was stamped with the stale
+  clock** (0 unsynchronised polls; NTP anchor at poll 92377, 21:04:38) and the
+  server holds every poll (0 seq gaps). Stopped by the run's abort rule
+  (disarmed 21:04:51). Fix: the hook runs as `ExecStartPost=-+` (root, outside
+  the sandbox), tested; the run is to be repeated.
