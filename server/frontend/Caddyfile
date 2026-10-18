@@ -40,3 +40,11 @@
 	# Vite emits content-hashed files under /assets.
 	header /assets/* Cache-Control "public, max-age=31536000, immutable"
 }
+
+# The bare IP over plain HTTP (old bookmarks: the dashboard was http://<IP>
+# until 2026-10-17) goes to the name. Without this block Caddy's automatic
+# redirect sends it to https://<IP>, where no certificate exists. https://<IP>
+# itself still fails the TLS handshake (no certificate for an IP address).
+http://{$PUBLIC_IP} {
+	redir https://{$SITE_ADDRESS}{uri} 308
+}

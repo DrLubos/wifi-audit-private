@@ -152,6 +152,10 @@ services:
       # A domain name = automatic HTTPS (DNS must point here, 80/443 reachable);
       # ':80' = plain HTTP; 'localhost' = Caddy's internal CA.
       SITE_ADDRESS: "${SITE_ADDRESS:-:80}"
+      # The box's public IP (not a secret): plain-HTTP requests to the bare IP -
+      # the dashboard's address before HTTPS - are redirected to SITE_ADDRESS.
+      # Unset: a loopback placeholder, so the redirect block never matches.
+      PUBLIC_IP: "${PUBLIC_IP:-127.0.0.1}"
     ports:
       - "80:80"
       - "443:443"
