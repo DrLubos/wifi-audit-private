@@ -248,6 +248,7 @@ in section 7.
 | 2026-10-06 12:23:51 (last ok poll) | 2026-10-06 13:24:45 (next poll) | 1 h 1 m | No polls; the collector service started again at 13:24:44 (systemd). Not investigated (found 2026-10-11, as above) |
 | 2026-10-06 19:33:15 (last poll with devices; adapter lost at 19:32:53) | 2026-10-10 21:53:47 (first poll with devices) | 4 d 2 h 21 m | Capture adapter gone from the USB bus (below) |
 | 2026-10-13 09:50:12 (last poll) | 2026-10-13 14:22:28 (first poll) | 4 h 32 m | Pi off: the boot's journal ends mid-capture (09:50:27) with no shutdown messages - a power cut or an unplug. Found 2026-10-17 in the buffer's `polls` (gaps > 90 s) |
+| 2026-10-18 21:20:24 (last poll) | 2026-10-18 21:21:22 (first poll) | 58 s | Reboot for clock-validation run A30, third attempt (aborted, section 13); planned, buffer seq continuous (92407 -> 92408), nothing lost |
 | 2026-10-18 21:11:38 (last poll) | 2026-10-18 21:12:54 (first poll) | 1 m 16 s | Reboot for clock-validation run A30, second attempt (aborted, section 13); planned, buffer seq continuous (92391 -> 92392), nothing lost |
 | 2026-10-18 21:02:45 (last poll) | 2026-10-18 21:04:08 (first poll) | 1 m 23 s | Reboot for clock-validation run A30 (aborted, section 13); planned, buffer seq continuous (92375 -> 92376), nothing lost |
 | 2026-10-14 05:30:28 (last poll) | 2026-10-14 08:51:37 (first poll) | 3 h 21 m | Pi off, as above (journal ends 05:30:36). After this boot the capture watchdog found the adapter on another USB port: "wlan1 is on hub port 1-1-port3 (was 1-1.1-port2)" (08:54:57) - the hardware was re-plugged during the gap. Whether cable, antenna or position changed (an RSSI boundary, `hardware_change`) is the developer's to record |
@@ -1139,3 +1140,23 @@ Read-only on the Pi: `journalctl --list-boots`, the boots' journals,
   `offline` every second until the pool has resolved, or start chronyd for
   that boot with `offline` on its sources (a one-boot chrony configuration,
   the developer's call).
+- **Run A30, third attempt 2026-10-18 (aborted; the one-boot chrony.conf,
+  developer-approved):** armed 21:20:14, reboot 21:20:22; boot `7988d7e0`.
+  The new parts worked - flag consumed, chronyd started from
+  `/run/wifi-sensor-clocktest/chrony.conf` with the pool `offline`, hold
+  started (15:20:24, "Not synchronised"). At **15:20:43 chrony logged all
+  four pool servers "online"** - NetworkManager had brought the network up,
+  and Debian's chrony package runs `chronyc onoffline` on every network
+  event (`/usr/lib/NetworkManager/dispatcher.d/20-chrony-onoffline`; also
+  `networkd-dispatcher` and `if-up.d` hooks), which puts every source with a
+  route online, overriding any `offline`. Source selected 15:20:48, clock
+  stepped by 21631.03 s at 21:21:19; the hold's next `offline` (21:21:25)
+  came after. **This is also why the second attempt failed**: not only the
+  pool's late resolution - the dispatcher overrides `offline` whenever the
+  network comes up. Again no stale-clock poll (0 unsynchronised), 0 seq
+  gaps on the server; disarmed 21:21:45. Not fixed tonight (the developer's
+  rule). A hold that `onoffline` cannot undo: start the test boot's chronyd
+  with **no sources at all** (the copy without its pool/server lines) and
+  let the hold *add* them at its end (`chronyc add pool ... iburst`) - a
+  source that does not exist cannot be put online; NetworkManager and its
+  hooks stay untouched.
