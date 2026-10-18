@@ -24,7 +24,16 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     # Sized for a 1 GB box. Plain PostgreSQL, no extensions.
-    command: postgres -c shared_buffers=128MB -c work_mem=8MB -c max_connections=20
+    # The log_* flags are diagnostic logging for the crash-restarts ("server
+    # process exited with exit code 2", nothing logged before it; 2026-10-14,
+    # 10-16, 10-17 x2 - docs/postgres-crashes.md): every connection with its
+    # PID, client address and application, so a crashed PID can be traced.
+    # Reversible: drop the flags and `docker compose up -d db`.
+    command: >-
+      postgres -c shared_buffers=128MB -c work_mem=8MB -c max_connections=20
+      -c log_line_prefix='%m [%p] %q%u@%d %a %r '
+      -c log_connections=on -c log_disconnections=on
+      -c log_error_verbosity=verbose
     volumes:
       - db-data:/var/lib/postgresql/data
       # Runs once, when the data volume is first initialised. To re-apply the
