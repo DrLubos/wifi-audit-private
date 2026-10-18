@@ -1046,3 +1046,9 @@ crash-restarts (`docs/postgres-crashes.md`); clock-validation helpers built
 (`wifi-sensor/docs/clock-validation.md`); pipeline metrics export
 (`evaluation/pipeline/`).
 
+**2026-10-18, schema 16:** `refresh_runs` (one row per refresher step) after
+a backup copied to the Mac (`wifi_audit-20261018T155827Z.dump`, sha256 equal);
+`ops/migrate_schema16.sh` 16:35 UTC, all 10 fixture tests PASS; the
+refresher records from 16:36:40; `evaluation/pipeline/export.sh` reads it
+(the container log only before that).
+
