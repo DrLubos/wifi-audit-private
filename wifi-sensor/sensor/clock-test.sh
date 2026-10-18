@@ -10,29 +10,39 @@
 #   sudo clock-test.sh end        # NTP back now (stops the hold)
 #   sudo clock-test.sh disarm     # remove every trace
 #
-# How (nothing touches the network, sshd, Tailscale or chrony's config files):
+# How (nothing touches the network, sshd, Tailscale or /etc/chrony):
 # - arm: sets the mtime of /var/lib/systemd/timesync/clock - systemd starts the
 #   boot clock there, the Pi has no RTC (findings.md section 13) - writes the
 #   arm flag (clock-save.sh then leaves the file alone, also at shutdown) and a
-#   chrony drop-in whose ExecStartPost runs `clock-test.sh boot-hook`. It
-#   installs its own copy to $INSTALL_PATH, so the root hook never runs a file
-#   the sensor user can edit.
-# - boot-hook (first boot after arm): consumes the flag (a second reboot is a
-#   normal boot), takes chrony's sources offline and starts the transient unit
-#   wifi-sensor-clocktest-hold, which re-asserts `chronyc offline` every 30 s
-#   (a source added later, e.g. by DHCP, would come up online) and runs
-#   `chronyc online` after N minutes; `makestep 1 3` then steps the clock at
-#   the first update. The hook is `ExecStartPost=-+`: '-' = a failure never
-#   keeps chrony from starting; '+' = run as root outside chrony's sandbox
-#   (User=_chrony, ProtectSystem=strict, ProcSubset=pid - inside it the hook
-#   could not write its state or read the boot id: the first armed boot,
-#   2026-10-18 21:03, synchronised normally). If chrony synchronised before the hook (lost race), the
-#   boot is a normal one - the log says so; disarm and arm again.
+#   chrony drop-in (below). It installs its own copy to $INSTALL_PATH, so the
+#   root hooks never run a file the sensor user can edit.
+# - boot-prep (ExecStartPre=-+, the first boot after arm): consumes the flag
+#   (a second reboot is a normal boot) and writes $RUN_DIR/chrony.conf - the
+#   system's chrony.conf with every pool/server/peer line marked `offline` and
+#   no sourcedir - into /run, which is empty again at the next boot.
+# - chronyd (the drop-in's ExecStart, with the unit's own '!' prefix): starts
+#   chronyd with that copy (-f) if it exists, else exactly as the unit does.
+#   So the armed boot's sources start offline - no race with the pool's name
+#   resolution (2026-10-18: `chronyc offline` right after the start missed the
+#   pool's servers, added a few seconds later as online).
+# - boot-hook (ExecStartPost=-+): starts the transient unit
+#   wifi-sensor-clocktest-hold, which runs `chronyc online` after N minutes
+#   (timed on the uptime) and removes the copy, so a later chrony restart is
+#   a normal one; `makestep 1 3` then steps the clock at the first update.
+#   '-' = a failure never keeps chrony from starting; '+' = root, outside
+#   chrony's sandbox (User=_chrony, ProtectSystem=strict, ProcSubset=pid -
+#   inside it the hook could not write its state: 2026-10-18 21:03).
 set -eu
 
 STATE_DIR=${CLOCKTEST_STATE_DIR:-/var/lib/wifi-sensor-clocktest}
 ARMED=$STATE_DIR/armed
 LOG=$STATE_DIR/log
+RUN_DIR=${CLOCKTEST_RUN_DIR:-/run/wifi-sensor-clocktest}
+TEST_CONF=$RUN_DIR/chrony.conf
+HOLD_MIN=$RUN_DIR/offline-min
+HOLD_STARTED=$RUN_DIR/hold-started
+CHRONY_CONF=${CLOCKTEST_CHRONY_CONF:-/etc/chrony/chrony.conf}
+CHRONYD=${CLOCKTEST_CHRONYD:-/usr/sbin/chronyd}
 CLOCK_FILE=${CLOCKTEST_CLOCK_FILE:-/var/lib/systemd/timesync/clock}
 DROPIN_DIR=${CLOCKTEST_DROPIN_DIR:-/etc/systemd/system/chrony.service.d}
 DROPIN=$DROPIN_DIR/50-wifi-sensor-clocktest.conf
@@ -57,6 +67,17 @@ uptime_s() { cut -d. -f1 "$UPTIME_FILE"; }     # monotonic: a clock step cannot 
 iso() { date -u -d "@$1" +%FT%TZ 2>/dev/null || date -u -r "$1" +%FT%TZ; }
 num() { case $1 in '' | *[!0-9]*) return 1 ;; esac; }
 
+# the system's chrony.conf with every source offline and no extra source files
+offline_conf() {
+  awk '
+    $1 == "pool" || $1 == "server" || $1 == "peer" {
+      line = $0; sub(/[ \t]+#.*$/, "", line)
+      print (line ~ /(^|[ \t])offline([ \t]|$)/) ? line : line " offline"; n++; next }
+    $1 == "sourcedir" { print "# clock-test: no source files this boot - " $0; next }
+    { print }
+    END { if (!n) exit 3 }' "$CHRONY_CONF"
+}
+
 usage() {
   sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
@@ -70,6 +91,7 @@ cmd_status() {
     say "not armed"
   fi
   [ -e "$DROPIN" ] && say "chrony drop-in present: $DROPIN" || say "chrony drop-in: none"
+  [ -e "$TEST_CONF" ] && say "this boot's chrony runs on $TEST_CONF (sources offline)" || true
   if systemctl is-active --quiet "$HOLD_UNIT" 2>/dev/null; then
     say "NTP hold running ($HOLD_UNIT) - 'clock-test.sh end' ends it now"
   fi
@@ -107,6 +129,11 @@ cmd_arm() {
   fi
   [ "$(leap)" = Normal ] || die "chrony is not synchronised now - arm from a synchronised clock"
   [ -e "$ARMED" ] && die "already armed (clock-test.sh status / disarm)"
+  offline_conf >/dev/null || die "$CHRONY_CONF has no pool/server line to hold offline"
+  # sources from conf.d would not be held: refuse rather than half-hold
+  if grep -qsE '^[[:space:]]*(pool|server|peer)[[:space:]]' "$(dirname "$CHRONY_CONF")"/conf.d/*.conf; then
+    die "sources in $(dirname "$CHRONY_CONF")/conf.d - not supported by the hold"
+  fi
 
   install -D -m 0755 "$0" "$INSTALL_PATH" 2>/dev/null || cp "$0" "$INSTALL_PATH"
   mkdir -p "$STATE_DIR" "$DROPIN_DIR"
@@ -114,9 +141,13 @@ cmd_arm() {
   touch -d "@$target" "$CLOCK_FILE"
   cat >"$DROPIN" <<EOF
 # clock-test.sh (wifi-sensor, docs/clock-validation.md) - removed by 'clock-test.sh disarm'.
-# Does nothing unless $ARMED exists; '-' = a failure never stops chrony,
-# '+' = root, outside chrony's sandbox (it runs as _chrony, /var read-only).
+# boot-prep and boot-hook do nothing unless $ARMED exists ('-': a failure never
+# stops chrony; '+': root, outside chrony's sandbox). The ExecStart wrapper starts
+# chronyd exactly as the unit does unless boot-prep wrote $TEST_CONF this boot.
 [Service]
+ExecStartPre=-+$INSTALL_PATH boot-prep
+ExecStart=
+ExecStart=!$INSTALL_PATH chronyd \$DAEMON_OPTS
 ExecStartPost=-+$INSTALL_PATH boot-hook
 EOF
   systemctl daemon-reload
@@ -124,7 +155,7 @@ EOF
   say "nothing changes until 'sudo reboot'. Undo: sudo $INSTALL_PATH disarm"
 }
 
-cmd_boot_hook() {
+cmd_boot_prep() {
   [ -e "$ARMED" ] || exit 0
   . "$ARMED"
   boot=$(boot_id)
@@ -132,50 +163,76 @@ cmd_boot_hook() {
     say "boot $boot: cannot consume the arm flag (no write access to $STATE_DIR) - normal boot, still armed"
     exit 0
   fi
-  i=0
-  until chronyc offline >/dev/null 2>&1; do
-    i=$((i + 1))
-    [ $i -ge 15 ] && { log "boot $boot: chronyc offline failed - normal boot"; exit 0; }
-    sleep 1
-  done
+  mkdir -p "$RUN_DIR"
+  if ! offline_conf >"$TEST_CONF.tmp"; then
+    rm -f "$TEST_CONF.tmp"
+    log "boot $boot: could not write the offline chrony.conf - normal boot"
+    exit 0
+  fi
+  chmod 0644 "$TEST_CONF.tmp"
+  echo "$OFFLINE_MIN" >"$HOLD_MIN"
+  mv "$TEST_CONF.tmp" "$TEST_CONF"
+  log "boot $boot: prepared at $(date -u +%FT%TZ) (armed $(iso "$EPOCH")) - chrony starts with its sources offline"
+}
+
+cmd_chronyd() {
+  if [ -s "$TEST_CONF" ]; then
+    exec "$CHRONYD" "$@" -f "$TEST_CONF"
+  fi
+  exec "$CHRONYD" "$@"
+}
+
+cmd_boot_hook() {
+  [ -s "$TEST_CONF" ] && [ -s "$HOLD_MIN" ] || exit 0
+  [ -e "$HOLD_STARTED" ] && exit 0               # a chrony restart later in the same boot
+  minutes=$(cat "$HOLD_MIN")
+  boot=$(boot_id)
+  touch "$HOLD_STARTED"
   state=$(leap || echo unknown)
   if [ "$state" = Normal ]; then
-    log "boot $boot: chrony was already synchronised (lost race) - normal boot; disarm and arm again"
+    log "boot $boot: chrony synchronised although its sources start offline - normal boot; disarm"
+    rm -f "$TEST_CONF"
     chronyc online >/dev/null 2>&1 || true
     exit 0
   fi
-  systemd-run --unit="$HOLD_UNIT" --description="clock test: NTP held off $OFFLINE_MIN min" --collect \
-    "$INSTALL_PATH" hold "$OFFLINE_MIN" >/dev/null 2>&1 \
-    || { log "boot $boot: could not start the hold - chrony back online"; chronyc online >/dev/null 2>&1 || true; exit 0; }
-  log "boot $boot: started at $(date -u +%FT%TZ) (armed $(iso "$EPOCH")), chrony offline ($state), online in $OFFLINE_MIN min"
+  systemd-run --unit="$HOLD_UNIT" --description="clock test: NTP held off $minutes min" --collect \
+    "$INSTALL_PATH" hold "$minutes" >/dev/null 2>&1 \
+    || { log "boot $boot: could not start the hold - chrony back online"; rm -f "$TEST_CONF"
+         chronyc online >/dev/null 2>&1 || true; exit 0; }
+  log "boot $boot: chrony started with its sources offline ($state), online in $minutes min"
+}
+
+hold_over() {
+  chronyc online >/dev/null 2>&1 || true
+  rm -f "$TEST_CONF"                               # a later chrony restart is a normal one
 }
 
 cmd_hold() {
   minutes=${1:-}
   num "$minutes" || die "hold: minutes"
   end=$(( $(uptime_s) + minutes * 60 ))
-  trap 'chronyc online >/dev/null 2>&1; log "hold stopped early - chrony online"; exit 0' TERM INT
+  trap 'hold_over; log "hold stopped early - chrony online"; exit 0' TERM INT
   while [ "$(uptime_s)" -lt "$end" ]; do
-    chronyc offline >/dev/null 2>&1 || true
+    chronyc offline >/dev/null 2>&1 || true      # belt and braces: the sources start offline
     sleep "$HOLD_STEP_S" &
     wait $! || true
   done
-  chronyc online >/dev/null 2>&1 || true
+  hold_over
   log "boot $(boot_id): hold over after $minutes min - chrony online"
 }
 
 cmd_end() {
   need_root
   systemctl stop "$HOLD_UNIT" 2>/dev/null || true
-  chronyc online >/dev/null 2>&1 || true
+  hold_over
   log "ended by hand - chrony online"
 }
 
 cmd_disarm() {
   need_root
   systemctl stop "$HOLD_UNIT" 2>/dev/null || true
-  chronyc online >/dev/null 2>&1 || true
-  rm -f "$ARMED" "$DROPIN"
+  hold_over
+  rm -f "$ARMED" "$DROPIN" "$HOLD_MIN"
   rmdir "$DROPIN_DIR" 2>/dev/null || true
   systemctl daemon-reload
   # the boot clock file back to now (clock-save.sh saves only while synchronised)
@@ -186,6 +243,8 @@ cmd_disarm() {
 case ${1:-} in
   status) cmd_status ;;
   arm) shift; cmd_arm "$@" ;;
+  boot-prep) cmd_boot_prep ;;
+  chronyd) shift; cmd_chronyd "$@" ;;
   boot-hook) cmd_boot_hook ;;
   hold) shift; cmd_hold "$@" ;;
   end) cmd_end ;;

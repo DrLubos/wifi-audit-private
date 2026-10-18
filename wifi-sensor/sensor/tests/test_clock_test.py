@@ -23,6 +23,14 @@ def gnu_tools():
         return False
 
 
+CHRONY_CONF = """pool 2.debian.pool.ntp.org iburst
+server 192.0.2.1 iburst offline   # already offline
+sourcedir /run/chrony-dhcp
+sourcedir /etc/chrony/sources.d
+driftfile /var/lib/chrony/chrony.drift
+makestep 1 3
+"""
+
 STUB = """#!/bin/sh
 echo "$(basename "$0") $*" >> "{calls}"
 case "$(basename "$0") $1" in
@@ -57,11 +65,21 @@ class ClockTest(unittest.TestCase):
         with open(self.uptime, "w") as f:
             f.write("100.00 0.00\n")
         self.state, self.dropin, self.installed = j("state"), j("chrony.service.d"), j("opt", "clock-test.sh")
+        self.run_dir = j("run")
+        os.makedirs(j("etc", "conf.d"))
+        self.chrony_conf = j("etc", "chrony.conf")
+        with open(self.chrony_conf, "w") as f:
+            f.write(CHRONY_CONF)
+        with open(j("chronyd"), "w") as f:              # records how it was started
+            f.write('#!/bin/sh\necho "chronyd $*" >> "%s"\n' % self.calls)
+        os.chmod(j("chronyd"), 0o755)
         self.env = dict(os.environ, PATH=self.bin + ":" + os.environ["PATH"], CLOCKTEST_NO_ROOT="1",
                         CLOCKTEST_STATE_DIR=self.state, CLOCKTEST_CLOCK_FILE=self.clock,
                         CLOCKTEST_DROPIN_DIR=self.dropin, CLOCKTEST_INSTALL_PATH=self.installed,
                         CLOCKTEST_CLOCK_SAVE=j("clock-save.sh"), CLOCKTEST_BOOT_ID_FILE=j("boot_id"),
-                        CLOCKTEST_UPTIME_FILE=self.uptime, CLOCKTEST_HOLD_STEP_S="0")
+                        CLOCKTEST_UPTIME_FILE=self.uptime, CLOCKTEST_HOLD_STEP_S="0",
+                        CLOCKTEST_RUN_DIR=self.run_dir, CLOCKTEST_CHRONY_CONF=self.chrony_conf,
+                        CLOCKTEST_CHRONYD=j("chronyd"))
 
     def tearDown(self):
         shutil.rmtree(self.tmp)
@@ -92,7 +110,10 @@ class ClockTest(unittest.TestCase):
         with open(os.path.join(self.state, "armed")) as f:
             self.assertIn("OFFLINE_MIN=30", f.read())
         with open(os.path.join(self.dropin, "50-wifi-sensor-clocktest.conf")) as f:
-            self.assertIn("ExecStartPost=-+%s boot-hook" % self.installed, f.read())   # root, no sandbox
+            dropin = f.read()
+        self.assertIn("ExecStartPre=-+%s boot-prep" % self.installed, dropin)   # root, no sandbox
+        self.assertIn("ExecStart=\nExecStart=!%s chronyd $DAEMON_OPTS" % self.installed, dropin)
+        self.assertIn("ExecStartPost=-+%s boot-hook" % self.installed, dropin)
         self.assertTrue(os.access(self.installed, os.X_OK))
         self.assertIn("systemctl daemon-reload", self.calls_log())
         self.assertIn("armed", self.run_script("status").stdout)
@@ -110,59 +131,81 @@ class ClockTest(unittest.TestCase):
         self.set_leap("Not synchronised")
         self.assertNotEqual(self.run_script("arm", "--hours-back", "6", "--offline-min", "30").returncode, 0)
         self.set_leap("Normal")
+        with open(os.path.join(os.path.dirname(self.chrony_conf), "conf.d", "x.conf"), "w") as f:
+            f.write("server 192.0.2.9 iburst\n")               # a source the copy would not hold
+        self.assertNotEqual(self.run_script("arm", "--hours-back", "6", "--offline-min", "30").returncode, 0)
+        os.remove(os.path.join(os.path.dirname(self.chrony_conf), "conf.d", "x.conf"))
         self.arm("--epoch", "2026-09-15T13:52:32Z", "--offline-min", "30", "--lan-only")
 
-    def test_boot_hook_without_flag_does_nothing(self):
-        r = self.run_script("boot-hook")
-        self.assertEqual(r.returncode, 0)
+    def test_normal_boot_does_nothing(self):
+        for step in ("boot-prep", "boot-hook"):
+            self.assertEqual(self.run_script(step).returncode, 0)
         self.assertEqual(self.calls_log(), [])
+        self.run_script("chronyd", "-F", "1")
+        self.assertEqual(self.calls_log(), ["chronyd -F 1"])     # exactly as the unit starts it
 
-    def test_boot_hook_consumes_the_flag_and_starts_the_hold(self):
+    def test_armed_boot_starts_chrony_offline_and_holds(self):
         self.arm("--hours-back", "6", "--offline-min", "30")
         self.set_leap("Not synchronised")            # the boot: stale clock, no NTP yet
         open(self.calls, "w").close()
-        r = self.run_script("boot-hook", script=self.installed)
+        r = self.run_script("boot-prep", script=self.installed)
         self.assertEqual(r.returncode, 0, r.stderr)
-        calls = self.calls_log()
-        self.assertIn("chronyc offline", calls)
-        self.assertTrue(any(c.startswith("systemd-run --unit=wifi-sensor-clocktest-hold") and c.endswith("hold 30")
-                            for c in calls), calls)
         self.assertFalse(os.path.exists(os.path.join(self.state, "armed")))
         self.assertTrue(os.path.exists(os.path.join(self.state, "consumed-boot-1")))
+        with open(os.path.join(self.run_dir, "chrony.conf")) as f:
+            conf = f.read()
+        self.assertIn("pool 2.debian.pool.ntp.org iburst offline\n", conf)
+        self.assertIn("server 192.0.2.1 iburst offline\n", conf)              # not twice
+        self.assertNotIn("offline offline", conf)
+        self.assertNotRegex(conf, r"(?m)^sourcedir")
+        self.assertIn("makestep 1 3", conf)
+        self.run_script("chronyd", "-F", "1", script=self.installed)
+        self.assertIn("chronyd -F 1 -f %s" % os.path.join(self.run_dir, "chrony.conf"), self.calls_log())
+        r = self.run_script("boot-hook", script=self.installed)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(any(c.startswith("systemd-run --unit=wifi-sensor-clocktest-hold") and c.endswith("hold 30")
+                            for c in self.calls_log()), self.calls_log())
         open(self.calls, "w").close()
-        self.run_script("boot-hook", script=self.installed)  # the next boot is a normal one
+        self.run_script("boot-hook", script=self.installed)     # chrony restarted in the same boot
         self.assertEqual(self.calls_log(), [])
+        # the next boot: /run is empty again
+        shutil.rmtree(self.run_dir)
+        for step in ("boot-prep", "boot-hook"):
+            self.run_script(step, script=self.installed)
+        self.run_script("chronyd", "-F", "1", script=self.installed)
+        self.assertEqual(self.calls_log(), ["chronyd -F 1"])
 
-    def test_boot_hook_without_write_access_stays_armed(self):
+    def test_boot_prep_without_write_access_stays_armed(self):
         self.arm("--hours-back", "6", "--offline-min", "30")
-        self.set_leap("Not synchronised")
         os.chmod(self.state, 0o555)                 # as inside chrony's sandbox: /var read-only
         try:
-            open(self.calls, "w").close()
-            r = self.run_script("boot-hook", script=self.installed)
+            r = self.run_script("boot-prep", script=self.installed)
         finally:
             os.chmod(self.state, 0o755)
         self.assertEqual(r.returncode, 0)
         self.assertIn("cannot consume the arm flag", r.stdout)
-        self.assertNotIn("chronyc offline", self.calls_log())   # no hold without consuming the flag
+        self.assertFalse(os.path.exists(os.path.join(self.run_dir, "chrony.conf")))   # chrony starts normally
         self.assertTrue(os.path.exists(os.path.join(self.state, "armed")))
 
-    def test_boot_hook_lost_race_is_a_normal_boot(self):
+    def test_synchronised_anyway_is_a_normal_boot(self):
         self.arm("--hours-back", "6", "--offline-min", "30")
-        open(self.calls, "w").close()               # leap still Normal: chrony synced before the hook
+        self.run_script("boot-prep", script=self.installed)
+        open(self.calls, "w").close()               # leap still Normal
         self.run_script("boot-hook", script=self.installed)
         calls = self.calls_log()
         self.assertIn("chronyc online", calls)
         self.assertFalse(any(c.startswith("systemd-run") for c in calls))
-        with open(os.path.join(self.state, "log")) as f:
-            self.assertIn("lost race", f.read())
+        self.assertFalse(os.path.exists(os.path.join(self.run_dir, "chrony.conf")))
 
-    def test_hold_reasserts_offline_then_goes_online(self):
+    def test_hold_goes_online_and_drops_the_copy(self):
+        os.makedirs(self.run_dir)
+        open(os.path.join(self.run_dir, "chrony.conf"), "w").close()
         r = self.run_script("hold", "1")             # each stub 'offline' advances uptime 30 s
         self.assertEqual(r.returncode, 0, r.stderr)
         calls = self.calls_log()
         self.assertEqual(calls.count("chronyc offline"), 2)
         self.assertEqual(calls[-1], "chronyc online")
+        self.assertFalse(os.path.exists(os.path.join(self.run_dir, "chrony.conf")))
 
     def test_disarm_removes_flag_and_dropin(self):
         self.arm("--hours-back", "6", "--offline-min", "30")
@@ -173,7 +216,6 @@ class ClockTest(unittest.TestCase):
         self.assertTrue(os.path.exists(self.saved))
         self.assertIn("chronyc online", self.calls_log())
         self.assertIn("not armed", self.run_script("status").stdout)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -43,11 +43,18 @@ records the NTP anchor too. So every run A also gives run D's comparison -
   sshd are not changed. The clock is never moved by hand (`date -s`) while
   connected: moving it back breaks WireGuard handshakes initiated by the Pi
   (replay protection) and could stall the Tailscale path.
-- The hook is `ExecStartPost=-+`: `+` runs it as root outside chrony's
-  sandbox (chrony runs as `_chrony` with `ProtectSystem=strict`; the first
-  armed boot, 2026-10-18, had the hook fail on the read-only `/var` and
-  synchronised normally - `findings.md` section 13). An `arm` made before
-  that fix wrote the old drop-in: disarm and arm again.
+- **Since 2026-10-18 (third version):** the armed boot's chronyd starts
+  with its sources already offline - `boot-prep` (`ExecStartPre=-+`, root,
+  outside chrony's sandbox) consumes the flag and writes
+  `/run/wifi-sensor-clocktest/chrony.conf`, the system's chrony.conf with
+  `offline` on every pool/server line and no `sourcedir`; the drop-in's
+  `ExecStart` wrapper uses that copy only if it exists (`/run` is empty at
+  every boot, so any other boot starts chrony exactly as before);
+  `/etc/chrony` is never touched. Earlier versions lost the race: a hook in
+  chrony's sandbox could not write its state, and `chronyc offline` right
+  after the start missed the pool's servers, resolved and added online
+  seconds later (`findings.md` section 13). The hold's `chronyc online`
+  removes the copy, so a later chrony restart is a normal one.
 - **Self-recovering**: the arm flag is consumed by the first boot that reads
   it (a second reboot is a normal boot); the drop-in step is `ExecStartPost=-`
   (it can never stop chrony from starting); chrony goes online by itself
