@@ -47,9 +47,17 @@ def adapter_action(stored, reported):
     return "fill" if fill else "none"
 
 
-def retention_risk(hb, now):
-    """D10: the oldest unacknowledged poll is older than retention - 2 days."""
+def retention_risk(hb, now, server_newest_ts=None):
+    """D10: the oldest unacknowledged poll is older than retention - 2 days.
+
+    A backlog that starts at or before the server's newest poll of the sensor
+    is not unsent data: the uploader sends in order, so it only means the
+    uploader does not know its cursor yet (the first heartbeat of a start
+    without state reports the whole buffer - it opened a false event at the
+    first `--check`, 2026-10-17)."""
     oldest, days = hb.get("backlog_oldest_ts"), hb.get("retention_days")
     if oldest is None or not days or not hb.get("backlog_polls"):
+        return False
+    if server_newest_ts is not None and oldest <= server_newest_ts:
         return False
     return oldest < now.timestamp() - (days - RETENTION_MARGIN_DAYS) * 86400

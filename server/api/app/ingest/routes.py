@@ -166,7 +166,8 @@ def _heartbeat(conn, tok, hb, now):
              buffer_bytes=hb["buffer_bytes"], disk_free_bytes=hb["disk_free_bytes"],
              uploader_version=hb["uploader_version"])
     _adapter(conn, tok, hb.get("adapter"), now)
-    if hbmod.retention_risk(hb, now):
+    newest = _run(conn, "resume", sensor_id=sid).fetchone()
+    if hbmod.retention_risk(hb, now, None if newest is None else newest["ts"]):
         _open_event(conn, tok, "upload_retention_risk", {}, now, oldest=hb["backlog_oldest_ts"],
                     retention_days=hb["retention_days"])
     else:

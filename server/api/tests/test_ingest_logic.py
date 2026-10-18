@@ -128,6 +128,10 @@ class Heartbeat(unittest.TestCase):
         self.assertFalse(hb.retention_risk(dict(base, backlog_oldest_ts=NOW.timestamp() - 13 * day,
                                                 backlog_polls=0), NOW))
         self.assertFalse(hb.retention_risk({}, NOW))
+        # a start without state reports the whole buffer: the server already has it
+        old = dict(base, backlog_oldest_ts=NOW.timestamp() - 13 * day)
+        self.assertFalse(hb.retention_risk(old, NOW, server_newest_ts=NOW.timestamp() - 60))
+        self.assertTrue(hb.retention_risk(old, NOW, server_newest_ts=NOW.timestamp() - 13.5 * day))
 
 
 class Schedule(unittest.TestCase):
