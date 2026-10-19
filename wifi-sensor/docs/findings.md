@@ -1108,9 +1108,8 @@ Read-only on the Pi: `journalctl --list-boots`, the boots' journals,
 - **Since 2026-10-17 20:41:15** (section 7): buffer v8 records that data, and
   the N11 timer keeps the boot clock file current (hourly and at shutdown,
   only while chrony is synchronised) - the next boot without NTP starts at
-  most an hour + its downtime behind. The validation runs of
-  `docs/clock-validation.md` are still to be done (the developer's; each
-  reboots the Pi).
+  most an hour + its downtime behind. Validation runs of
+  `docs/clock-validation.md`: below (A30 and A3h passed on 2026-10-19).
 - **Run A30, first attempt 2026-10-18 (aborted, Claude, developer-approved
   overnight run):** armed 21:02:55 (boot clock file 15:02:52), reboot 21:03:03.
   The stale-clock half worked - the journal: "System time advanced to
@@ -1194,3 +1193,33 @@ Read-only on the Pi: `journalctl --list-boots`, the boots' journals,
   one-way latency (`server_ts` stamped at the response, the Pi's mono at the
   request midpoint) - well inside the 10 s target. Files:
   `~/Developer/wifi-audit-clock/clock-truth-A30.csv`, `clock-errors-A30.csv`.
+- **Run A3h, 2026-10-19 - PASS** (180 min without NTP). Armed 20:19:19
+  (boot clock file 14:19:19), reboot 20:19:25, boot `8e173531`: no time
+  source from chrony's start; the hold held exactly 180 min (14:19:32 ->
+  17:19:38 stale); server anchor 2 min after the uploader's start (14:22:58
+  stale = 20:22:58 true); at the hold's end the pool was added and the clock
+  stepped by **21623.453 s at 23:20:06**; NTP anchor 23:20:18 (18077 pending
+  AP-load rows moved). Truth: 191 samples (half round trip <= 36 ms), mono
+  45 to 11437 s.
+
+  | | NTP anchor | server anchor |
+  |---|---|---|
+  | corrected - true, median | +0.005 s | +0.233 s |
+  | corrected - true, max \|err\| | 0.034 s | 0.263 s |
+  | server - NTP | | +0.228 s |
+
+  The NTP anchor's error grows towards the start of the boot (the anchor is
+  at its end): the Pi's free-running clock drifted ~34 ms over 3 h without
+  NTP (~3 ppm, chrony's stored frequency still applied). **358 polls
+  captured during the hold**, all uploaded during it, corrected with the
+  server anchor (offset +21624 s); the server's stored ts vs the truth:
+  median +0.253 s, max |err| 0.291 s. **0 lost, 0 unverified.** Disarmed
+  23:31. Files: `clock-truth-A3h.csv`, `clock-errors-A3h.csv`.
+- **Conclusion of the clock validation (A30, A3h):** a boot that runs on a
+  stale clock - 6 h behind here - is placed on the true time line by the
+  live upload's correction to within **0.3 s** with the server anchor (the
+  heartbeat's one-way latency, +0.21-0.23 s, is its whole error) and within
+  **0.04 s** with the NTP anchor, over 30 min and 3 h without NTP; the
+  target was 10 s. Every poll of both test boots reached the server, none
+  was lost or unverified. Run B (a boot without any anchor) and run C (the
+  real 33-day stale date, LAN only) were not run.
