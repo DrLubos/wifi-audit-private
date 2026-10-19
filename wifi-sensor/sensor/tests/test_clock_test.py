@@ -36,6 +36,7 @@ echo "$(basename "$0") $*" >> "{calls}"
 case "$(basename "$0") $1" in
   "chronyc -c") cat "{leap}" ;;
   "chronyc offline") n=$(cut -d. -f1 "{uptime}"); echo "$((n + 30)).00 0.00" > "{uptime}" ;;
+  "chronyc add") [ -e "{fail_add}" ] && exit 1 ;;
 esac
 exit 0
 """
@@ -53,7 +54,7 @@ class ClockTest(unittest.TestCase):
         open(self.clock, "w").close()
         for name in ("chronyc", "systemctl", "systemd-run"):
             with open(os.path.join(self.bin, name), "w") as f:
-                f.write(STUB.format(calls=self.calls, leap=self.leap, uptime=self.uptime))
+                f.write(STUB.format(calls=self.calls, leap=self.leap, uptime=self.uptime, fail_add=j("fail-add")))
             os.chmod(os.path.join(self.bin, name), 0o755)
         self.saved = j("clock-save-ran")
         with open(j("clock-save.sh"), "w") as f:
@@ -154,10 +155,11 @@ class ClockTest(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.state, "consumed-boot-1")))
         with open(os.path.join(self.run_dir, "chrony.conf")) as f:
             conf = f.read()
-        self.assertIn("pool 2.debian.pool.ntp.org iburst offline\n", conf)
-        self.assertIn("server 192.0.2.1 iburst offline\n", conf)              # not twice
-        self.assertNotIn("offline offline", conf)
+        self.assertNotRegex(conf, r"(?m)^\s*(pool|server|peer)\s")             # no time source at all
         self.assertNotRegex(conf, r"(?m)^sourcedir")
+        with open(os.path.join(self.run_dir, "sources")) as f:
+            self.assertEqual(f.read().splitlines(), ["pool 2.debian.pool.ntp.org iburst",
+                                                     "server 192.0.2.1 iburst offline"])   # comment stripped
         self.assertIn("makestep 1 3", conf)
         self.run_script("chronyd", "-F", "1", script=self.installed)
         self.assertIn("chronyd -F 1 -f %s" % os.path.join(self.run_dir, "chrony.conf"), self.calls_log())
@@ -197,15 +199,31 @@ class ClockTest(unittest.TestCase):
         self.assertFalse(any(c.startswith("systemd-run") for c in calls))
         self.assertFalse(os.path.exists(os.path.join(self.run_dir, "chrony.conf")))
 
-    def test_hold_goes_online_and_drops_the_copy(self):
+    def hold_setup(self):
         os.makedirs(self.run_dir)
         open(os.path.join(self.run_dir, "chrony.conf"), "w").close()
+        with open(os.path.join(self.run_dir, "sources"), "w") as f:
+            f.write("pool 2.debian.pool.ntp.org iburst\nserver 192.0.2.1 iburst\n")
+
+    def test_hold_adds_the_sources_and_drops_the_copy(self):
+        self.hold_setup()
         r = self.run_script("hold", "1")             # each stub 'offline' advances uptime 30 s
         self.assertEqual(r.returncode, 0, r.stderr)
         calls = self.calls_log()
         self.assertEqual(calls.count("chronyc offline"), 2)
-        self.assertEqual(calls[-1], "chronyc online")
-        self.assertFalse(os.path.exists(os.path.join(self.run_dir, "chrony.conf")))
+        self.assertEqual(calls[-3:], ["chronyc add pool 2.debian.pool.ntp.org iburst",
+                                      "chronyc add server 192.0.2.1 iburst", "chronyc online"])
+        self.assertNotIn("systemctl restart chrony", calls)
+        for f in ("chrony.conf", "sources"):
+            self.assertFalse(os.path.exists(os.path.join(self.run_dir, f)), f)
+
+    def test_failed_add_restarts_chrony_on_the_normal_config(self):
+        self.hold_setup()
+        open(os.path.join(self.tmp, "fail-add"), "w").close()
+        r = self.run_script("hold", "1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.calls_log()[-1], "systemctl restart chrony")
+        self.assertFalse(os.path.exists(os.path.join(self.run_dir, "chrony.conf")))   # restart = normal config
 
     def test_disarm_removes_flag_and_dropin(self):
         self.arm("--hours-back", "6", "--offline-min", "30")
