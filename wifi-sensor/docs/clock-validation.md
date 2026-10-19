@@ -43,23 +43,28 @@ records the NTP anchor too. So every run A also gives run D's comparison -
   sshd are not changed. The clock is never moved by hand (`date -s`) while
   connected: moving it back breaks WireGuard handshakes initiated by the Pi
   (replay protection) and could stall the Tailscale path.
-- **Since 2026-10-18 (third version):** the armed boot's chronyd starts
-  with its sources already offline - `boot-prep` (`ExecStartPre=-+`, root,
-  outside chrony's sandbox) consumes the flag and writes
-  `/run/wifi-sensor-clocktest/chrony.conf`, the system's chrony.conf with
-  `offline` on every pool/server line and no `sourcedir`; the drop-in's
-  `ExecStart` wrapper uses that copy only if it exists (`/run` is empty at
-  every boot, so any other boot starts chrony exactly as before);
-  `/etc/chrony` is never touched. Earlier versions lost the race: a hook in
-  chrony's sandbox could not write its state, and `chronyc offline` right
-  after the start missed the pool's servers, resolved and added online
-  seconds later (`findings.md` section 13). The hold's `chronyc online`
-  removes the copy, so a later chrony restart is a normal one.
+- **How the hold works (fourth version, 2026-10-19 - the one that held):**
+  the armed boot's chronyd starts with **no time source at all**.
+  `boot-prep` (`ExecStartPre=-+`: root, outside chrony's sandbox) consumes
+  the flag and writes `/run/wifi-sensor-clocktest/chrony.conf` - the system's
+  chrony.conf without its pool/server lines (saved to
+  `/run/wifi-sensor-clocktest/sources`) and without `sourcedir`; the
+  drop-in's `ExecStart` wrapper uses that copy only if it exists (`/run` is
+  empty at every boot, so any other boot starts chrony exactly as before);
+  at the hold's end `chronyc add pool ... iburst` adds the saved sources
+  (if that fails the hold restarts chrony, now on the normal config).
+  `/etc/chrony` and NetworkManager are never touched. Earlier versions lost
+  the race three times (`findings.md` section 13): a hook inside chrony's
+  sandbox could not write its state; `chronyc offline` missed the pool's
+  servers resolved later; and Debian's NetworkManager hook
+  `20-chrony-onoffline` runs `chronyc onoffline` on every network event,
+  putting any existing source online - a source that does not exist cannot
+  be.
 - **Self-recovering**: the arm flag is consumed by the first boot that reads
   it (a second reboot is a normal boot); the drop-in step is `ExecStartPost=-`
   (it can never stop chrony from starting); chrony goes online by itself
-  after N minutes; `sudo clock-test.sh end` ends the test at once (a bare
-  `chronyc online` would be undone by the hold within 30 s);
+  after N minutes; `sudo clock-test.sh end` ends the test at once (it adds the
+  saved sources; a bare `chronyc online` does nothing - there is no source);
   `clock-test.sh disarm` removes the flag and the drop-in and saves the boot
   clock again (`clock-save.sh`); its log stays in `/var/lib/wifi-sensor-clocktest/`.
 - While armed, the N11 clock save (`clock-save.sh`, hourly and at shutdown)
