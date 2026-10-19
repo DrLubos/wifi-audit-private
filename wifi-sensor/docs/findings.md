@@ -248,6 +248,8 @@ in section 7.
 | 2026-10-06 12:23:51 (last ok poll) | 2026-10-06 13:24:45 (next poll) | 1 h 1 m | No polls; the collector service started again at 13:24:44 (systemd). Not investigated (found 2026-10-11, as above) |
 | 2026-10-06 19:33:15 (last poll with devices; adapter lost at 19:32:53) | 2026-10-10 21:53:47 (first poll with devices) | 4 d 2 h 21 m | Capture adapter gone from the USB bus (below) |
 | 2026-10-13 09:50:12 (last poll) | 2026-10-13 14:22:28 (first poll) | 4 h 32 m | Pi off: the boot's journal ends mid-capture (09:50:27) with no shutdown messages - a power cut or an unplug. Found 2026-10-17 in the buffer's `polls` (gaps > 90 s) |
+| 2026-10-19 20:19:14 (last poll) | 2026-10-19 20:21:24 (first poll, corrected; raw 14:20:53) | 2 m 10 s | Reboot for clock-validation run A3h (section 13); planned, buffer seq continuous (95160 -> 95161) |
+| 2026-10-19 19:36:52 (last poll) | 2026-10-19 19:39:15 (first poll, corrected; raw 13:38:44) | 2 m 23 s | Reboot for clock-validation run A30 (section 13, PASS); planned, buffer seq continuous (95079 -> 95080); Kismet waited its 60 s for chrony, then started on the stale clock |
 | 2026-10-18 21:20:24 (last poll) | 2026-10-18 21:21:22 (first poll) | 58 s | Reboot for clock-validation run A30, third attempt (aborted, section 13); planned, buffer seq continuous (92407 -> 92408), nothing lost |
 | 2026-10-18 21:11:38 (last poll) | 2026-10-18 21:12:54 (first poll) | 1 m 16 s | Reboot for clock-validation run A30, second attempt (aborted, section 13); planned, buffer seq continuous (92391 -> 92392), nothing lost |
 | 2026-10-18 21:02:45 (last poll) | 2026-10-18 21:04:08 (first poll) | 1 m 23 s | Reboot for clock-validation run A30 (aborted, section 13); planned, buffer seq continuous (92375 -> 92376), nothing lost |
@@ -1160,3 +1162,35 @@ Read-only on the Pi: `journalctl --list-boots`, the boots' journals,
   let the hold *add* them at its end (`chronyc add pool ... iburst`) - a
   source that does not exist cannot be put online; NetworkManager and its
   hooks stay untouched.
+- **Run A30, fourth attempt 2026-10-19 - PASS** (the test boot's chronyd
+  started with no time source; the hold added the pool at its end). Armed
+  19:37:10 (boot clock file 13:37:08), reboot 19:37:20, boot `726f6757`:
+  chrony started without sources ("Not synchronised") and stayed so through
+  NetworkManager's network-up - the hold held for exactly 30 min (13:37:21 ->
+  14:07:22 on the stale clock); Kismet's prestart waited its 60 s and started
+  on the stale clock ("clock not synchronised after 60s - continuing"); the
+  uploader anchored the boot on the server's time 2 min after its start
+  (13:40:50 stale = 19:40:50 true, RTT 546 ms) and uploaded the held polls;
+  at the hold's end the pool was added, a source selected 5 s later and the
+  clock stepped by **21630.099 s at 20:07:57**; the collector's NTP anchor at
+  poll 95138 (20:08:14), 3506 pending AP-load rows moved to their true
+  hours. Truth: 40 samples (`clock_truth.py`, half round trip <= 7 ms) from
+  mono 92 to 2430 s. `clock_validation.py --compare-anchors`:
+
+  | | NTP anchor | server anchor |
+  |---|---|---|
+  | corrected - true, median | +0.0005 s | +0.208 s |
+  | corrected - true, max \|err\| | 0.004 s | 0.210 s |
+  | server - NTP | | +0.208 s |
+
+  **58 polls captured during the hold** (the boot's first poll failed:
+  Kismet still starting), all uploaded corrected with the server anchor
+  (`sensor_clock_boots` source `server`, offset +21631 s); the server's
+  stored ts vs the truth (interpolated on the monotonic clock): median
+  +0.498 s, max |err| 0.502 s (the server anchor's +0.21 s plus integer
+  seconds at the polls' fixed phase); with the NTP anchor they would be
+  within 0.5 s. **0 lost, 0 unverified** (0 seq gaps on the server, no boot
+  without an anchor). The +0.21 s of the server anchor is the heartbeat's
+  one-way latency (`server_ts` stamped at the response, the Pi's mono at the
+  request midpoint) - well inside the 10 s target. Files:
+  `~/Developer/wifi-audit-clock/clock-truth-A30.csv`, `clock-errors-A30.csv`.
