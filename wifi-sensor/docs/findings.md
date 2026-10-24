@@ -15,7 +15,8 @@ section 10 the first false-positive characterisation of the server-side
 evil_twin detector, section 11 the data-quality rules that came out of it
 (RSSI floor values, config-history churn, `freq_khz`), section 12 what
 Kismet's NOCLIENTMFP alert actually checks (input for RQ2), section 13 the
-clock at boot (no RTC, no fake-hwclock). **The figures of
+clock at boot (no RTC, no fake-hwclock), section 14 the end-to-end outage
+test of the live upload (2026-10-20 - 10-23). **The figures of
 sections 1-3 and 10 treat the RSSI floor values -106/-120 dBm as signal
 levels**; sections 2-3 were re-measured without them (2026-09-27, tables at
 the end of each section) - the original text is kept, marked superseded.
@@ -254,6 +255,7 @@ in section 7.
 | 2026-10-18 21:11:38 (last poll) | 2026-10-18 21:12:54 (first poll) | 1 m 16 s | Reboot for clock-validation run A30, second attempt (aborted, section 13); planned, buffer seq continuous (92391 -> 92392), nothing lost |
 | 2026-10-18 21:02:45 (last poll) | 2026-10-18 21:04:08 (first poll) | 1 m 23 s | Reboot for clock-validation run A30 (aborted, section 13); planned, buffer seq continuous (92375 -> 92376), nothing lost |
 | 2026-10-14 05:30:28 (last poll) | 2026-10-14 08:51:37 (first poll) | 3 h 21 m | Pi off, as above (journal ends 05:30:36). After this boot the capture watchdog found the adapter on another USB port: "wlan1 is on hub port 1-1-port3 (was 1-1.1-port2)" (08:54:57) - the hardware was re-plugged during the gap. Whether cable, antenna or position changed (an RSSI boundary, `hardware_change`) is the developer's to record |
+| 2026-10-20 10:55:16 (last poll, uploaded live 10:55:18.5) | 2026-10-20 19:04:41 (first ok poll, corrected; raw 10:39:42 on the stale boot clock) | 8 h 9 m | Pi off - the end-to-end outage test (section 14): power and Ethernet unplugged by the developer, then booted without network; buffer seq continuous (96909 -> 96910), the boot's first poll (19:04:11) failed while Kismet started. The 3 days without network that followed are **not** a gap: 8,534 polls were captured and replayed (section 14). Plus ~20 s without frames at the clock step on reconnect (2026-10-23 18:10:55 - 18:11:15, capture helper restart) and channel 1 only until 18:11:20 (hop guard) - `sensor_periods` 'limited' 18:11:12 - 18:12:33 |
 
 **2026-09-22 disk-full gap** (boundaries read from `polls` in the live buffer):
 
@@ -1223,3 +1225,78 @@ Read-only on the Pi: `journalctl --list-boots`, the boots' journals,
   target was 10 s. Every poll of both test boots reached the server, none
   was lost or unverified. Run B (a boot without any anchor) and run C (the
   real 33-day stale date, LAN only) were not run.
+
+## 14. End-to-end outage test of the live upload (2026-10-20 - 10-23)
+
+Run by the developer (power and Ethernet unplugged, the Pi booted without
+network, reconnected after 3 days); verified read-only by Claude on
+2026-10-24 from the buffer (`mode=ro`), the Pi's journal and the server
+(`claude_ro`). Times UTC on the true time line; the Pi's journal before the
+step carries the stale clock (true = journal + 30,299.3 s). Pipeline metrics:
+`server/evaluation/pipeline/export.sh --from 2026-10-20T10:00:00Z --to
+2026-10-24T00:00:00Z` (copied to `~/Developer/wifi-audit-exports/outage-20261020/`
+on the Mac, sha256 equal with the box's `~/pipeline-exports/outage-20261020/`).
+
+| Time (UTC) | Event | Source |
+|---|---|---|
+| 2026-10-20 10:55:16 | last poll of boot `8e173531` (seq 96909), uploaded live at 10:55:18.5; last heartbeat 10:54:49 | `polls`, `sensor_heartbeats` |
+| ~19:02:31 | boot `3b93db8a` without network: true boot epoch from the later NTP anchor (`wall - mono`); the boot clock started at 10:37:41 from the N11 clock file (its last hourly save - a power cut skips the shutdown save), **8 h 25 min behind** | `clock_anchors`, journal |
+| 19:04:11 / 19:04:41 | Kismet's prestart waited its 60 s for chrony and started on the stale clock; first poll (failed, Kismet starting), first ok poll | `polls` seq 96910/96911 |
+| 10-20 19:04 - 10-23 18:10:42 | **offline capture**: 8,534 polls (seq 96910 - 105443), 8,531 collecting, all `clock_synced = 0`; 696,035 observation rows, 3,787 configuration-history rows, 63 alerts, 524,512 pending AP-load rows in the buffer. Uploader: name resolution failing, held 8,534 polls | buffer |
+| 10-23 18:10:48 | Ethernet link up (`lan78xx ... eth0: Link is Up`) | kernel journal |
+| 18:10:53 | first heartbeat accepted (clock offset 30,301 s, held 8,534); contact gap 10-20 10:54:49 - 10-23 18:10:53 = **3 d 7 h 16 min** (`sensor_annotations` 'unreachable') | `sensor_heartbeats` |
+| 18:10:55 | chrony stepped the clock by **30,299.306 s** | chrony journal |
+| 18:11:12 | first synchronised poll = the boot's NTP anchor (seq 105444); the collector folded the 524,512 pending AP-load rows into their true hours (logged 18:12:06; next poll 18:12:33) | collector journal |
+| 18:12:57 - 18:21:11.9 | **replay**: 72 batches (batch_seq 7498 - 7569) of up to 120 polls, 8,553 polls (8,534 corrected + 19 synchronised) in **8 min 15 s** (17.3 polls/s); then one batch per poll again (18:21:35) | `sensor_uploads` |
+| ~18:22:00 | the refresher round covering the end of the backlog finished; charts complete; rounds 2-4 s after | `refresh_runs` |
+
+- **Correction:** `sensor_clock_boots` source `ntp`, `epoch_true -
+  epoch_stale` = 30,299.320 s against chrony's own measured step of
+  30,299.306 s (14 ms apart; `epoch_stale` comes from an integer poll ts).
+  The 8,534 polls carry `ts_offset_s` 30,299-30,300 s; the corrected time
+  line joins the synchronised one seamlessly (last corrected poll 18:10:42,
+  first synchronised 18:11:12, one 30-s interval; no overlap, no jump). The
+  alerts and configuration rows of the stretch lie inside it after the
+  correction. No ground-truth sampler ran, so the error is not measured;
+  estimate: chrony's frequency was 1.867 ppm at boot (drift file) and 1.625
+  ppm after the resync, ~0.24 ppm over 71 h ≈ **0.06 s** at the start of the
+  stretch (the anchor is at its end), plus the integer-second ts (±0.5 s).
+- **Delivery:** 0 lost, 0 unverified (`sensor_seq_gaps` empty; seq 96880 -
+  108664 contiguous on the server, 11,785 polls); 1 retry (batch 7505, a
+  timeout, re-sent 5 s later), 0 replays. Replay volume 7.66 MB gzip;
+  server merge 107 s in total, median 0.99 s a batch, max 22.3 s (the first
+  batch, cold); inserted 523,830 AP observations, 9,348 AP-load hours, 3,793
+  configuration rows, 64 alerts, 7,042 device upserts. No stall event (the
+  oldest unacknowledged poll was 3 days old, the retention 14).
+- **Time from reconnect to complete data:** link up 18:10:48 -> backlog
+  empty 18:21:12 = **10 min 24 s**: 2 min 9 s until the first batch (NTP
+  step 7 s after the link, then the anchor poll's pending-load fold ~54 s),
+  8 min 15 s replay; charts ~1 min later.
+- **Side effects of the clock step** (Kismet 2025-09): the 8.4-h forward
+  jump made the capture helper see no PING for "over 15 seconds" - source
+  error at 18:10:55, re-opened 18:11:15 (~20 s without frames), and the
+  re-open collapsed the hop list to channel 1 until the hop guard re-applied
+  it at 18:11:20 (poll 105444 `DEGRADED`, `sensor_periods` 'limited'
+  18:11:12 - 18:12:33). Kismet's tracker also expired every device at the
+  jump (devices total 0 at that poll; `tracker_device_timeout` 3600 s) and
+  re-detected them within seconds. The server keeps the earlier
+  `first_seen` (merge LEAST).
+- **Defect found:** without contact the uploader sent its standalone
+  heartbeat on every 2-s tick - 116,815 refused heartbeats and journal
+  warnings in 3 days (the journal stayed within its 200 MB cap; nothing was
+  lost). Fixed in uploader 1.1 (commit `b77c00d`: a refused heartbeat backs
+  off to about `HEARTBEAT_S`; test `test_heartbeat_pacing.py`), **not
+  deployed** - it reaches the Pi with the next `install_uploader.sh`.
+
+**For the thesis (end-to-end outage test).** The sensor was cut off from
+power and network, booted without network on a clock 8 h 25 min behind,
+and captured for 3 days with no server and no NTP. When the uplink returned,
+the sensor made contact within 5 s; chrony stepped the clock 7 s after the
+link came up, the collector recorded the boot's clock anchor, and the
+uploader placed all 8,534 offline polls on the true time line (correction
+30,299.32 s, within 14 ms of chrony's own step) and replayed them in 72
+batches in 8 min 15 s. The server received every poll exactly once - no
+loss, no time-unverified polls, no duplicates - and the dashboard showed
+the complete offline period about 11 minutes after the reconnect. The only
+data effects were the 8-h power-off gap itself and ~25 s of degraded
+capture at the clock step, caused by Kismet reacting to the time jump.
