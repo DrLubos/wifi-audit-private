@@ -68,7 +68,20 @@ FROM (VALUES
   ('2026-10-06 12:23:51+00', '2026-10-06 13:24:45+00', 'gap', false, 'No polls for 1 h; the collector restarted at 15:24:44 local time (not investigated)', 'findings.md section 6'),
   ('2026-10-06 19:33:15+00', '2026-10-10 21:53:47+00', 'no_frames', false, 'Capture adapter lost from the USB bus', 'findings.md section 6'),
   ('2026-10-11 08:27:04+00', NULL, 'change', false, 'Capture watchdog power-cycles the adapter''s hub port', 'findings.md section 7'),
-  ('2026-10-11 10:16:11+00', NULL, 'change', false, 'Collector buffer v7: hourly AP load recorded again', 'findings.md section 7')
+  ('2026-10-11 10:16:11+00', NULL, 'change', false, 'Collector buffer v7: hourly AP load recorded again', 'findings.md section 7'),
+  -- added 2026-10-24 (findings.md sections 6, 7, 13, 14)
+  ('2026-10-13 09:50:12+00', '2026-10-13 14:22:28+00', 'gap', false, 'Pi off: power cut or unplug (not investigated)', 'findings.md section 6'),
+  ('2026-10-14 05:30:28+00', '2026-10-14 08:51:37+00', 'gap', false, 'Pi off; afterwards the adapter was on another USB port (re-plugged)', 'findings.md section 6'),
+  ('2026-10-17 20:41:15+00', NULL, 'change', false, 'Collector buffer v8: clock-correction data per poll and boot; boot clock saved hourly (N11)', 'findings.md section 7'),
+  ('2026-10-17 20:46:38+00', NULL, 'change', false, 'Live upload: every poll uploaded to the server; client tables stay on the Pi', 'findings.md section 7'),
+  ('2026-10-18 21:02:45+00', '2026-10-18 21:04:08+00', 'gap', false, 'Reboot for clock-validation run A30 (aborted)', 'findings.md section 6'),
+  ('2026-10-18 21:11:38+00', '2026-10-18 21:12:54+00', 'gap', false, 'Reboot for clock-validation run A30, second attempt (aborted)', 'findings.md section 6'),
+  ('2026-10-18 21:20:24+00', '2026-10-18 21:21:22+00', 'gap', false, 'Reboot for clock-validation run A30, third attempt (aborted)', 'findings.md section 6'),
+  ('2026-10-19 19:36:52+00', '2026-10-19 19:39:15+00', 'gap', false, 'Reboot for clock-validation run A30 (PASS; then 30 min without NTP)', 'findings.md section 13'),
+  ('2026-10-19 20:19:14+00', '2026-10-19 20:21:24+00', 'gap', false, 'Reboot for clock-validation run A3h (PASS; then 3 h without NTP)', 'findings.md section 13'),
+  ('2026-10-20 10:55:16+00', '2026-10-20 19:04:41+00', 'gap', false, 'Pi off: end-to-end outage test (power and Ethernet unplugged; 3 days offline capture followed)', 'findings.md section 14'),
+  ('2026-10-23 18:10:55+00', '2026-10-23 18:11:15+00', 'no_frames', false, 'Capture-helper restart at the clock step on reconnect (outage test)', 'findings.md section 14'),
+  ('2026-10-23 18:11:15+00', '2026-10-23 18:11:20+00', 'coverage', false, 'Channel 1 only until the hop guard re-applied the list (outage test)', 'findings.md section 14')
 ) AS v(starts_at, ends_at, kind, boundary, label, ref)
 ON CONFLICT DO NOTHING;
 

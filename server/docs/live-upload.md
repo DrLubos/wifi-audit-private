@@ -959,7 +959,7 @@ Recorded at their stops (Pi steps 3–4: `install_collector.sh`,
   correction of 8.3 becomes a rarely used safety net (and a check).
 - Make `refresh_rollups()` steps 4–8 conditional on what arrived (the 1-min
   chart lag).
-- Config delivery (D9), pseudonymised alert MACs (`PLAN.md` 11.5), raw
+- Config delivery (D9; designed 2026-10-24 in `config-delivery.md`, not built), pseudonymised alert MACs (`PLAN.md` 11.5), raw
   retention / partitioning (9.3 C, D), live push to the browser (PLAN 11.3).
 
 ---

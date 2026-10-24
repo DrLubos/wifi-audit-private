@@ -2,6 +2,9 @@
 
 - `performance.md` - the dashboard's performance on the demo box: diagnosis,
   what server schema 6 changed, before/after measurements (thesis material).
+- `live-upload.md` - the live upload from the sensor (design, decisions, rollout record).
+- `config-delivery.md` - delivery of the desired capture configuration to the
+  sensor: **design only** (2026-10-24), decisions C1-C13 open.
 
 Generated evaluation output and its inputs. This directory is the writable mount
 of the `evaluate` compose service (`../evaluation/`).
