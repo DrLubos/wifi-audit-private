@@ -22,6 +22,7 @@ expected-outcome column.
 | `tools/attack_trial.sh`, `tools/capture_truth.sh` | operator-side, run on the attacker device (guarded) |
 | `tests/` | stdlib unit tests of the pure logic (no DB, no pcap) |
 | `pipeline/` | separate from the staged-attack harness: the live-upload pipeline metrics (latency, retries/replays, loss, contact availability, refresh duration, clock offset) as CSV for any date range - `pipeline/README.md` |
+| `rq2/` | RQ2: counts and rates of the operator's event labels per kind / type / rule, the reasons grouped, the share traced to a known cause (rules + `cause:` note tags) - `rq2/README.md` |
 
 Unit tests (stdlib, no database): `cd server && python3 -m unittest discover -s evaluation/tests`.
 
