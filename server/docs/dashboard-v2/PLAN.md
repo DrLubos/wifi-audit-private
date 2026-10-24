@@ -1886,8 +1886,8 @@ the uploader, before the alert leaves the sensor.
 
 | # | Risk | Mitigation |
 |---|---|---|
-| R1 | **Disk**: 4.4 GB free, `observations` grows ~30–35 MB/day plus dumps (7 kept) → full in roughly 3–4 months | not part of this plan's scope, but a retention/archive decision is needed before then; the plan adds < 1 MB/day |
-| R2 | Losing the backfill sources (dump pruned, snapshots deleted) | Phase 1 moves the dump out of the prune pattern; keep both snapshots until `check_schema8.sql` passes; copy the dump off the box |
+| R1 | **Disk** (updated 2026-10-24, below): 13.8 GB free of 30 GB, the database 1.86 GB growing ~48 MB/day → the 1 GB floor in ~8-9 months (mid-July 2027) without daily dumps, ~6 months (end of April 2027) with 7 daily dumps; a table rewrite of `observations` (partitioning, `VACUUM FULL`) fits only until ~late February 2027 | retention / partitioning (`live-upload.md` 9.3 C, D) decided before ~February 2027; the plan adds < 1 MB/day |
+| R2 | Losing the backfill sources (dump pruned, snapshots deleted) | Phase 1 moves the dump out of the prune pattern; keep both snapshots until `check_schema8.sql` passes; copy the dump off the box - **done 2026-10-24**: `backups/keep/wifi_audit-20261003T103952Z.dump` is on the Mac (`~/wifi-audit-backups/`, sha256 equal) |
 | R3 | Load history gap grows until v7 runs | deploy commit 1 first, before the server part |
 | R4 | Collector v7 bug on the Pi | metadata-only migration, rollback by `meta.schema_version = 6`, tests on the Mac, one upsert per AP per poll (negligible CPU) |
 | R5 | Pre-v7 QBSS presence is inferred (`> 0`) | `source = 'v5_obs'` on those rows; documented in findings and in the UI tooltip |
@@ -1895,12 +1895,40 @@ the uploader, before the alert leaves the sensor.
 | R7 | Multi-sensor: one event row per sensor; the same AP under different SSIDs per sensor | invisible with one sensor; merge rule designed when a second sensor exists |
 | R8 | "Online/offline" before ingest: every sensor looks offline between imports | Q7 |
 | R9 | 30-day distinct counts get slower as data grows | index-only hour index; measured in phase 3; daily presence table (11.2) is the fallback |
-| R10 | DST (2026-10-25 inside the 30-day range soon) | bucket edges in local time, unit tests for both transitions |
+| R10 | DST (2026-10-25 inside the 30-day range soon) | bucket edges in local time, unit tests for both transitions - checked 2026-10-24: `test_dst_end_2026_10_25`, `test_dst_start_2027_03_28` and the heatmap DST test pass (api tests 145/145 on the box's Python 3.12); the nightly baselines (`refresh_schedule.baseline_due`) compare local wall time once per local day, so the repeated 02:00-03:00 hour runs them once |
 | R11 | Two whitelists: `ap_baselines.trusted` (evil_twin detector) vs `networks.allowed_*` | the detector keeps its own until it is moved to `networks` in a later step (not in these phases) |
 | R12 | Event noise (BEACONRATE as high, NOCLIENTMFP per client) | episodes, override table, Q4 |
 | R13 | Privacy regressions (client MACs in Kismet alerts) | never copied, fixture assertion, API response scan |
 | R14 | Frontend build on the 1 GB box | no new dependencies; build one image at a time (README) |
 | R15 | Old/new API coexistence | `/api/v2` prefix; old endpoints removed only after the last page switched |
+
+**R1, measured 2026-10-24 ~21:30 UTC (read-only):** the disk was grown to 30
+GB (live-upload 9.4 B); `df /`: 30.08 GB, 16.31 GB used, **13.76 GB free**.
+Database 1.863 GB (`pg_database_size`), of it `observations` 1.42 GB for
+5.96 M rows (239 B a row incl. indexes); `devices` 152 MB (mostly the
+snapshot-era client devices), the rest < 40 MB a table. Docker: images
+1.85 GB (0.43 GB reclaimable), volumes 1.97 GB (the database), build cache
+0.3 MB; journals 366 MB; `server/backups/` 607 MB (7 dumps of 63-85 MB +
+the kept 108 MB pre-v6 dump); the buffer snapshots are gone from the box.
+
+| Growth | Per day | Source |
+|---|---|---|
+| AP observations | ~44 MB | ~185 k rows a day (`sensor_hourly.ap_obs`, 10-15 - 10-24: 174-197 k) x 239 B |
+| other tables | ~4 MB | polls 0.5, `sensor_uploads` 1.2, `ap_rssi_hourly` 0.8, `refresh_runs` 0.5, load hours 0.4, history and changes 0.6, heartbeats 0.3 |
+| **database** | **~48 MB** | |
+| dumps, if `backup.sh` ran daily (KEEP 7) | ~+20 MB, rising | each dump 85 MB, +2.8 MB a day (10-17 -> 10-18); today `backup.sh` runs only by hand (no cron, no timer) |
+
+| Scenario (1 GB kept free) | Usable | Lasts | Date |
+|---|---|---|---|
+| database only, dumps by hand as now | 12.8 GB | ~265 days | ~mid-July 2027 |
+| + 7 daily dumps | 12.8 GB | ~190 days | ~end of April 2027 |
+| a rewrite of `observations` (partitioning D, `VACUUM FULL`) needs its size free again (1.42 GB + 44 MB/day) | | ~125 days | **~late February 2027** |
+
+So the disk is no longer the near-term risk; the decision that has a date is
+raw-observation retention / partitioning (`live-upload.md` 9.3 C/D) -
+before ~February 2027 if partitioning is wanted, since its table rewrite
+needs the free space. Also open (the developer's): `backup.sh` is not
+scheduled - a daily run copied off the box would cost ~20 MB/day here.
 
 ---
 
