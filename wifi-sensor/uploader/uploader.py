@@ -12,7 +12,8 @@ only on a 2xx, so an outage, a crash or a refused batch never loses data:
 the same polls are sent again (the server merges idempotently). Polls whose
 clock was wrong are placed on the true time line first (timeline.py); polls
 of a boot without a clock anchor wait for one. A heartbeat rides along with
-every batch; a standalone one goes when no batch went for HEARTBEAT_S.
+every batch; a standalone one goes when no batch went for HEARTBEAT_S, and a
+refused one is retried after 5, 10, 20, 40 s, then about every HEARTBEAT_S.
 
 Configuration - environment, else KEY=value lines in UPLOADER_CONF
 (default /etc/wifi-sensor/uploader.conf), DB_PATH / RETENTION_DAYS also from
@@ -51,7 +52,7 @@ import sensorinfo  # noqa: E402
 import state as statemod  # noqa: E402
 from client import Client, Refused, describe_token  # noqa: E402
 
-VERSION = "1.0"
+VERSION = "1.1"
 log = logging.getLogger("uploader")
 
 DEFAULTS = {
@@ -137,6 +138,9 @@ class Uploader:
         self.db = None
         self.data_version = None
         self.backoff = Backoff(cfg["BACKOFF_MAX_S"])
+        # a refused heartbeat is retried after 5, 10, 20, 40 s, then about every
+        # HEARTBEAT_S - not on every tick (the 2026-10-20 outage: one every 2 s)
+        self.hb_backoff = Backoff(cfg["HEARTBEAT_S"])
         self.max_polls = int(cfg["CATCHUP_POLLS"])
         self.last_contact = 0.0          # monotonic
         self.contact_since = None        # monotonic, first contact of this process
@@ -193,8 +197,10 @@ class Uploader:
         status, body, rtt, mid = self.client.post("/heartbeat", {"v": 1, "heartbeat": self.heartbeat()})
         self.rtt_ms = rtt
         if status == 200:
+            self.hb_backoff.ok()
             self.contact(mid, body)
             return body
+        self.hb_backoff.fail(time.monotonic())
         self.last_result = "heartbeat %s" % (status or (body or {}).get("detail"))
         log.warning("heartbeat refused: %s %s", status, (body or {}).get("detail"))
         return None
@@ -224,6 +230,8 @@ class Uploader:
         bid = batchmod.meta(db, "buffer_id")
         if self.state and (self.state.get("cursor") or {}).get("buffer_id") == bid:
             return True
+        if self.hb_backoff.waiting(time.monotonic()):
+            return False
         body = self.send_heartbeat()
         if body is None:
             return False
@@ -340,7 +348,8 @@ class Uploader:
                     break
                 time.sleep(self.cfg["CATCHUP_PAUSE_S"])
             caught_up = not self.backlog() or self.backoff.waiting(time.monotonic())
-        if time.monotonic() - self.last_contact >= self.cfg["HEARTBEAT_S"]:
+        now = time.monotonic()
+        if now - self.last_contact >= self.cfg["HEARTBEAT_S"] and not self.hb_backoff.waiting(now):
             self.send_heartbeat()
         return caught_up and not self.backlog()
 
