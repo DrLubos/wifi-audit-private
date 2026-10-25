@@ -7,13 +7,17 @@ network beyond Kismet's loopback REST; server/docs/config-delivery.md 5).
     config_apply.py capabilities   Kismet's channel list for the source + the regulatory country (hourly)
 
 apply: validate desired.json again (it is untrusted input: the unprivileged
-uploader wrote it) against the live adapter; keep the last good files; write
-the new kismet_site.conf source options (channels, channel_hoprate) and
-collector.conf POLL_INTERVAL atomically; apply the hop list live through
-Kismet's set_channel.cmd (the file first, so the hop guard pushes towards
-it); restart the collector only when the poll interval changed; verify that
-collecting polls with the new hop list arrive; otherwise restore the last
-good files, apply and verify them. The outcome goes to result.json
+uploader wrote it) against the live adapter; keep the last good files; pause
+the hop guard; write the new kismet_site.conf source options (channels,
+channel_hoprate) and collector.conf POLL_INTERVAL atomically; RESTART KISMET
+(the developer's decision of 2026-10-25: the live set_channel.cmd was
+refused by the running rtw88 source - config-delivery.md 15; a restart reads
+the file, as every boot does) and the collector only when the poll interval
+changed; judge the result from the polls alone (consecutive collecting polls
+with the new hop list - a Kismet call that times out decides nothing);
+otherwise restore the last good files, restart and verify them. The hop
+guard runs again afterwards, whatever happened. Each restart's capture gap
+(last collecting poll before, first after) goes into the checks. The outcome goes to result.json
 (applied / rejected / rolled_back / failed, with the reason and the checks),
 which the uploader reports; applied.json names the running configuration
 (the collector stores its version with every poll). A refused hash is never
@@ -29,7 +33,8 @@ Configuration - environment, else KEY=value lines in CONFIG_APPLY_CONF
   KISMET_URL         Default: http://127.0.0.1:2501
   KISMET_AUTH_FILE   the sensor user's kismet_httpd.conf (admin login)
   SOURCE_NAME        Default: capture
-  VERIFY_S 180, ROLLBACK_VERIFY_S 120, CHECK_EVERY_S 10, VERIFY_POLLS 3
+  VERIFY_S 300, ROLLBACK_VERIFY_S 300, CHECK_EVERY_S 10, VERIFY_POLLS 3
+  KISMET_TIMEOUT_S 45 (above Kismet's own 30-s wait for its capture helper)
 Standard library only. Tests: python3 -m unittest discover -s sensor/tests
 """
 
@@ -58,11 +63,14 @@ DEFAULTS = {
     "KISMET_URL": "http://127.0.0.1:2501",
     "KISMET_AUTH_FILE": "",
     "SOURCE_NAME": "capture",
-    "VERIFY_S": "180", "ROLLBACK_VERIFY_S": "120", "CHECK_EVERY_S": "10", "VERIFY_POLLS": "3",
+    "VERIFY_S": "300", "ROLLBACK_VERIFY_S": "300", "CHECK_EVERY_S": "10", "VERIFY_POLLS": "3",
+    "KISMET_TIMEOUT_S": "45",
 }
-NUMERIC = ("VERIFY_S", "ROLLBACK_VERIFY_S", "CHECK_EVERY_S", "VERIFY_POLLS")
+NUMERIC = ("VERIFY_S", "ROLLBACK_VERIFY_S", "CHECK_EVERY_S", "VERIFY_POLLS", "KISMET_TIMEOUT_S")
 MAX_DESIRED_BYTES = 8192
 COLLECTOR_UNIT = "wifi-sensor-collector.service"
+KISMET_UNIT = "kismet.service"
+HOP_GUARD_UNIT = "wifi-sensor-hop-guard.service"
 
 
 def log(msg):
@@ -240,7 +248,7 @@ class Kismet:
               "kismet.datasource.hop_channels", "kismet.datasource.hop_rate", "kismet.datasource.hop_shuffle",
               "kismet.datasource.channels"]
 
-    def __init__(self, url, auth_file, timeout=10):
+    def __init__(self, url, auth_file, timeout=45):
         import base64
         self.url, self.timeout = url.rstrip("/"), timeout
         conf = read_kv(auth_file)
@@ -259,10 +267,6 @@ class Kismet:
 
     def sources(self):
         return self._post("/datasource/all_sources.json", {"fields": self.FIELDS})
-
-    def set_hop(self, uuid, channels, rate, shuffle):
-        return self._post("/datasource/by-uuid/%s/set_channel.cmd" % uuid,
-                          {"channels": channels, "rate": rate, "shuffle": int(bool(shuffle))})
 
 
 def capture_source(sources, name):
@@ -283,6 +287,15 @@ def last_poll_id(db_path):
     with sqlite3.connect("file:%s?mode=ro" % db_path, uri=True, timeout=10) as db:
         r = db.execute("SELECT max(id) FROM polls").fetchone()
     return r[0] or 0
+
+
+def capture_gap(db_path, after_id):
+    """(last collecting poll at or before AFTER_ID, first collecting poll after
+    it): ts of each or None - the capture gap a restart caused."""
+    q = ("SELECT max(ts) FROM polls WHERE id <= ? AND ok = 1 AND ds_running = 1 AND devices_active > 0",
+         "SELECT min(ts) FROM polls WHERE id > ? AND ok = 1 AND ds_running = 1 AND devices_active > 0")
+    with sqlite3.connect("file:%s?mode=ro" % db_path, uri=True, timeout=10) as db:
+        return tuple(db.execute(x, (after_id,)).fetchone()[0] for x in q)
 
 
 def collecting_polls(db_path, after_id, n_channels, poll_s):
@@ -312,7 +325,8 @@ class Applier:
     def __init__(self, cfg, kismet=None, systemctl=None, sleep=time.sleep, now=time.time):
         self.cfg = cfg
         self.kismet = kismet
-        self.systemctl = systemctl or (lambda *a: subprocess.run(["systemctl"] + list(a), check=True, timeout=120))
+        # a Kismet restart: TimeoutStopSec=60 plus its pre-start (adapter, chrony waits)
+        self.systemctl = systemctl or (lambda *a: subprocess.run(["systemctl"] + list(a), check=True, timeout=300))
         self.sleep, self.now = sleep, now
         self.dir = cfg["STATE_DIR"]
         self.last_good = os.path.join(self.dir, "last-good")
@@ -357,42 +371,54 @@ class Applier:
             coll = f.read()
         return site, coll
 
-    def go_live(self, channels, dwell_s, poll_changed):
-        src = capture_source(self.kismet.sources(), self.cfg["SOURCE_NAME"])
-        if src is None:
-            raise RuntimeError("no Kismet datasource")
-        self.kismet.set_hop(src["kismet.datasource.uuid"], ",".join(channels), hop_rate(dwell_s),
-                            src.get("kismet.datasource.hop_shuffle", 1))
-        if poll_changed:
-            self.systemctl("restart", COLLECTOR_UNIT)
+    def restart(self, poll_changed):
+        """Kismet reads the new file (and the collector a new poll interval).
+        A restart that errors or times out decides nothing: the polls do."""
+        errors = []
+        for unit, wanted in ((KISMET_UNIT, True), (COLLECTOR_UNIT, poll_changed)):
+            if not wanted:
+                continue
+            try:
+                self.systemctl("restart", unit)
+            except Exception as e:
+                errors.append("%s: %s" % (unit, str(e)[:120]))
+        return errors
 
     def verify(self, channels, dwell_s, poll_s, after_id, seconds):
-        """(ok, checks) - waits up to SECONDS for VERIFY_POLLS consecutive
-        collecting polls with the hop list, and Kismet's live list and rate."""
+        """(ok, checks) - the polls decide: VERIFY_POLLS consecutive collecting
+        polls after AFTER_ID with the hop list (ds_hop_n = N and ds_hop_ok: the
+        collector compares Kismet's live list with the file), spaced poll_s,
+        packets rising, within SECONDS. Kismet's live list and rate are
+        recorded for the record only; a Kismet call that fails is no verdict."""
         need = int(self.cfg["VERIFY_POLLS"])
         deadline = self.now() + seconds
         checks = {}
         while True:
-            try:
-                src = capture_source(self.kismet.sources(), self.cfg["SOURCE_NAME"]) or {}
-            except Exception as e:                       # Kismet restarting: keep waiting
-                src = {}
-                checks["kismet_error"] = str(e)[:200]
-            live = src.get("kismet.datasource.hop_channels") or []
             good = collecting_polls(self.cfg["DB_PATH"], after_id, len(channels), poll_s)
             packets = [g["packets"] for g in good if g["packets"] is not None]
-            checks = {"live_list_ok": same_list(live, channels), "live_n": len(live),
-                      "live_rate": src.get("kismet.datasource.hop_rate"), "rate_ok":
-                      float(src.get("kismet.datasource.hop_rate") or 0) == float(hop_rate(dwell_s)),
-                      "running": bool(src.get("kismet.datasource.running")), "collecting_polls": len(good),
-                      "packets_rising": len(packets) >= 2 and packets[-1] > packets[0]}
-            if (checks["live_list_ok"] and checks["rate_ok"] and checks["running"] and len(good) >= need
-                    and checks["packets_rising"]):
+            checks = {"collecting_polls": len(good), "packets_rising": len(packets) >= 2 and packets[-1] > packets[0]}
+            if len(good) >= need and checks["packets_rising"]:
                 checks["first_poll"] = good[0]["id"]
+                last, first = capture_gap(self.cfg["DB_PATH"], after_id)
+                checks.update(gap_from=last, gap_to=first,
+                              gap_s=None if last is None or first is None else first - last)
+                try:
+                    src = capture_source(self.kismet.sources(), self.cfg["SOURCE_NAME"]) or {}
+                    checks.update(live_n=len(src.get("kismet.datasource.hop_channels") or []),
+                                  live_rate=src.get("kismet.datasource.hop_rate"),
+                                  live_list_ok=same_list(src.get("kismet.datasource.hop_channels"), channels))
+                except Exception as e:                   # information only
+                    checks["kismet_error"] = str(e)[:200]
                 return True, checks
             if self.now() >= deadline:
                 return False, checks
             self.sleep(self.cfg["CHECK_EVERY_S"])
+
+    def hop_guard(self, action):
+        try:
+            self.systemctl(action, HOP_GUARD_UNIT)
+        except Exception as e:
+            log("hop guard %s failed: %s" % (action, e))
 
     def capabilities(self, sources=None):
         src = capture_source(sources if sources is not None else self.kismet.sources(), self.cfg["SOURCE_NAME"])
@@ -425,7 +451,10 @@ class Applier:
                 log("v%s was refused before (no retry requested) - not applied" % meta["version"])
                 return None
             os.remove(marker)
-        sources = self.kismet.sources()
+        try:
+            sources = self.kismet.sources()
+        except Exception as e:
+            return self.result(meta, "rejected", "Kismet did not answer (%s) - nothing changed; send it again" % str(e)[:120])
         caps = self.capabilities(sources)
         write_json(self.path("capabilities.json"), caps)
         ok, reason = cc.validate(cfg, caps)
@@ -444,21 +473,28 @@ class Applier:
         started = last_poll_id(self.cfg["DB_PATH"])
         write_json(self.path("attempt.json"), dict(meta, phase="apply", started_poll=started, at=self.now()))
         self.result(meta, "applying", started_poll=started)
+        self.hop_guard("stop")                            # it would push a list while Kismet restarts
         try:
-            self.write_files(site_conf_with(site, self.cfg["SOURCE_NAME"], new["channels"], new["dwell_s"]),
-                             collector_conf_with(coll, new["poll_s"]))
-            self.go_live(new["channels"], new["dwell_s"], new["poll_s"] != old_poll)
-            ok, checks = self.verify(new["channels"], new["dwell_s"], new["poll_s"], started, self.cfg["VERIFY_S"])
-            reason = None if ok else "capture did not verify: %s" % _failed(checks)
-        except Exception as e:                           # anything: roll back
-            ok, checks, reason = False, {"error": str(e)[:200]}, "apply failed: %s" % str(e)[:200]
-        if ok:
-            write_json(self.path("applied.json"), dict(meta, effective_poll=checks["first_poll"], at=self.now()))
-            self.keep_last_good(*self.files())
-            os.remove(self.path("attempt.json"))
-            return self.result(meta, "applied", started_poll=started, effective_poll=checks["first_poll"],
-                               checks=checks)
-        return self.rollback(meta, started, reason, checks, old_poll != new["poll_s"])
+            try:
+                self.write_files(site_conf_with(site, self.cfg["SOURCE_NAME"], new["channels"], new["dwell_s"]),
+                                 collector_conf_with(coll, new["poll_s"]))
+                errors = self.restart(new["poll_s"] != old_poll)
+                ok, checks = self.verify(new["channels"], new["dwell_s"], new["poll_s"], started,
+                                         self.cfg["VERIFY_S"])
+                if errors:
+                    checks["restart_errors"] = errors
+                reason = None if ok else "capture did not verify: %s" % _failed(checks)
+            except Exception as e:                       # anything: roll back
+                ok, checks, reason = False, {"error": str(e)[:200]}, "apply failed: %s" % str(e)[:200]
+            if ok:
+                write_json(self.path("applied.json"), dict(meta, effective_poll=checks["first_poll"], at=self.now()))
+                self.keep_last_good(*self.files())
+                os.remove(self.path("attempt.json"))
+                return self.result(meta, "applied", started_poll=started, effective_poll=checks["first_poll"],
+                                   checks=checks)
+            return self.rollback(meta, started, reason, checks, old_poll != new["poll_s"])
+        finally:
+            self.hop_guard("start")
 
     def rollback(self, meta, started, reason, checks, poll_changed):
         self._refuse(meta["sha256"])
@@ -467,9 +503,11 @@ class Applier:
             self.write_files(site, coll)
             chans, dwell = site_conf_config(site, self.cfg["SOURCE_NAME"])
             poll = collector_poll_s(coll)
-            self.go_live(chans, dwell, poll_changed)
             after = last_poll_id(self.cfg["DB_PATH"])
+            errors = self.restart(poll_changed)
             ok, rchecks = self.verify(chans, dwell, poll, after, self.cfg["ROLLBACK_VERIFY_S"])
+            if errors:
+                rchecks["restart_errors"] = errors
         except Exception as e:
             ok, rchecks = False, {"error": str(e)[:200]}
         if os.path.exists(self.path("attempt.json")):
@@ -499,7 +537,7 @@ class Applier:
 
 
 def _failed(checks):
-    keys = [k for k in ("live_list_ok", "rate_ok", "running", "packets_rising") if checks.get(k) is False]
+    keys = [k for k in ("packets_rising",) if checks.get(k) is False]
     return ", ".join(keys + (["%d collecting polls" % checks["collecting_polls"]]
                              if "collecting_polls" in checks else [])) or "no checks"
 
@@ -526,7 +564,7 @@ def main(argv):
         if cmd == "recover":
             Applier(cfg).recover()
             return 0
-        kismet = Kismet(cfg["KISMET_URL"], cfg["KISMET_AUTH_FILE"])
+        kismet = Kismet(cfg["KISMET_URL"], cfg["KISMET_AUTH_FILE"], timeout=cfg["KISMET_TIMEOUT_S"])
         a = Applier(cfg, kismet)
         if cmd == "capabilities":
             write_json(a.path("capabilities.json"), a.capabilities())

@@ -92,8 +92,8 @@ main() {
 # The capture-configuration applier (config_apply.py; ../server/docs/config-delivery.md).
 # It runs only when the uploader hands it a configuration (CONFIG_APPLY=1 in uploader.conf).
 KISMET_AUTH_FILE=$SENSOR_HOME/.kismet/kismet_httpd.conf
-#VERIFY_S=180
-#ROLLBACK_VERIFY_S=120
+#VERIFY_S=300
+#ROLLBACK_VERIFY_S=300
 CONF
   fi
 

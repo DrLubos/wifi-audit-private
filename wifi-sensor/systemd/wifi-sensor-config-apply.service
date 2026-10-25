@@ -11,7 +11,7 @@ After=kismet.service wifi-sensor-collector.service
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 __INSTALL_DIR__/config-apply/config_apply.py apply
-TimeoutStartSec=15min
+TimeoutStartSec=25min
 StateDirectory=wifi-sensor-config
 StateDirectoryMode=0755
 ProtectSystem=strict
