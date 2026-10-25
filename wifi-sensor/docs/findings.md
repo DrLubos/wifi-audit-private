@@ -254,7 +254,7 @@ in section 7.
 | 2026-10-18 21:20:24 (last poll) | 2026-10-18 21:21:22 (first poll) | 58 s | Reboot for clock-validation run A30, third attempt (aborted, section 13); planned, buffer seq continuous (92407 -> 92408), nothing lost |
 | 2026-10-18 21:11:38 (last poll) | 2026-10-18 21:12:54 (first poll) | 1 m 16 s | Reboot for clock-validation run A30, second attempt (aborted, section 13); planned, buffer seq continuous (92391 -> 92392), nothing lost |
 | 2026-10-18 21:02:45 (last poll) | 2026-10-18 21:04:08 (first poll) | 1 m 23 s | Reboot for clock-validation run A30 (aborted, section 13); planned, buffer seq continuous (92375 -> 92376), nothing lost |
-| 2026-10-14 05:30:28 (last poll) | 2026-10-14 08:51:37 (first poll) | 3 h 21 m | Pi off, as above (journal ends 05:30:36). After this boot the capture watchdog found the adapter on another USB port: "wlan1 is on hub port 1-1-port3 (was 1-1.1-port2)" (08:54:57) - the hardware was re-plugged during the gap. Whether cable, antenna or position changed (an RSSI boundary, `hardware_change`) is the developer's to record |
+| 2026-10-14 05:30:28 (last poll) | 2026-10-14 08:51:37 (first poll) | 3 h 21 m | Pi off, as above (journal ends 05:30:36). After this boot the capture watchdog found the adapter on another USB port: "wlan1 is on hub port 1-1-port3 (was 1-1.1-port2)" (08:54:57) - the hardware was re-plugged during the gap. **Not a `hardware_change`** (the developer, 2026-10-25): same adapter, same antenna, only the USB port changed - no RSSI boundary |
 | 2026-10-20 10:55:16 (last poll, uploaded live 10:55:18.5) | 2026-10-20 19:04:41 (first ok poll, corrected; raw 10:39:42 on the stale boot clock) | 8 h 9 m | Pi off - the end-to-end outage test (section 14): power and Ethernet unplugged by the developer, then booted without network; buffer seq continuous (96909 -> 96910), the boot's first poll (19:04:11) failed while Kismet started. The 3 days without network that followed are **not** a gap: 8,534 polls were captured and replayed (section 14). Plus ~20 s without frames at the clock step on reconnect (2026-10-23 18:10:55 - 18:11:15, capture helper restart) and channel 1 only until 18:11:20 (hop guard) - `sensor_periods` 'limited' 18:11:12 - 18:12:33 |
 
 **2026-09-22 disk-full gap** (boundaries read from `polls` in the live buffer):
@@ -1228,8 +1228,9 @@ Read-only on the Pi: `journalctl --list-boots`, the boots' journals,
 
 ## 14. End-to-end outage test of the live upload (2026-10-20 - 10-23)
 
-Run by the developer (power and Ethernet unplugged, the Pi booted without
-network, reconnected after 3 days); verified read-only by Claude on
+Run by the developer (power and Ethernet unplugged - the 8-h power-off was
+part of the test, confirmed 2026-10-25 - the Pi booted without network,
+reconnected after 3 days); verified read-only by Claude on
 2026-10-24 from the buffer (`mode=ro`), the Pi's journal and the server
 (`claude_ro`). Times UTC on the true time line; the Pi's journal before the
 step carries the stale clock (true = journal + 30,299.3 s). Pipeline metrics:
