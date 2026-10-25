@@ -98,11 +98,18 @@ stale ts. meta.buffer_id identifies this buffer (row ids restart with a new
 one). The migration only adds columns and tables; roll back by setting
 meta.schema_version to 7 (the v7 code ignores them).
 
+Schema v9 (configuration delivery, server/docs/config-delivery.md 6):
+polls.config_version - the version of the delivered capture configuration
+the applier last applied (its applied.json, read by collector.py on every
+poll); NULL while none was ever applied. ALTER TABLE ADD COLUMN only; roll
+back by setting meta.schema_version to 8.
+
 The "sent" columns are unused (the uploader keeps its own cursor and opens
 the buffer read-only). No detection lives here - the store only writes what
 shape.py produced.
 """
 
+import json
 import logging
 import os
 import sqlite3
@@ -110,7 +117,21 @@ import uuid
 
 log = logging.getLogger("collector.store")
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
+
+
+def applied_config_version(path):
+    """The version in the configuration applier's applied.json (buffer v9,
+    polls.config_version), or None: none applied, no file, or anything
+    unreadable - a poll is never lost over it."""
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            v = json.load(f).get("version")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -137,7 +158,8 @@ CREATE TABLE IF NOT EXISTS polls (
   mono           REAL,               -- CLOCK_MONOTONIC at ts (v8)
   boot_id        TEXT,               -- /proc/sys/kernel/random/boot_id (v8)
   clock_synced   INTEGER,            -- 1 = chrony synchronised, |offset| < 0.5 s (v8)
-  chrony_offset  REAL);              -- chrony's system time offset, s (v8)
+  chrony_offset  REAL,               -- chrony's system time offset, s (v8)
+  config_version INTEGER);           -- the applied capture configuration's version (v9; NULL = none)
 CREATE INDEX IF NOT EXISTS polls_ts ON polls(ts);
 
 CREATE TABLE IF NOT EXISTS devices (
@@ -394,6 +416,9 @@ class Store:
         if v == "7":
             self._migrate_v7_to_v8(boot_id)
             v = "8"
+        if v == "8":
+            self._migrate_v8_to_v9()
+            v = "9"
         if v is not None and int(v) != SCHEMA_VERSION:
             raise RuntimeError("database schema version %s, collector expects %d"
                                % (v, SCHEMA_VERSION))
@@ -527,6 +552,21 @@ class Store:
             self.db.execute("ROLLBACK")
             raise
 
+    def _migrate_v8_to_v9(self):
+        """v9 adds polls.config_version (configuration delivery). Roll back by
+        setting meta.schema_version to 8 (the v8 code ignores the column)."""
+        log.info("migrating buffer schema v8 -> v9: polls.config_version")
+        self.db.execute("BEGIN")
+        try:
+            cols = [r[1] for r in self.db.execute("PRAGMA table_info(polls)")]
+            if cols and "config_version" not in cols:
+                self.db.execute("ALTER TABLE polls ADD COLUMN config_version INTEGER")
+            self.set_meta("schema_version", "9")
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+
     def close(self):
         self.db.close()
 
@@ -582,12 +622,13 @@ class Store:
             poll_id = self.db.execute(
                 "INSERT INTO polls(ts, kismet_ts, devices_total, devices_active, new_obs, "
                 "ds_running, ds_error, ds_packets, ds_hop_n, ds_hop_visited, ds_hop_ok, "
-                "duration_ms, ok, mono, boot_id, clock_synced, chrony_offset) "
-                "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
+                "duration_ms, ok, mono, boot_id, clock_synced, chrony_offset, config_version) "
+                "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
                 (ts, health.get("kismet_ts"), health.get("devices_total"), len(records),
                  health.get("ds_running"), health.get("ds_error"),
                  health.get("ds_packets"), health.get("ds_hop_n"), health.get("ds_hop_visited"),
-                 health.get("ds_hop_ok"), duration_ms) + self._clock_cols(clock)).lastrowid
+                 health.get("ds_hop_ok"), duration_ms) + self._clock_cols(clock)
+                + (health.get("config_version"),)).lastrowid
             for rec in records:
                 if self._write_device(rec, poll_id, clock):
                     new_obs += 1
@@ -637,15 +678,15 @@ class Store:
                             "(SELECT id FROM polls WHERE boot_id = ?)", (boot,))
             log.info("clock anchor for boot %s: %d pending AP load rows on their true hours", boot, len(pending))
 
-    def write_failed_poll(self, ts, error, duration_ms, clock=None):
+    def write_failed_poll(self, ts, error, duration_ms, clock=None, config_version=None):
         """Record a poll that raised before anything could be shaped (explicit
         transaction, same as write_poll)."""
         self.db.execute("BEGIN")
         try:
             self.db.execute(
-                "INSERT INTO polls(ts, duration_ms, ok, error, mono, boot_id, clock_synced, chrony_offset) "
-                "VALUES (?, ?, 0, ?, ?, ?, ?, ?)",
-                (ts, duration_ms, error[:500]) + self._clock_cols(clock))
+                "INSERT INTO polls(ts, duration_ms, ok, error, mono, boot_id, clock_synced, chrony_offset, "
+                "config_version) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?)",
+                (ts, duration_ms, error[:500]) + self._clock_cols(clock) + (config_version,))
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")

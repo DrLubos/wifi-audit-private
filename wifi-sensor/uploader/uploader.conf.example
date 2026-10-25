@@ -18,3 +18,9 @@ CAPTURE_IFACE=wlan1
 #MAX_BATCH_BYTES=1048576
 #BACKOFF_MAX_S=600
 #LOG_LEVEL=INFO
+
+# Configuration delivery (server/docs/config-delivery.md): 1 = accept the
+# capture configuration saved in Settings -> Sensors (the root applier,
+# install_config_apply.sh, applies and verifies it, and rolls back on
+# failure). 0 (default) = never take one; the server shows "not accepting".
+#CONFIG_APPLY=0

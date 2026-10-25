@@ -44,7 +44,7 @@ import clock  # noqa: E402
 from hop_coverage import SiteConf, hop_health  # noqa: E402
 from kismet_client import KismetClient, KismetError  # noqa: E402
 from shape import DEVICE_FIELDS, shape_alert, shape_device  # noqa: E402
-from store import Store  # noqa: E402
+from store import Store, applied_config_version  # noqa: E402
 
 log = logging.getLogger("collector")
 
@@ -60,6 +60,9 @@ DEFAULTS = {
     "RETENTION_DAYS": "14",
     "HTTP_TIMEOUT": "15",
     "KISMET_SITE_CONF": "/etc/kismet/kismet_site.conf",
+    # the configuration applier's record of what it applied (buffer v9:
+    # polls.config_version; server/docs/config-delivery.md 6)
+    "CONFIG_APPLIED": "/var/lib/wifi-sensor-config/applied.json",
     "LOG_LEVEL": "INFO",
 }
 
@@ -146,6 +149,7 @@ def poll_once(client, store, cfg, since, site=None, clk=None):
     (read_clock()) the clock data stored with the poll (None: v7 behaviour)."""
     ts = int(clk["wall"]) if clk else int(time.time())
     t0 = time.monotonic()
+    config_version = applied_config_version(cfg.get("CONFIG_APPLIED"))
     try:
         status = client.status()
         sources = client.datasources()
@@ -155,7 +159,7 @@ def poll_once(client, store, cfg, since, site=None, clk=None):
         raw_alerts = client.alerts_since(query_from)
     except KismetError as e:
         ms = int((time.monotonic() - t0) * 1000)
-        store.write_failed_poll(ts, str(e), ms, clock=clk)
+        store.write_failed_poll(ts, str(e), ms, clock=clk, config_version=config_version)
         log.warning("poll failed after %d ms: %s", ms, e)
         return since
 
@@ -181,6 +185,7 @@ def poll_once(client, store, cfg, since, site=None, clk=None):
         "ds_hop_n": hop_n,
         "ds_hop_visited": hop_visited,
         "ds_hop_ok": hop_ok,
+        "config_version": config_version,
     }
     ms = int((time.monotonic() - t0) * 1000)
     new_obs, new_alerts = store.write_poll(ts, health, records, alerts, ms, clock=clk)

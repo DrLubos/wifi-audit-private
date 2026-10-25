@@ -28,6 +28,13 @@ the collector's COLLECTOR_CONF:
   WATCH_S 2, HEARTBEAT_S 60, CATCHUP_POLLS 120, CATCHUP_PAUSE_S 2,
   MAX_BATCH_BYTES 1048576, BACKOFF_MAX_S 600, SERVER_ANCHOR_AFTER_S 120,
   RETENTION_DAYS (14), HTTP_TIMEOUT 30, LOG_LEVEL INFO
+  CONFIG_APPLY       0 (default) / 1: accept the capture configuration the
+                     server delivers (server/docs/config-delivery.md) - written
+                     to CONFIG_DIR/desired.json for the root applier; with 0
+                     the heartbeat says "not accepting" and nothing is written
+  CONFIG_DIR         Default: /var/lib/wifi-sensor-uploader/config
+  CONFIG_STATE_DIR   the applier's state (applied, result, capabilities)
+                     Default: /var/lib/wifi-sensor-config
 
 Run:  uploader.py            the daemon (systemd: wifi-sensor-uploader.service)
       uploader.py --check    one real heartbeat + the first batch built, not sent;
@@ -45,14 +52,16 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "collector"))   # clock.py, installed next to it
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "sensor"))      # capture_config.py (source tree; installed: here)
 
 import batch as batchmod  # noqa: E402
 import clock  # noqa: E402
+import configsync  # noqa: E402
 import sensorinfo  # noqa: E402
 import state as statemod  # noqa: E402
 from client import Client, Refused, describe_token  # noqa: E402
 
-VERSION = "1.1"
+VERSION = "1.2"
 log = logging.getLogger("uploader")
 
 DEFAULTS = {
@@ -67,7 +76,10 @@ DEFAULTS = {
     "WATCH_S": "2", "HEARTBEAT_S": "60", "CATCHUP_POLLS": "120", "CATCHUP_PAUSE_S": "2",
     "MAX_BATCH_BYTES": "1048576", "BACKOFF_MAX_S": "600", "SERVER_ANCHOR_AFTER_S": "120",
     "RETENTION_DAYS": "14", "HTTP_TIMEOUT": "30", "LOG_LEVEL": "INFO",
+    "CONFIG_APPLY": "0", "CONFIG_DIR": "/var/lib/wifi-sensor-uploader/config",
+    "CONFIG_STATE_DIR": "/var/lib/wifi-sensor-config",
 }
+CAPABILITIES_EVERY_S = 3600       # capabilities ride in a heartbeat hourly, and when the applier's file changes
 NUMERIC = ("WATCH_S", "HEARTBEAT_S", "CATCHUP_POLLS", "CATCHUP_PAUSE_S", "MAX_BATCH_BYTES", "BACKOFF_MAX_S",
            "SERVER_ANCHOR_AFTER_S", "RETENTION_DAYS", "HTTP_TIMEOUT")
 
@@ -147,6 +159,11 @@ class Uploader:
         self.rtt_ms = None
         self.last_result = "start"
         self.attempts = {}
+        self.accepting = str(cfg.get("CONFIG_APPLY", "0")).strip().lower() in ("1", "true", "yes", "on")
+        self.desired_path = os.path.join(cfg.get("CONFIG_DIR", DEFAULTS["CONFIG_DIR"]), "desired.json")
+        self.config_state_dir = cfg.get("CONFIG_STATE_DIR", DEFAULTS["CONFIG_STATE_DIR"])
+        self.caps_sent = (None, 0.0)      # (capabilities file mtime, monotonic) of the last heartbeat with them
+        self.offers_logged = set()
 
     # --- buffer ---------------------------------------------------------------------------------
 
@@ -191,7 +208,25 @@ class Uploader:
             "held_polls": batchmod.held_polls(db, self.boot), "unverified_polls": unverified,
             "disk_free_bytes": sensorinfo.disk_free(), "uploader_version": VERSION,
             "last_result": self.last_result, "adapter": sensorinfo.adapter(self.cfg["CAPTURE_IFACE"]),
+            "config_state": configsync.config_state(self.accepting, self.config_state_dir, self.desired_path),
+            "capabilities": self.capabilities_due(),
         }
+
+    def capabilities_due(self):
+        """The applier's capabilities when they changed or an hour has passed, else None."""
+        path = os.path.join(self.config_state_dir, "capabilities.json")
+        try:
+            mtime = os.stat(path).st_mtime
+        except OSError:
+            return None
+        now = time.monotonic()
+        last_mtime, last_at = self.caps_sent
+        if mtime == last_mtime and now - last_at < CAPABILITIES_EVERY_S:
+            return None
+        caps = configsync.capabilities(self.config_state_dir)
+        if caps is not None:
+            self.caps_sent = (mtime, now)
+        return caps
 
     def send_heartbeat(self):
         status, body, rtt, mid = self.client.post("/heartbeat", {"v": 1, "heartbeat": self.heartbeat()})
@@ -210,6 +245,9 @@ class Uploader:
         self.last_contact = now
         if self.contact_since is None:
             self.contact_since = now
+        offered = (body or {}).get("config")
+        if offered is not None:
+            self.take_delivery(offered)
         # server anchor (8.3): only when this boot's polls are held for one and
         # contact has lasted SERVER_ANCHOR_AFTER_S (NTP gets the first chance)
         if body and body.get("server_ts") and self.state is not None:
@@ -220,6 +258,16 @@ class Uploader:
                 anchors[self.boot] = {"wall": float(body["server_ts"]), "mono": mono_mid}
                 statemod.save(self.cfg["STATE_PATH"], self.state)
                 log.warning("boot %s: no NTP - anchored on the server's time (rtt %s ms)", self.boot, self.rtt_ms)
+
+    def take_delivery(self, offered):
+        """A desired configuration in a response: for the applier (config-delivery.md 3)."""
+        ok, why = configsync.accept_delivery(offered, self.desired_path, self.accepting)
+        key = (offered.get("version"), offered.get("sha256")) if isinstance(offered, dict) else None
+        if ok:
+            log.info("configuration v%s received - handed to the applier", key[0])
+        elif why != "already received" and key not in self.offers_logged:
+            self.offers_logged.add(key)
+            log.info("configuration v%s offered by the server - not taken: %s", key[0] if key else "?", why)
 
     # --- cursor ----------------------------------------------------------------------------------------
 

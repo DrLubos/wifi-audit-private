@@ -36,7 +36,7 @@ COLUMNS = {
                + ("config_changed_at", "cur_n_clients", "cur_qbss_stations", "cur_util_pct", "cur_at"),
     "polls": ("seq", "ts", "ts_offset_s", "kismet_ts", "devices_total", "devices_active", "new_obs",
               "ds_running", "ds_error", "ds_packets", "ds_hop_n", "ds_hop_visited", "ds_hop_ok",
-              "duration_ms", "ok", "error"),
+              "duration_ms", "ok", "error", "config_version"),
     "device_config_history": ("device_key", "ts") + CONFIG,
     "observations": ("ts", "device_key", "rssi", "rssi_floor", "pk_total", "pk_data", "disconnects",
                      "disconnects_last", "bss_timestamp"),
@@ -298,7 +298,8 @@ def build(db, cursor, current_boot, server_anchors, max_polls):
             kts = int(round(kts + p["offset"]))
         poll_rows.append([p["id"], p["true_ts"], p["offset"], kts, p["devices_total"], p["devices_active"],
                           p["new_obs"], p["ds_running"], p["ds_error"], p["ds_packets"], p.get("ds_hop_n"),
-                          p.get("ds_hop_visited"), p.get("ds_hop_ok"), p["duration_ms"], p["ok"], p["error"]])
+                          p.get("ds_hop_visited"), p.get("ds_hop_ok"), p["duration_ms"], p["ok"], p["error"],
+                          p.get("config_version")])
     tables = {}
     for name, rows in (("devices", dev_rows), ("polls", poll_rows), ("device_config_history", hist_rows),
                        ("observations", obs_rows), ("ap_load_hourly", load_rows), ("device_freq_hist", freq_rows),

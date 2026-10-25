@@ -50,7 +50,7 @@ class V8(unittest.TestCase):
         return self.store.write_poll(ts, HEALTH, recs, list(alerts), 42, clock=clk)
 
     def test_version_and_buffer_id(self):
-        self.assertEqual(SCHEMA_VERSION, 8)
+        self.assertGreaterEqual(SCHEMA_VERSION, 8)
         bid = self.store.get_meta("buffer_id")
         self.assertRegex(bid, r"^[0-9a-f-]{36}$")
         self.store.close()
@@ -170,7 +170,7 @@ class Migration(unittest.TestCase):
             db.commit()
             db.close()
             s = Store(path, boot_id=BOOT_A)
-            self.assertEqual(s.get_meta("schema_version"), "8")
+            self.assertEqual(s.get_meta("schema_version"), str(SCHEMA_VERSION))
             self.assertIsNotNone(s.get_meta("buffer_id"))
             cols = {r[1] for r in s.db.execute("PRAGMA table_info(polls)")}
             self.assertTrue({"mono", "boot_id", "clock_synced", "chrony_offset"} <= cols)

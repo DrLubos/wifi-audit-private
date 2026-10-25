@@ -95,13 +95,16 @@ main() {
   [[ -f $INSTALL_DIR/collector/clock.py ]] || die "collector v8 not installed (clock.py missing) - run install_collector.sh first"
   local v
   v=$(sudo -u "$SENSOR_USER" python3 -c "import sqlite3; db = sqlite3.connect('file:/var/lib/wifi-sensor/buffer.db?mode=ro', uri=True); print(db.execute(\"SELECT value FROM meta WHERE key = 'schema_version'\").fetchone()[0])" 2>/dev/null || echo "?")
-  [[ $v == 8 ]] || die "the buffer is schema '$v' - the uploader needs v8 (install_collector.sh, live-upload step 3)"
+  [[ $v =~ ^[0-9]+$ ]] && (( v >= 8 )) \
+    || die "the buffer is schema '$v' - the uploader needs v8 or newer (install_collector.sh, live-upload step 3)"
   log "sensor user: $SENSOR_USER  install: $INSTALL_DIR  buffer: v$v"
 
   step "Uploader code -> $INSTALL_DIR/uploader"
   install -d -m 0755 -o root -g root "$INSTALL_DIR/uploader"
   local f
-  for f in "$SRC_DIR"/*.py "$SRC_DIR"/README.md "$SRC_DIR"/uploader.conf.example; do
+  # capture_config.py (sensor/): the configuration rules and hash the uploader
+  # checks a delivered configuration with (server/docs/config-delivery.md 4.3)
+  for f in "$SRC_DIR"/*.py "$SRC_DIR"/../sensor/capture_config.py "$SRC_DIR"/README.md "$SRC_DIR"/uploader.conf.example; do
     [[ -f $f ]] || continue
     write_if_changed "$INSTALL_DIR/uploader/$(basename "$f")" 0644 root:root <"$f"
   done

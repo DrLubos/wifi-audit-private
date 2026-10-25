@@ -442,7 +442,7 @@ class StoreTest(unittest.TestCase):
         db.close()
         store = Store(path)
         try:
-            self.assertEqual(store.get_meta("schema_version"), "8")      # v6 -> v7 -> v8
+            self.assertEqual(store.get_meta("schema_version"), "9")      # v6 -> v7 -> v8 -> v9
             self.assertEqual(store.db.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 1)
             self.assertEqual(store.db.execute("SELECT COUNT(*) FROM ap_load_hourly").fetchone()[0], 0)
             raw = dict(AP_RAW)
@@ -484,11 +484,11 @@ class StoreTest(unittest.TestCase):
             store.close()
 
     def test_unknown_schema_version_is_refused(self):
-        path = os.path.join(self.tmp.name, "v9.db")
-        v9 = sqlite3.connect(path)
-        v9.executescript("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
-                         "INSERT INTO meta VALUES ('schema_version', '9');")
-        v9.close()
+        path = os.path.join(self.tmp.name, "v99.db")
+        v99 = sqlite3.connect(path)
+        v99.executescript("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+                          "INSERT INTO meta VALUES ('schema_version', '99');")
+        v99.close()
         with self.assertRaises(RuntimeError):
             Store(path)
 

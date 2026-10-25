@@ -386,7 +386,95 @@ def heartbeat(hb):
             raise Invalid("heartbeat: adapter.mac must be a MAC address")
         out["adapter"] = ad
     # configuration delivery (schema 18): uploader 1.2 reports these; older ones do not
-    from . import config as _config
-    out["config_state"] = _config.parse_state(hb.get("config_state"))
-    out["capabilities"] = _config.parse_capabilities(hb.get("capabilities"))
+    out["config_state"] = parse_state(hb.get("config_state"))
+    out["capabilities"] = parse_capabilities(hb.get("capabilities"))
     return out
+
+
+# --- configuration delivery (schema 18, docs/config-delivery.md 5.5) -------------------------------
+
+RESULTS = ("received", "applying", "applied", "rejected", "rolled_back", "failed")
+_HASH = re.compile(r"^[0-9a-f]{64}$")
+_COUNTRY = re.compile(r"^[A-Z0-9]{2}$")
+_ENTRY = re.compile(r"^[0-9A-Za-z+-]{1,16}$")
+REASON_MAX = 500
+CHECKS_MAX = 2000                    # characters of the checks object as text
+
+
+def _int(x):
+    return isinstance(x, int) and not isinstance(x, bool) and 0 <= x < 2 ** 63
+
+
+def _opt(d, key, ok, what):
+    x = d.get(key)
+    if x is not None and not ok(x):
+        raise Invalid("config_state: %s is invalid" % what)
+    return x
+
+
+def _flat(x, depth=0):
+    """A small JSON value of numbers, booleans, short strings, lists / objects of them."""
+    if x is None or isinstance(x, (bool, int, float)):
+        return True
+    if isinstance(x, str):
+        return len(x) <= 200
+    if depth >= 2:
+        return False
+    if isinstance(x, list):
+        return len(x) <= 20 and all(_flat(v, depth + 1) for v in x)
+    if isinstance(x, dict):
+        return len(x) <= 30 and all(isinstance(k, str) and len(k) <= 40 and _flat(v, depth + 1) for k, v in x.items())
+    return False
+
+
+def parse_state(x):
+    """heartbeat.config_state -> the known fields, or None (an uploader
+    before 1.2 sends none)."""
+    if x is None:
+        return None
+    if not isinstance(x, dict):
+        raise Invalid("config_state must be an object")
+    out = {"accepting": _opt(x, "accepting", lambda v: isinstance(v, bool), "accepting") is True,
+           "applied_version": _opt(x, "applied_version", _int, "applied_version"),
+           "applied_sha256": _opt(x, "applied_sha256", lambda v: isinstance(v, str) and _HASH.match(v),
+                                  "applied_sha256"),
+           "attempt": None}
+    a = x.get("attempt")
+    if a is not None:
+        if not isinstance(a, dict):
+            raise Invalid("config_state: attempt must be an object")
+        if not _int(a.get("version")):
+            raise Invalid("config_state: attempt.version is invalid")
+        if not (isinstance(a.get("sha256"), str) and _HASH.match(a["sha256"])):
+            raise Invalid("config_state: attempt.sha256 is invalid")
+        if a.get("result") not in RESULTS:
+            raise Invalid("config_state: attempt.result must be one of " + ", ".join(RESULTS))
+        reason = _opt(a, "reason", lambda v: isinstance(v, str) and len(v) <= REASON_MAX and "\x00" not in v,
+                      "attempt.reason")
+        checks = a.get("checks") or {}
+        if not isinstance(checks, dict) or not _flat(checks) or len(repr(checks)) > CHECKS_MAX:
+            raise Invalid("config_state: attempt.checks is invalid")
+        out["attempt"] = {"version": a["version"], "sha256": a["sha256"], "result": a["result"], "reason": reason,
+                          "started_poll": _opt(a, "started_poll", _int, "attempt.started_poll"),
+                          "effective_poll": _opt(a, "effective_poll", _int, "attempt.effective_poll"),
+                          "restored_poll": _opt(a, "restored_poll", _int, "attempt.restored_poll"),
+                          "checks": checks}
+    return out
+
+
+def parse_capabilities(x):
+    """heartbeat.capabilities (refreshed hourly by the sensor) -> the known
+    fields, or None."""
+    if x is None:
+        return None
+    if not isinstance(x, dict):
+        raise Invalid("capabilities must be an object")
+    ch = x.get("channels_supported")
+    if ch is not None and not (isinstance(ch, list) and len(ch) <= 400
+                               and all(isinstance(e, str) and _ENTRY.match(e) for e in ch)):
+        raise Invalid("capabilities: channels_supported is invalid")
+    country = x.get("reg_country")
+    if country is not None and not (isinstance(country, str) and _COUNTRY.match(country)):
+        raise Invalid("capabilities: reg_country must be a two-letter code")
+    return {"channels_supported": ch, "reg_country": country}
+
