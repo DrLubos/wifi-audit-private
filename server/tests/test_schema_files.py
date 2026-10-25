@@ -40,6 +40,8 @@ MIGRATION17 = open(os.path.join(HERE, "..", "ops", "migrate_schema17.sql"), enco
 ROLLBACK17 = open(os.path.join(HERE, "..", "ops", "rollback_schema17.sql"), encoding="utf-8").read()
 MIGRATION18 = open(os.path.join(HERE, "..", "ops", "migrate_schema18.sql"), encoding="utf-8").read()
 ROLLBACK18 = open(os.path.join(HERE, "..", "ops", "rollback_schema18.sql"), encoding="utf-8").read()
+MIGRATION19 = open(os.path.join(HERE, "..", "ops", "migrate_schema19.sql"), encoding="utf-8").read()
+ROLLBACK19 = open(os.path.join(HERE, "..", "ops", "rollback_schema19.sql"), encoding="utf-8").read()
 SCHEMA14_TABLES = ("sensor_tokens", "sensor_status", "sensor_heartbeats", "ingest_state",
                    "sensor_clock_boots", "sensor_seq_gaps")
 SCHEMA14_FUNCTIONS = ("ingest_stage_create", "ingest_merge", "refresh_contact_periods")
@@ -119,16 +121,17 @@ class SchemaFiles(unittest.TestCase):
     def test_version(self):
         def version(sql):
             return re.search(r"VALUES \('schema_version', '(\d+)'\)", sql).group(1)
-        self.assertEqual((version(SCHEMA), version(MIGRATION18), version(MIGRATION17), version(MIGRATION16),
-                          version(MIGRATION15), version(MIGRATION14), version(MIGRATION13), version(MIGRATION12),
-                          version(MIGRATION11), version(MIGRATION10), version(MIGRATION9), version(MIGRATION8),
-                          version(MIGRATION)),
-                         ("18", "18", "17", "16", "15", "14", "13", "12", "11", "10", "9", "8", "7"))
+        self.assertEqual((version(SCHEMA), version(MIGRATION19), version(MIGRATION18), version(MIGRATION17),
+                          version(MIGRATION16), version(MIGRATION15), version(MIGRATION14), version(MIGRATION13),
+                          version(MIGRATION12), version(MIGRATION11), version(MIGRATION10), version(MIGRATION9),
+                          version(MIGRATION8), version(MIGRATION)),
+                         ("19", "19", "18", "17", "16", "15", "14", "13", "12", "11", "10", "9", "8", "7"))
         self.assertEqual(version(ROLLBACK14), "13")
         self.assertEqual(version(ROLLBACK15), "14")
         self.assertEqual(version(ROLLBACK16), "15")
         self.assertEqual(version(ROLLBACK17), "16")
         self.assertEqual(version(ROLLBACK18), "17")
+        self.assertEqual(version(ROLLBACK19), "18")
 
     def test_schema11_reasons_and_hardware(self):
         body = re.sub(r"--[^\n]*", "", table_body(SCHEMA, "detections"))
@@ -334,7 +337,7 @@ class Schema17(unittest.TestCase):
     def test_cause_column_and_constraint_same_in_migration_and_schema(self):
         self.assertRegex(re.sub(r"--[^\n]*", "", table_body(SCHEMA, "detections")), r"\n\s+status_cause\s+text,")
         self.assertIn("ALTER TABLE detections ADD COLUMN status_cause text;", MIGRATION17)
-        m, s = self.check(MIGRATION17), self.check(SCHEMA)
+        m, s = self.check(MIGRATION19), self.check(SCHEMA)       # the newest migration that sets the constraint
         self.assertIsNotNone(m)
         self.assertIsNotNone(s)
         self.assertEqual(" ".join((m.group(1) or m.group(2)).split()), " ".join((s.group(1) or s.group(2)).split()))
@@ -347,7 +350,8 @@ class Schema17(unittest.TestCase):
         block = js[js.index("export const CAUSES = ["):]
         block = block[:block.index("];")]
         self.assertEqual(re.findall(r'\["(\w+)", "', block), api_keys)
-        self.assertEqual(len(api_keys), 11)
+        self.assertEqual(len(api_keys), 12)
+        self.assertIn("duplicate", api_keys)                                  # schema 19
 
 
 class Schema18(unittest.TestCase):

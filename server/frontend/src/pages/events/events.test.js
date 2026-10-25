@@ -60,7 +60,8 @@ test("labels: the cause of a benign / false-positive label (schema 17)", () => {
   // confirmed has no cause, whatever was picked before switching
   eq(labelBody("confirmed", "security_relevant", "kismet_rule", ""),
      { status: "confirmed", reason: "security_relevant", cause: null, note: null });
-  eq(CAUSES.length, 11);
+  eq(CAUSES.length, 12);
+  eq(causeText("duplicate"), "Duplicate of an incident already reported");
   eq(causeText("unknown"), "No known cause");
 });
 

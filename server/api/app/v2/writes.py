@@ -44,6 +44,7 @@ CAUSES = (
     ("ap_behaviour", "Normal AP behaviour (channel selection, DFS, reboot, owner's change)"),
     ("client_behaviour", "Normal client behaviour (roaming, leaving, power save)"),
     ("staged_test", "This project's own staged test (spill-over)"),
+    ("duplicate", "Repeats an incident already reported (a grouping artefact)"),
     ("unknown", "No known cause"),
     ("other", "Other (named in the note)"),
 )

@@ -42,6 +42,7 @@ CAUSES = OrderedDict([
     ("ap_behaviour", "normal behaviour of the AP (dynamic channel selection, DFS, reboot, its owner's change)"),
     ("client_behaviour", "normal behaviour of clients (roaming, leaving, power save)"),
     ("staged_test", "this project's own staged test (spill-over)"),
+    ("duplicate", "repeats an incident already reported - a grouping artefact (schema 19)"),
     ("unknown", "no known cause (the operator looked; not traced)"),
     ("other", "another cause, named in the label note"),
 ])

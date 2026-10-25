@@ -135,6 +135,7 @@ export const CAUSES = [
   ["ap_behaviour", "Normal AP behaviour"],
   ["client_behaviour", "Normal client behaviour"],
   ["staged_test", "Own staged test (spill-over)"],
+  ["duplicate", "Duplicate of an incident already reported"],
   ["unknown", "No known cause"],
   ["other", "Other (name it in the note)"],
 ];

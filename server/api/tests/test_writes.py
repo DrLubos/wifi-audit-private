@@ -47,6 +47,8 @@ class Labels(unittest.TestCase):
                 w.parse_status(bad)
         self.assertEqual(w.parse_status({"status": "benign", "reason": "accepted_risk", "cause": "unknown"})[2],
                          "unknown")
+        self.assertEqual(w.parse_status({"status": "false_positive", "reason": "artefact", "cause": "duplicate"})[2],
+                         "duplicate")                                                     # schema 19
 
     def test_other_needs_a_note(self):
         for note in (None, "", "   "):

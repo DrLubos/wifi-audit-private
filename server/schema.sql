@@ -103,7 +103,9 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 -- 18: configuration delivery (docs/config-delivery.md): sensor_config's hash,
 --    delivery and refusal; sensor_config_attempts; the sensor's capabilities
 --    in sensor_status; polls.config_version (ops/migrate_schema18.sh)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '18')
+-- 19: the label cause 'duplicate' - the event repeats an incident already
+--    reported, a grouping artefact (ops/migrate_schema19.sh)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '19')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- accounts and sensors ------------------------------------------------------------
@@ -492,7 +494,8 @@ CREATE TABLE IF NOT EXISTS detections (
   CONSTRAINT detections_status_cause CHECK (CASE
     WHEN status IN ('benign', 'false_positive') THEN status_cause IS NOT NULL
       AND status_cause IN ('rssi_floor', 'channel_hopping', 'kismet_rule', 'allow_list_incomplete', 'pipeline_bug',
-                           'sensor_degraded', 'ap_behaviour', 'client_behaviour', 'staged_test', 'unknown', 'other')
+                           'sensor_degraded', 'ap_behaviour', 'client_behaviour', 'staged_test', 'duplicate',
+                           'unknown', 'other')
       AND (status_cause <> 'other' OR coalesce(btrim(status_note), '') <> '')
     ELSE status_cause IS NULL END));
 CREATE INDEX IF NOT EXISTS detections_ts   ON detections (sensor_id, ts);

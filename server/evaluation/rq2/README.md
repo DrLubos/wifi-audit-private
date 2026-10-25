@@ -55,6 +55,7 @@ no cause. A bulk label gives every event of the bulk the same cause.
 | `ap_behaviour` | normal AP behaviour (dynamic channel selection, DFS, reboot, a change by its owner) |
 | `client_behaviour` | normal client behaviour (roaming, leaving, power save) |
 | `staged_test` | this project's own staged test (spill-over onto other APs) |
+| `duplicate` | the event repeats an incident already reported - a grouping artefact (schema 19) |
 | `unknown` | no known cause (the operator looked) - **not** counted as traced |
 | `other` | another cause, named in the label note (required there) |
 
@@ -184,4 +185,4 @@ checking any figure by hand.
 
 - 2026-10-25: a structured cause field (schema 17, the dialog's dropdown)
   instead of note tags; the vocabulary above (11 causes incl. `unknown` and
-  `other`).
+  `other`); 2026-10-25 `duplicate` added (schema 19, 12 causes).

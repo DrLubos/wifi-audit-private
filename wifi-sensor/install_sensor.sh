@@ -95,6 +95,9 @@ KISMET_KEYRING="/usr/share/keyrings/kismet-archive-keyring.gpg"
 KISMET_LIST="/etc/apt/sources.list.d/kismet.list"
 KISMET_HELPER="/usr/bin/kismet_cap_linux_wifi"
 KISMET_SITE_CONF="/etc/kismet/kismet_site.conf"
+# the configuration applier's record of a running delivered configuration
+# (../server/docs/config-delivery.md): while it exists, the hop list stays
+APPLIED_CONFIG="/var/lib/wifi-sensor-config/applied.json"
 KISMET_ETC_HTTPD_CONF="/etc/kismet/kismet_httpd.conf"
 KISMET_UNIT_OVERRIDE="/etc/systemd/system/kismet.service.d/override.conf"
 NM_CONF="/etc/NetworkManager/conf.d/99-wifi-sensor-capture.conf"
@@ -333,11 +336,45 @@ hop_stride_ok() {
   (( a == 1 ))
 }
 
-# Sets KISMET_SOURCE_OPTS (appended to the source= line) from CAPTURE_CHANNELS.
-# Needs CAPTURE_DRIVER, so it runs after check_capture_iface.
+# The channels= and channel_hoprate= options of the current kismet_site.conf's
+# capture source line (",channels=\"...\",channel_hoprate=N/sec"), or nothing.
+current_source_opts() {
+  local line chans rate
+  line=$(grep -E '^[[:space:]]*source[[:space:]]*=' "$KISMET_SITE_CONF" 2>/dev/null | grep 'name=capture' | head -1)
+  [[ -n $line ]] || line=$(grep -E '^[[:space:]]*source[[:space:]]*=' "$KISMET_SITE_CONF" 2>/dev/null | head -1)
+  chans=$(sed -n 's/.*channels="\([^"]*\)".*/\1/p' <<<"$line")
+  [[ -n $chans ]] || return 0
+  rate=$(sed -n 's/.*channel_hoprate=\([0-9]*\/sec\).*/\1/p' <<<"$line")
+  printf ',channels="%s"%s' "$chans" "${rate:+,channel_hoprate=$rate}"
+}
+
+# Sets KISMET_SOURCE_OPTS (appended to the source= line) from CAPTURE_CHANNELS -
+# or, while a delivered configuration runs (APPLIED_CONFIG), from the current
+# kismet_site.conf, so a re-run never replaces it (one source of truth: the
+# configuration in Settings -> Sensors). Needs CAPTURE_DRIVER, so it runs
+# after check_capture_iface.
 resolve_capture_channels() {
-  local chans=${CAPTURE_CHANNELS:-} list c n=0
+  local chans=${CAPTURE_CHANNELS:-} list c n=0 kept version
   local -A seen=()
+  if [[ -s $APPLIED_CONFIG ]]; then
+    kept=$(current_source_opts)
+    version=$(sed -n 's/.*"version": *\([0-9]*\).*/\1/p' "$APPLIED_CONFIG" | head -1)
+    if [[ -n $kept ]]; then
+      [[ -z ${CAPTURE_CHANNELS:-} ]] \
+        || warn "CAPTURE_CHANNELS is ignored: the delivered configuration v${version:-?} runs (Settings -> Sensors changes it)"
+      chans=$(sed -n 's/^,channels="\([^"]*\)".*/\1/p' <<<"$kept")
+      IFS=, read -ra list <<<"$chans"
+      for c in "${list[@]}"; do
+        if [[ -z ${seen[${c,,}]:-} ]]; then seen[${c,,}]=1; n=$((n + 1)); fi
+      done
+      hop_stride_ok "$n" \
+        || die "the delivered hop list in $KISMET_SITE_CONF has $n entries - stride $HOP_STRIDE would visit only $((n / HOP_GCD))"
+      KISMET_SOURCE_OPTS=$kept
+      log "hop list: keeping the delivered configuration v${version:-?} ($n channels, from $KISMET_SITE_CONF)"
+      return
+    fi
+    warn "$APPLIED_CONFIG exists but $KISMET_SITE_CONF has no explicit channel list - falling back to the installer's list"
+  fi
   if [[ -z $chans ]]; then
     if [[ $CAPTURE_DRIVER == rtw88_8821cu ]]; then
       chans=$RTW88_8821CU_CHANNELS
@@ -1008,4 +1045,5 @@ main() {
   print_next_steps
 }
 
-main "$@"
+# WIFI_SENSOR_INSTALLER_SOURCE_ONLY=1: define the functions only (tests)
+[[ ${WIFI_SENSOR_INSTALLER_SOURCE_ONLY:-} == 1 ]] || main "$@"

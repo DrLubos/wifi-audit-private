@@ -32,6 +32,7 @@ DECLARE
     ARRAY['benign', 'expected_behaviour', 'kismet_rule', NULL],
     ARRAY['benign', 'accepted_risk', 'unknown', NULL],
     ARRAY['false_positive', 'artefact', 'rssi_floor', NULL],
+    ARRAY['benign', 'expected_behaviour', 'duplicate', NULL],
     ARRAY['false_positive', 'rule_defect', 'other', 'Kismet restarted']];
   bad text[][] := ARRAY[
     ARRAY['open', NULL, 'unknown', NULL],
