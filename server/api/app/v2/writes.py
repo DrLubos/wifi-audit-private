@@ -7,6 +7,8 @@ wifi-sensor/install_sensor.sh (hop_stride_ok).
 Standard library only (tests/test_writes.py).
 """
 
+import hashlib
+import json
 import math
 import re
 from datetime import datetime, timedelta, timezone
@@ -365,6 +367,57 @@ def plan_channels(plan, channels=None, lock=None):
                       "(the length must be coprime with the stride; a prime length always is)"
                       % (len(out), stride, len(out) // gcd))
     return out
+
+
+# no 802.11 40 MHz partner - Kismet's autodetected list has both (findings.md
+# 7); the same set as wifi-sensor/sensor/capture_config.py KNOWN_INVALID
+KNOWN_INVALID = frozenset({"165HT40-", "140HT40-"})
+
+
+def check_capture_config(channels, dwell_s, poll_s, capabilities=None):
+    """The delivery rules (docs/config-delivery.md 4.1) - the same verdicts as
+    the Pi's capture_config.validate() on the shared fixture: Kismet entries,
+    each once, none of KNOWN_INVALID, each in the sensor's reported
+    channels_supported (when it reported them), the stride rule, the dwell
+    and poll bounds. Raises Invalid."""
+    if not isinstance(channels, list) or not 1 <= len(channels) <= 200:
+        raise Invalid("channels: 1 to 200 entries")
+    seen = []
+    for c in channels:
+        if not isinstance(c, str) or not ENTRY.match(c.strip().upper()):
+            raise Invalid("channels: %r is not a Kismet entry" % (c,))
+        c = c.strip().upper()
+        if c in seen:
+            raise Invalid("channels: %s twice" % c)
+        if c in KNOWN_INVALID:
+            raise Invalid("channels: %s is not a valid 40 MHz pairing" % c)
+        seen.append(c)
+    supported = (capabilities or {}).get("channels_supported")
+    if supported:
+        sup = {x.strip().upper() for x in supported if isinstance(x, str)}
+        missing = [c for c in seen if c not in sup]
+        if missing:
+            raise Invalid("channels: %s not supported by the adapter" % ", ".join(missing[:5]))
+    stride, gcd = hop_stride(len(seen))
+    if gcd != 1:
+        raise Invalid("channels: %d entries - Kismet hops them with stride %d and would visit only %d "
+                      "(the length must be coprime with the stride)" % (len(seen), stride, len(seen) // gcd))
+    if isinstance(dwell_s, bool) or not isinstance(dwell_s, (int, float)) or float(dwell_s) not in DWELLS:
+        raise Invalid("dwell_s: one of %s" % ", ".join(map(str, DWELLS)))
+    if isinstance(poll_s, bool) or not isinstance(poll_s, int) or poll_s not in POLLS:
+        raise Invalid("poll_s: one of %s" % ", ".join(map(str, POLLS)))
+    return seen
+
+
+def config_canonical(cfg):
+    """The canonical JSON of a configuration (the Pi's capture_config.canonical)."""
+    return json.dumps({"v": 1, "channels": [c.strip().upper() for c in cfg["channels"]],
+                       "dwell_s": round(float(cfg["dwell_s"]), 3), "poll_s": cfg["poll_s"]},
+                      sort_keys=True, separators=(",", ":")).encode("ascii")
+
+
+def config_sha256(cfg):
+    return hashlib.sha256(config_canonical(cfg)).hexdigest()
 
 
 def parse_capture_config(body):

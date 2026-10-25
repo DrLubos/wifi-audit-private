@@ -38,6 +38,8 @@ MIGRATION16 = open(os.path.join(HERE, "..", "ops", "migrate_schema16.sql"), enco
 ROLLBACK16 = open(os.path.join(HERE, "..", "ops", "rollback_schema16.sql"), encoding="utf-8").read()
 MIGRATION17 = open(os.path.join(HERE, "..", "ops", "migrate_schema17.sql"), encoding="utf-8").read()
 ROLLBACK17 = open(os.path.join(HERE, "..", "ops", "rollback_schema17.sql"), encoding="utf-8").read()
+MIGRATION18 = open(os.path.join(HERE, "..", "ops", "migrate_schema18.sql"), encoding="utf-8").read()
+ROLLBACK18 = open(os.path.join(HERE, "..", "ops", "rollback_schema18.sql"), encoding="utf-8").read()
 SCHEMA14_TABLES = ("sensor_tokens", "sensor_status", "sensor_heartbeats", "ingest_state",
                    "sensor_clock_boots", "sensor_seq_gaps")
 SCHEMA14_FUNCTIONS = ("ingest_stage_create", "ingest_merge", "refresh_contact_periods")
@@ -117,14 +119,16 @@ class SchemaFiles(unittest.TestCase):
     def test_version(self):
         def version(sql):
             return re.search(r"VALUES \('schema_version', '(\d+)'\)", sql).group(1)
-        self.assertEqual((version(SCHEMA), version(MIGRATION17), version(MIGRATION16), version(MIGRATION15),
-                          version(MIGRATION14), version(MIGRATION13), version(MIGRATION12), version(MIGRATION11),
-                          version(MIGRATION10), version(MIGRATION9), version(MIGRATION8), version(MIGRATION)),
-                         ("17", "17", "16", "15", "14", "13", "12", "11", "10", "9", "8", "7"))
+        self.assertEqual((version(SCHEMA), version(MIGRATION18), version(MIGRATION17), version(MIGRATION16),
+                          version(MIGRATION15), version(MIGRATION14), version(MIGRATION13), version(MIGRATION12),
+                          version(MIGRATION11), version(MIGRATION10), version(MIGRATION9), version(MIGRATION8),
+                          version(MIGRATION)),
+                         ("18", "18", "17", "16", "15", "14", "13", "12", "11", "10", "9", "8", "7"))
         self.assertEqual(version(ROLLBACK14), "13")
         self.assertEqual(version(ROLLBACK15), "14")
         self.assertEqual(version(ROLLBACK16), "15")
         self.assertEqual(version(ROLLBACK17), "16")
+        self.assertEqual(version(ROLLBACK18), "17")
 
     def test_schema11_reasons_and_hardware(self):
         body = re.sub(r"--[^\n]*", "", table_body(SCHEMA, "detections"))
@@ -200,11 +204,15 @@ class SchemaFiles(unittest.TestCase):
     def test_schema14_tables_and_functions_equal_schema(self):
         for t in SCHEMA14_TABLES:
             self.assertIsNotNone(table_body(SCHEMA, t), t)
-            self.assertEqual(table_body(MIGRATION14, t), table_body(SCHEMA, t), t)
+            # the columns schema 18 added by ALTER (the last comment block of the body)
+            body = re.sub(r",\n  -- schema 18:.*\Z", "", table_body(SCHEMA, t), flags=re.S)
+            self.assertEqual(table_body(MIGRATION14, t), body, t)
             self.assertIn("DROP TABLE %s;" % t, ROLLBACK14, t)
         for name in SCHEMA14_FUNCTIONS:
             self.assertIsNotNone(function(SCHEMA, name), name)
-            self.assertEqual(function(MIGRATION14, name), function(SCHEMA, name), name)
+            # the newest migration that (re)defines it carries schema.sql's text
+            newest = next(m for m in (MIGRATION18, MIGRATION14) if function(m, name))
+            self.assertEqual(function(newest, name), function(SCHEMA, name), name)
             self.assertIn("DROP FUNCTION %s(" % name, ROLLBACK14, name)
 
     def test_schema14_columns(self):
@@ -340,6 +348,23 @@ class Schema17(unittest.TestCase):
         block = block[:block.index("];")]
         self.assertEqual(re.findall(r'\["(\w+)", "', block), api_keys)
         self.assertEqual(len(api_keys), 11)
+
+
+class Schema18(unittest.TestCase):
+    def test_new_table_same_in_migration_and_schema(self):
+        self.assertEqual(table_body(MIGRATION18, "sensor_config_attempts"), table_body(SCHEMA, "sensor_config_attempts"))
+        self.assertIn("DROP TABLE sensor_config_attempts;", ROLLBACK18)
+
+    def test_columns(self):
+        for table, cols in (("sensor_config", ("sha256", "delivered_at", "refused_at", "refused_reason")),
+                            ("sensor_status", ("capabilities", "capabilities_at")), ("polls", ("config_version",))):
+            body = re.sub(r"--[^\n]*", "", table_body(SCHEMA, table))
+            for c in cols:
+                self.assertRegex(body, r"\n\s+%s\s" % c, "%s.%s" % (table, c))
+                self.assertRegex(MIGRATION18, r"ADD COLUMN %s\b" % c, "%s.%s" % (table, c))
+                self.assertRegex(ROLLBACK18, r"DROP COLUMN %s\b" % c, "%s.%s" % (table, c))
+        self.assertIn("config_version", function(MIGRATION18, "ingest_merge"))
+        self.assertIn("CREATE INDEX polls_seq ON polls (sensor_id, seq);", MIGRATION18)
 
 
 def stage_tables(fn):

@@ -169,8 +169,10 @@ TABLES = [
                   ("devices_total", "integer"), ("devices_active", "integer"), ("new_obs", "integer"),
                   ("ds_running", "integer"), ("ds_error", "text"), ("ds_packets", "bigint"),
                   ("ds_hop_n", "integer"), ("ds_hop_visited", "integer"), ("ds_hop_ok", "integer"),
-                  ("duration_ms", "integer"), ("ok", "integer"), ("error", "text")],
-        "optional": ("ds_hop_n", "ds_hop_visited", "ds_hop_ok"),   # buffer v4
+                  ("duration_ms", "integer"), ("ok", "integer"), ("error", "text"),
+                  ("config_version", "integer")],
+        "optional": ("ds_hop_n", "ds_hop_visited", "ds_hop_ok",    # buffer v4
+                     "config_version"),                             # buffer v9
         "macs": (),
     },
     {

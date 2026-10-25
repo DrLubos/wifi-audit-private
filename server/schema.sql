@@ -100,7 +100,10 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 -- 17: detections.status_cause - the cause of a benign / false-positive label
 --    from a fixed list (RQ2; evaluation/rq2), required for those two
 --    outcomes, 'other' only with a note (ops/migrate_schema17.sh)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '17')
+-- 18: configuration delivery (docs/config-delivery.md): sensor_config's hash,
+--    delivery and refusal; sensor_config_attempts; the sensor's capabilities
+--    in sensor_status; polls.config_version (ops/migrate_schema18.sh)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '18')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- accounts and sensors ------------------------------------------------------------
@@ -153,7 +156,10 @@ CREATE TABLE IF NOT EXISTS polls (
   seq            bigint,                     -- the buffer's polls.id (schema 14; NULL for rows loaded before)
   received_at    timestamptz,                -- when the server stored the poll (schema 14)
   ts_offset_s    real,                       -- clock correction the uploader applied to ts; NULL = clock synced
+  config_version integer,                    -- sensor_config version applied at the poll (buffer v9; NULL before / unknown)
   PRIMARY KEY (sensor_id, ts));
+-- a configuration attempt names its effective poll by seq (schema 18)
+CREATE INDEX IF NOT EXISTS polls_seq ON polls (sensor_id, seq);
 -- ds_hop_*: rows from buffers before v4 have NULL. Degraded channel coverage
 -- (Kismet 2025-09 collapsing the hop list) is invisible in ds_packets - see
 -- wifi-sensor/docs/findings.md section 7.
@@ -600,9 +606,36 @@ CREATE TABLE IF NOT EXISTS sensor_config (
   poll_s       integer NOT NULL,
   created_at   timestamptz NOT NULL DEFAULT now(),
   created_by   text NOT NULL DEFAULT 'operator',   -- 'seed' for rows taken from findings section 7
-  confirmed_at timestamptz,
+  confirmed_at timestamptz,                    -- applied: the first collecting poll under it (schema 18)
   note         text,
+  -- schema 18 (docs/config-delivery.md): the sha256 of the canonical JSON the
+  -- sensor applies; delivered = the sensor reported receiving it; refused =
+  -- rejected / rolled back / failed on the sensor (not delivered again)
+  sha256         text CONSTRAINT sensor_config_sha256 CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  delivered_at   timestamptz,
+  refused_at     timestamptz,
+  refused_reason text,
   PRIMARY KEY (sensor_id, version));
+
+-- Every outcome the sensor reported for a delivered configuration (schema 18,
+-- docs/config-delivery.md 5.5): one row per (version, hash, result) - a
+-- replayed heartbeat adds nothing. effective_* = the first collecting poll
+-- under the configuration (applied), restored_ts = when a rollback had the
+-- last good configuration running again.
+CREATE TABLE IF NOT EXISTS sensor_config_attempts (
+  sensor_id      integer NOT NULL REFERENCES sensors(id),
+  version        integer NOT NULL,
+  sha256         text NOT NULL,
+  result         text NOT NULL
+                 CHECK (result IN ('received', 'applying', 'applied', 'rejected', 'rolled_back', 'failed')),
+  reason         text,
+  started_poll   bigint,
+  effective_poll bigint,
+  effective_ts   timestamptz,
+  restored_ts    timestamptz,
+  checks         jsonb NOT NULL DEFAULT '{}',
+  reported_at    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (sensor_id, version, sha256, result));
 
 -- The capture adapter of a sensor (schema 13): one read-only record, seeded
 -- now and reported by the sensor itself in the live-upload phase (identity =
@@ -712,7 +745,12 @@ CREATE TABLE IF NOT EXISTS sensor_status (
   reject_reason   text,
   auth_fail_since timestamptz,                   -- wrong secret or revoked token since
   auth_fail_count integer NOT NULL DEFAULT 0,
-  updated_at      timestamptz NOT NULL DEFAULT now());
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  -- schema 18: the capture capabilities the sensor reported last (Kismet's
+  -- channel list for the source, the regulatory country), refreshed hourly;
+  -- every saved configuration is checked against them
+  capabilities    jsonb,
+  capabilities_at timestamptz);
 
 -- Heartbeat history, at most one row a minute per sensor (~0.3 MB/day): the
 -- contact periods (refresh_contact_periods()) and the thesis measurements
@@ -2491,7 +2529,7 @@ BEGIN
     kismet_ts bigint, devices_total integer, devices_active integer, new_obs integer,
     ds_running integer, ds_error text, ds_packets bigint, ds_hop_n integer,
     ds_hop_visited integer, ds_hop_ok integer, duration_ms integer, ok integer,
-    error text) ON COMMIT DELETE ROWS;
+    error text, config_version integer) ON COMMIT DELETE ROWS;
   CREATE TEMP TABLE IF NOT EXISTS stage_device_config_history (device_key text, ts bigint,
     ssid text, cloaked integer, crypt text, crypt_bits bigint, mfp_sup integer, mfp_req integer,
     adv_channel text, ht_mode text, beacon_rate integer, country text) ON COMMIT DELETE ROWS;
@@ -2629,11 +2667,11 @@ BEGIN
     WITH ins AS (
       INSERT INTO polls (sensor_id, ts, kismet_ts, devices_total, devices_active, new_obs, ds_running,
                          ds_error, ds_packets, ds_hop_n, ds_hop_visited, ds_hop_ok, duration_ms, ok,
-                         error, seq, received_at, ts_offset_s)
+                         error, seq, received_at, ts_offset_s, config_version)
       SELECT p_sensor_id, to_timestamp(s.ts), to_timestamp(s.kismet_ts), s.devices_total,
              s.devices_active, s.new_obs, s.ds_running::boolean, s.ds_error, s.ds_packets, s.ds_hop_n,
              s.ds_hop_visited, s.ds_hop_ok::boolean, s.duration_ms, s.ok::boolean, s.error, s.seq,
-             now(), s.ts_offset_s
+             now(), s.ts_offset_s, s.config_version
       FROM stage_polls s
       ORDER BY s.ts
       ON CONFLICT DO NOTHING

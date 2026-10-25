@@ -39,7 +39,7 @@ def device(**kw):
 def poll(**kw):
     row = dict(seq=101, ts=T, ts_offset_s=None, kismet_ts=T, devices_total=900, devices_active=70,
                new_obs=60, ds_running=1, ds_error=None, ds_packets=123456, ds_hop_n=89, ds_hop_visited=89,
-               ds_hop_ok=1, duration_ms=800, ok=1, error=None)
+               ds_hop_ok=1, duration_ms=800, ok=1, error=None, config_version=3)
     row.update(kw)
     return row
 
@@ -130,6 +130,22 @@ class Batch(unittest.TestCase):
         body = batch()
         body["tables"]["associations"] = {"cols": ["ap_key"], "rows": []}
         self.invalid(body, "associations")
+
+    def test_an_older_uploader_may_leave_out_config_version(self):
+        # uploader 1.1 (buffer v8) sends polls without the schema-18 column: NULL
+        body = batch()
+        t = body["tables"]["polls"]
+        t["cols"] = t["cols"][:-1]
+        t["rows"] = [r[:-1] for r in t["rows"]]
+        b = v.batch(body, NOW)
+        self.assertIsNone(b["tables"]["polls"][0][v.columns("polls").index("config_version")])
+        self.assertEqual(v.batch(batch(), NOW)["tables"]["polls"][0][-1], 3)
+        # only the tail may be missing
+        body = batch()
+        t = body["tables"]["polls"]
+        t["cols"] = t["cols"][1:]
+        t["rows"] = [r[1:] for r in t["rows"]]
+        self.invalid(body, "polls: columns")
 
     def test_row_length(self):
         body = batch()

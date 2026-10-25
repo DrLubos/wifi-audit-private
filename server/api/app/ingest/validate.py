@@ -71,7 +71,7 @@ TABLES = {
               ("new_obs", "int", False), ("ds_running", "flag", False), ("ds_error", "text", False),
               ("ds_packets", "bigint", False), ("ds_hop_n", "int", False), ("ds_hop_visited", "int", False),
               ("ds_hop_ok", "flag", False), ("duration_ms", "int", False), ("ok", "flag", True),
-              ("error", "text", False)],
+              ("error", "text", False), ("config_version", "int", False)],
     "device_config_history": [("device_key", "text", True), ("ts", "ts", True)] + _CONFIG,
     "observations": [("ts", "ts", True), ("device_key", "text", True), ("rssi", "small", False),
                      ("rssi_floor", "flag", False), ("pk_total", "bigint", False), ("pk_data", "bigint", False),
@@ -98,6 +98,9 @@ KEYS = {"devices": ("device_key",), "polls": ("ts",), "device_config_history": (
         "observations": ("device_key", "ts"), "ap_load_hourly": ("device_key", "hour", "channel"),
         "load_samples": ("device_key", "ts"), "device_freq_hist": ("device_key", "freq_khz"),
         "alerts": ("hash",)}
+# columns an older uploader does not send yet: cols may end before them (the
+# value is then NULL) - polls.config_version from uploader 1.2 / buffer v9
+OPTIONAL_TAIL = {"polls": ("config_version",)}
 TEXT_MAX = {"ds_error": 500, "error": 500, "text": 4000, "raw": 65536}
 TEXT_DEFAULT_MAX = 256
 
@@ -203,14 +206,22 @@ def _table(name, t, now):
     if not isinstance(t, dict) or not isinstance(t.get("rows"), list):
         raise Invalid("%s: {cols, rows} expected" % name)
     spec = TABLES[name]
-    if t.get("cols") != [c[0] for c in spec]:
-        raise Invalid("%s: columns must be %s" % (name, ", ".join(c[0] for c in spec)))
+    full = [c[0] for c in spec]
+    tail = OPTIONAL_TAIL.get(name, ())
+    short = full[:len(full) - len(tail)] if tail and full[len(full) - len(tail):] == list(tail) else None
+    if t.get("cols") == full:
+        pad = 0
+    elif short is not None and t.get("cols") == short:
+        pad = len(tail)
+    else:
+        raise Invalid("%s: columns must be %s" % (name, ", ".join(full)))
     out, seen = [], set()
     key_idx = [i for i, c in enumerate(spec) if c[0] in KEYS[name]]
     for n, row in enumerate(t["rows"], 1):
         where = "%s row %d" % (name, n)
-        if not isinstance(row, list) or len(row) != len(spec):
-            raise Invalid("%s: %d values expected" % (where, len(spec)))
+        if not isinstance(row, list) or len(row) != len(spec) - pad:
+            raise Invalid("%s: %d values expected" % (where, len(spec) - pad))
+        row = row + [None] * pad
         vals = [_value(where, c[0], c[1], c[2], x, now) for c, x in zip(spec, row)]
         key = tuple(vals[i] for i in key_idx)
         if key in seen:
