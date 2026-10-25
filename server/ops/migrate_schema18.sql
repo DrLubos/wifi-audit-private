@@ -44,7 +44,7 @@ ALTER TABLE sensor_status ADD COLUMN capabilities jsonb, ADD COLUMN capabilities
 ALTER TABLE polls ADD COLUMN config_version integer;
 CREATE INDEX polls_seq ON polls (sensor_id, seq);
 
-\echo [5/5] ingest functions, schema_meta 18
+\echo [5/5] ingest functions, the duplicate merge (carries the schema-17 cause), schema_meta 18
 CREATE OR REPLACE FUNCTION ingest_stage_create()
 RETURNS void
 LANGUAGE plpgsql
@@ -364,6 +364,79 @@ BEGIN
 
   RETURN jsonb_build_object('via', p_via, 'staged', v_staged, 'inserted', v_inserted,
                             'conflicts', v_conflicts, 'min_ts', v_min);
+END
+$$;
+
+CREATE OR REPLACE FUNCTION merge_duplicate_kismet_events(p_sensor_id integer)
+RETURNS TABLE (kept_id bigint, merged_id bigint, alert_header text, new_status text, new_note text)
+LANGUAGE plpgsql AS $$
+DECLARE
+  v_account   integer;
+  v_status    text;
+  v_status_at timestamptz;
+  v_reason    text;
+  v_cause     text;                          -- schema 17
+  v_note      text;
+  m           record;
+BEGIN
+  SELECT account_id INTO v_account FROM sensors WHERE id = p_sensor_id;
+  IF v_account IS NULL THEN
+    RAISE EXCEPTION 'merge_duplicate_kismet_events: unknown sensor_id %', p_sensor_id;
+  END IF;
+  FOR m IN
+    SELECT k.id AS k_id, k.status AS k_status, k.status_at AS k_at, k.status_note AS k_note,
+           k.status_reason AS k_reason, u.status_reason AS u_reason,
+           k.status_cause AS k_cause, u.status_cause AS u_cause,
+           u.id AS u_id, u.status AS u_status, u.status_at AS u_at, u.status_note AS u_note, u.type AS header
+    FROM detections u
+    JOIN detections k ON k.sensor_id = u.sensor_id AND k.kind = 'kismet' AND k.type = u.type
+                     AND k.ts = u.ts AND k.ts_end IS NOT DISTINCT FROM u.ts_end AND k.mac IS NOT NULL
+    WHERE u.sensor_id = p_sensor_id AND u.kind = 'kismet' AND u.device_key IS NULL AND u.mac IS NULL
+      -- two APs with the same window: ambiguous, left alone
+      AND (SELECT count(*) FROM detections t
+           WHERE t.sensor_id = u.sensor_id AND t.kind = 'kismet' AND t.type = u.type AND t.ts = u.ts
+             AND t.ts_end IS NOT DISTINCT FROM u.ts_end AND t.mac IS NOT NULL) = 1
+    ORDER BY u.id
+  LOOP
+    -- an operator's label wins over open; of two labels the later one
+    IF m.k_status = 'open' OR (m.u_status <> 'open' AND m.u_at > coalesce(m.k_at, '-infinity')) THEN
+      v_status := m.u_status;
+      v_status_at := m.u_at;
+      v_reason := m.u_reason;
+      v_cause := m.u_cause;
+    ELSE
+      v_status := m.k_status;
+      v_status_at := m.k_at;
+      v_reason := m.k_reason;
+      v_cause := m.k_cause;
+    END IF;
+    v_note := CASE WHEN m.u_note IS NULL OR m.u_note = m.k_note THEN m.k_note
+                   WHEN m.k_note IS NULL THEN m.u_note
+                   ELSE m.k_note || E'\n' || m.u_note END;
+    UPDATE detections d SET status = v_status, status_at = v_status_at, status_reason = v_reason,
+                            status_cause = v_cause, status_note = v_note
+    WHERE d.id = m.k_id
+      AND (d.status, d.status_at, d.status_reason, d.status_cause, d.status_note)
+          IS DISTINCT FROM (v_status, v_status_at, v_reason, v_cause, v_note);
+    INSERT INTO audit_log (account_id, action, target, old, new)
+    VALUES (v_account, 'event.merge', 'event:' || m.k_id,
+            jsonb_build_object(
+              'kept', jsonb_build_object('id', m.k_id, 'status', m.k_status, 'status_at', m.k_at,
+                                         'status_reason', m.k_reason, 'status_cause', m.k_cause,
+                                         'status_note', m.k_note),
+              'merged', jsonb_build_object('id', m.u_id, 'status', m.u_status, 'status_at', m.u_at,
+                                           'status_reason', m.u_reason, 'status_cause', m.u_cause,
+                                           'status_note', m.u_note)),
+            jsonb_build_object('id', m.k_id, 'status', v_status, 'status_at', v_status_at,
+                               'status_reason', v_reason, 'status_cause', v_cause, 'status_note', v_note));
+    DELETE FROM detections d WHERE d.id = m.u_id;
+    kept_id := m.k_id;
+    merged_id := m.u_id;
+    alert_header := m.header;
+    new_status := v_status;
+    new_note := v_note;
+    RETURN NEXT;
+  END LOOP;
 END
 $$;
 

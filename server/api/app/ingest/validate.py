@@ -385,4 +385,8 @@ def heartbeat(hb):
         if ad["mac"] is not None and not _MAC.fullmatch(ad["mac"]):
             raise Invalid("heartbeat: adapter.mac must be a MAC address")
         out["adapter"] = ad
+    # configuration delivery (schema 18): uploader 1.2 reports these; older ones do not
+    from . import config as _config
+    out["config_state"] = _config.parse_state(hb.get("config_state"))
+    out["capabilities"] = _config.parse_capabilities(hb.get("capabilities"))
     return out

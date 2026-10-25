@@ -364,6 +364,10 @@ class Schema18(unittest.TestCase):
                 self.assertRegex(MIGRATION18, r"ADD COLUMN %s\b" % c, "%s.%s" % (table, c))
                 self.assertRegex(ROLLBACK18, r"DROP COLUMN %s\b" % c, "%s.%s" % (table, c))
         self.assertIn("config_version", function(MIGRATION18, "ingest_merge"))
+        # the duplicate merge carries the label's cause (schema 17), deployed with 18
+        self.assertEqual(function(MIGRATION18, "merge_duplicate_kismet_events"),
+                         function(SCHEMA, "merge_duplicate_kismet_events"))
+        self.assertIn("status_cause = v_cause", function(SCHEMA, "merge_duplicate_kismet_events"))
         self.assertIn("CREATE INDEX polls_seq ON polls (sensor_id, seq);", MIGRATION18)
 
 

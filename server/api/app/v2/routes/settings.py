@@ -231,18 +231,26 @@ def _sensor_of(acc, name):
 
 @router.post("/sensors", dependencies=[Depends(deps.require_write)])
 def post_sensor_config(body: dict = Body(...), acc=Depends(deps.get_account)):
-    """One new capture-configuration version for every selected sensor. Not
-    delivered: there is no delivery to the sensor yet (Q10), so it stays
-    pending until the sensor upload exists (11.1)."""
+    """One new capture-configuration version for every selected sensor
+    (docs/config-delivery.md): checked against what each sensor reported it
+    can tune (capabilities), stored with its hash, and delivered in the
+    responses to the sensor's uploads once it accepts configuration
+    (CONFIG_APPLY=1). retry: true re-offers a refused configuration."""
     names, config = deps.invalid(writes.parse_capture_config, body)
     chosen = [_sensor_of(acc, n) for n in names]
+    sha = writes.config_sha256(config)
     out = []
     with deps.write_tx(acc) as (conn, audit):
         for s in chosen:
-            version = deps.run(conn, _QW, "sensor_config_insert", sensor_id=s["id"], **config)[0]["version"]
-            audit("sensor.config", "sensor:%s" % s["name"], None, dict(config, version=version))
+            caps = deps.run(conn, _Q, "sensor_capabilities", sensor_id=s["id"])
+            caps = caps[0]["capabilities"] if caps else None
+            deps.invalid(lambda _: writes.check_capture_config(config["channels"], config["dwell_s"],
+                                                                config["poll_s"], caps), None)
+            version = deps.run(conn, _QW, "sensor_config_insert", sensor_id=s["id"], sha256=sha,
+                               **config)[0]["version"]
+            audit("sensor.config", "sensor:%s" % s["name"], None, dict(config, version=version, sha256=sha))
             out.append({"name": s["name"], "version": version})
-    return deps.written({"sensors": out, "delivered": False})
+    return deps.written({"sensors": out, "delivered": False, "sha256": sha})
 
 
 def _sensor_data(conn, sensor_id):

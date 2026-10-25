@@ -49,11 +49,12 @@ WHERE account_id = %(account_id)s
 RETURNING account_id
 
 -- name: sensor_config_insert
--- A new desired capture configuration (confirmed_at NULL: not delivered,
--- there is no delivery to the sensor yet - Q10)
-INSERT INTO sensor_config (sensor_id, version, channel_plan, channels, n_channels, dwell_s, poll_s, created_by, note)
+-- A new desired capture configuration (confirmed_at NULL until the sensor
+-- applied it; schema 18: with the sha256 the sensor checks - docs/config-delivery.md)
+INSERT INTO sensor_config (sensor_id, version, channel_plan, channels, n_channels, dwell_s, poll_s, created_by, note,
+                           sha256)
 SELECT %(sensor_id)s, coalesce(max(c.version), 0) + 1, %(channel_plan)s, %(channels)s::text[], %(n_channels)s,
-       %(dwell_s)s, %(poll_s)s, 'operator', %(note)s
+       %(dwell_s)s, %(poll_s)s, 'operator', %(note)s, %(sha256)s
 FROM sensor_config c WHERE c.sensor_id = %(sensor_id)s
 RETURNING version
 

@@ -164,3 +164,83 @@ UPDATE accounts SET write_version = write_version + 1 WHERE id = %(account_id)s
 -- (seq NULL for polls stored before schema 14 - the uploader then finds it by ts).
 SELECT seq, extract(epoch FROM ts)::bigint AS ts FROM polls
 WHERE sensor_id = %(sensor_id)s ORDER BY ts DESC LIMIT 1
+
+-- --- configuration delivery (schema 18, docs/config-delivery.md) -----------------------------------
+
+-- name: config_desired
+-- The sensor's newest operator-made configuration (seeded rows are history)
+-- and whether an older version with the same hash was refused (a retry).
+SELECT c.version, c.channel_plan, c.channels, c.dwell_s, c.poll_s, c.sha256, c.refused_at, c.confirmed_at,
+       EXISTS (SELECT 1 FROM sensor_config o
+               WHERE o.sensor_id = c.sensor_id AND o.sha256 = c.sha256 AND o.version < c.version
+                 AND o.refused_at IS NOT NULL) AS retry
+FROM sensor_config c
+WHERE c.sensor_id = %(sensor_id)s AND c.created_by <> 'seed'
+ORDER BY c.version DESC
+LIMIT 1
+
+-- name: config_row
+SELECT version, channel_plan, channels, dwell_s, poll_s, sha256, delivered_at, refused_at, confirmed_at
+FROM sensor_config WHERE sensor_id = %(sensor_id)s AND version = %(version)s
+
+-- name: config_attempt
+INSERT INTO sensor_config_attempts (sensor_id, version, sha256, result, reason, started_poll, effective_poll,
+                                    checks)
+VALUES (%(sensor_id)s, %(version)s, %(sha256)s, %(result)s, %(reason)s, %(started_poll)s, %(effective_poll)s,
+        %(checks)s::jsonb)
+ON CONFLICT DO NOTHING
+RETURNING result
+
+-- name: config_delivered
+UPDATE sensor_config SET delivered_at = now()
+WHERE sensor_id = %(sensor_id)s AND version = %(version)s AND delivered_at IS NULL
+RETURNING version
+
+-- name: config_confirm
+-- Applied: confirmed at the first collecting poll under the configuration
+-- (its time on the server - corrected when the clock was not synced). Waits
+-- (no row) until that poll has arrived; a later heartbeat repeats it.
+WITH p AS (SELECT ts FROM polls WHERE sensor_id = %(sensor_id)s AND seq = %(poll)s ORDER BY ts DESC LIMIT 1),
+a AS (UPDATE sensor_config_attempts x SET effective_ts = p.ts FROM p
+      WHERE x.sensor_id = %(sensor_id)s AND x.version = %(version)s AND x.result = 'applied'
+        AND x.effective_ts IS NULL)
+UPDATE sensor_config c SET confirmed_at = p.ts FROM p
+WHERE c.sensor_id = %(sensor_id)s AND c.version = %(version)s AND c.confirmed_at IS NULL
+RETURNING c.version, c.confirmed_at
+
+-- name: config_boundary
+-- The dated dataset boundary of an applied configuration (findings section 7's equivalent)
+INSERT INTO sensor_annotations (sensor_id, starts_at, kind, boundary, label, ref)
+SELECT %(sensor_id)s, p.ts, 'change', true, %(label)s, 'sensor_config v' || %(version)s::text
+FROM (SELECT ts FROM polls WHERE sensor_id = %(sensor_id)s AND seq = %(poll)s ORDER BY ts DESC LIMIT 1) p
+ON CONFLICT DO NOTHING
+RETURNING starts_at
+
+-- name: config_refuse
+UPDATE sensor_config SET refused_at = now(), refused_reason = %(reason)s
+WHERE sensor_id = %(sensor_id)s AND version = %(version)s AND refused_at IS NULL AND confirmed_at IS NULL
+RETURNING version
+
+-- name: config_coverage
+-- The window a rolled-back configuration ran (no boundary: before and after are the same)
+INSERT INTO sensor_annotations (sensor_id, starts_at, ends_at, kind, boundary, label, ref)
+SELECT %(sensor_id)s, a.ts, b.ts, 'coverage', false, %(label)s, 'sensor_config v' || %(version)s::text
+FROM (SELECT ts FROM polls WHERE sensor_id = %(sensor_id)s AND seq = %(from_poll)s ORDER BY ts DESC LIMIT 1) a,
+     (SELECT ts FROM polls WHERE sensor_id = %(sensor_id)s AND seq = %(to_poll)s ORDER BY ts DESC LIMIT 1) b
+ON CONFLICT DO NOTHING
+RETURNING starts_at
+
+-- name: config_event_open
+-- A configuration event (docs/config-delivery.md 5.6): one open per type and sensor.
+INSERT INTO detections (sensor_id, kind, ts, type, severity, summary, evidence)
+SELECT %(sensor_id)s, 'sensor', %(ts)s::timestamptz, %(type)s::text, %(severity)s::text, %(summary)s::text,
+       %(evidence)s::jsonb
+WHERE NOT EXISTS (SELECT 1 FROM detections d
+                  WHERE d.sensor_id = %(sensor_id)s AND d.kind = 'sensor' AND d.type = %(type)s
+                    AND d.ts_end IS NULL)
+ON CONFLICT DO NOTHING
+RETURNING id
+
+-- name: capabilities_write
+UPDATE sensor_status SET capabilities = %(capabilities)s::jsonb, capabilities_at = now()
+WHERE sensor_id = %(sensor_id)s

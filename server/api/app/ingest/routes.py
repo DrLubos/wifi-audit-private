@@ -33,6 +33,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import db
 from ..v2 import queries
+from . import config as cfgmod
 from . import heartbeat as hbmod
 from . import ratelimit, stalls, tokens, validate
 
@@ -166,6 +167,7 @@ def _heartbeat(conn, tok, hb, now):
              buffer_bytes=hb["buffer_bytes"], disk_free_bytes=hb["disk_free_bytes"],
              uploader_version=hb["uploader_version"])
     _adapter(conn, tok, hb.get("adapter"), now)
+    _config_report(conn, tok, hb, now)
     newest = _run(conn, "resume", sensor_id=sid).fetchone()
     if hbmod.retention_risk(hb, now, None if newest is None else newest["ts"]):
         _open_event(conn, tok, "upload_retention_risk", {}, now, oldest=hb["backlog_oldest_ts"],
@@ -199,6 +201,57 @@ def _adapter(conn, tok, reported, now):
          old=Jsonb(old), new=Jsonb(new))
     _run(conn, "write_version", account_id=tok["account_id"])
     log.warning("ingest: sensor %s - %s (a hardware_change boundary)", tok["sensor"], label)
+
+
+def _config_report(conn, tok, hb, now):
+    """What the sensor reported about its configuration (docs/config-delivery.md
+    5.5): its capabilities, and the effects of its latest attempt - each
+    action idempotent, since every heartbeat repeats the attempt."""
+    sid = tok["sensor_id"]
+    if hb.get("capabilities"):
+        _run(conn, "capabilities_write", sensor_id=sid, capabilities=Jsonb(hb["capabilities"]))
+    a = (hb.get("config_state") or {}).get("attempt")
+    if not a:
+        return
+    row = _run(conn, "config_row", sensor_id=sid, version=a["version"]).fetchone()
+    for kind, p in cfgmod.attempt_actions(a, dict(row) if row else {}):
+        if kind == "attempt":
+            if _run(conn, "config_attempt", sensor_id=sid, version=p["version"], sha256=p["sha256"],
+                    result=p["result"], reason=p["reason"], started_poll=p["started_poll"],
+                    effective_poll=p["effective_poll"], checks=Jsonb(p["checks"])).fetchone():
+                log.info("ingest: sensor %s configuration v%s: %s%s", tok["sensor"], p["version"], p["result"],
+                         " (%s)" % p["reason"] if p["reason"] else "")
+        elif kind == "delivered":
+            _run(conn, "config_delivered", sensor_id=sid, **p)
+        elif kind == "confirm":
+            r = _run(conn, "config_confirm", sensor_id=sid, **p).fetchone()
+            if r:
+                log.warning("ingest: sensor %s configuration v%s applied from %s (a dataset boundary)",
+                            tok["sensor"], r["version"], r["confirmed_at"])
+        elif kind == "boundary":
+            _run(conn, "config_boundary", sensor_id=sid, version=a["version"], **p)
+        elif kind == "refuse":
+            if _run(conn, "config_refuse", sensor_id=sid, **p).fetchone():
+                log.warning("ingest: sensor %s refused configuration v%s - %s", tok["sensor"], p["version"],
+                            p["reason"])
+        elif kind == "coverage":
+            _run(conn, "config_coverage", sensor_id=sid, version=a["version"], **p)
+        elif kind == "open_event":
+            if _run(conn, "config_event_open", sensor_id=sid, ts=now, type=p["type"], severity=p["severity"],
+                    summary=p["summary"], evidence=Jsonb(p["evidence"])).fetchone():
+                log.warning("ingest: sensor %s - %s opened", tok["sensor"], p["type"])
+        elif kind == "close_events":
+            _close_events(conn, tok, p["types"])
+
+
+def _config_out(conn, tok, hb):
+    """The response's "config": the desired configuration when the sensor
+    accepts delivery and has not applied or refused it, else None."""
+    state = (hb or {}).get("config_state")
+    if state is None:
+        return None
+    row = _run(conn, "config_desired", sensor_id=tok["sensor_id"]).fetchone()
+    return cfgmod.delivery(dict(row) if row else None, state)
 
 
 def _status(conn, tok, st, now, hb=None, batch=None):
@@ -307,13 +360,14 @@ def _merge(conn, tok, b, nbytes, now, t0):
         _close_events(conn, tok, stalls.CLOSE_ON_ACCEPT)
         _heartbeat(conn, tok, b["heartbeat"], now)
         _status(conn, tok, new, now, hb=b["heartbeat"], batch=b)
+        delivered = _config_out(conn, tok, b["heartbeat"])
     polls = len(b["tables"].get("polls", []))
     log.info("ingest: sensor %s batch %d%s: %d polls, %d rows, inserted %s, %d ms",
              tok["sensor"], b["batch_seq"], " (replay)" if replay else "", polls, b["rows"],
              merged.get("inserted"), ms)
     return JSONResponse({"batch_seq": b["batch_seq"], "replay": bool(replay), "staged": merged.get("staged"),
                          "inserted": merged.get("inserted"), "conflicts": merged.get("conflicts"), "ms": ms,
-                         "server_ts": datetime.now(timezone.utc).timestamp()})
+                         "server_ts": datetime.now(timezone.utc).timestamp(), "config": delivered})
 
 
 def _gaps(conn, tok, b):
@@ -380,7 +434,8 @@ def _heartbeat_route(raw, encoding, authorization, client):
             _heartbeat(conn, tok, hb, now)
             _status(conn, tok, new, now, hb=hb)
             resume = _run(conn, "resume", sensor_id=tok["sensor_id"]).fetchone()
-    return JSONResponse({"server_ts": datetime.now(timezone.utc).timestamp(),
+            delivered = _config_out(conn, tok, hb)
+    return JSONResponse({"server_ts": datetime.now(timezone.utc).timestamp(), "config": delivered,
                          "resume": None if resume is None else {"seq": resume["seq"], "ts": resume["ts"]},
                          "last_batch_seq": (st or {}).get("last_batch_seq"),
                          "buffer_id": str(st["buffer_id"]) if st and st.get("buffer_id") else None})

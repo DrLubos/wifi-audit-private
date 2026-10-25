@@ -2050,6 +2050,7 @@ DECLARE
   v_status    text;
   v_status_at timestamptz;
   v_reason    text;
+  v_cause     text;                          -- schema 17
   v_note      text;
   m           record;
 BEGIN
@@ -2060,6 +2061,7 @@ BEGIN
   FOR m IN
     SELECT k.id AS k_id, k.status AS k_status, k.status_at AS k_at, k.status_note AS k_note,
            k.status_reason AS k_reason, u.status_reason AS u_reason,
+           k.status_cause AS k_cause, u.status_cause AS u_cause,
            u.id AS u_id, u.status AS u_status, u.status_at AS u_at, u.status_note AS u_note, u.type AS header
     FROM detections u
     JOIN detections k ON k.sensor_id = u.sensor_id AND k.kind = 'kismet' AND k.type = u.type
@@ -2076,28 +2078,32 @@ BEGIN
       v_status := m.u_status;
       v_status_at := m.u_at;
       v_reason := m.u_reason;
+      v_cause := m.u_cause;
     ELSE
       v_status := m.k_status;
       v_status_at := m.k_at;
       v_reason := m.k_reason;
+      v_cause := m.k_cause;
     END IF;
     v_note := CASE WHEN m.u_note IS NULL OR m.u_note = m.k_note THEN m.k_note
                    WHEN m.k_note IS NULL THEN m.u_note
                    ELSE m.k_note || E'\n' || m.u_note END;
     UPDATE detections d SET status = v_status, status_at = v_status_at, status_reason = v_reason,
-                            status_note = v_note
+                            status_cause = v_cause, status_note = v_note
     WHERE d.id = m.k_id
-      AND (d.status, d.status_at, d.status_reason, d.status_note)
-          IS DISTINCT FROM (v_status, v_status_at, v_reason, v_note);
+      AND (d.status, d.status_at, d.status_reason, d.status_cause, d.status_note)
+          IS DISTINCT FROM (v_status, v_status_at, v_reason, v_cause, v_note);
     INSERT INTO audit_log (account_id, action, target, old, new)
     VALUES (v_account, 'event.merge', 'event:' || m.k_id,
             jsonb_build_object(
               'kept', jsonb_build_object('id', m.k_id, 'status', m.k_status, 'status_at', m.k_at,
-                                         'status_reason', m.k_reason, 'status_note', m.k_note),
+                                         'status_reason', m.k_reason, 'status_cause', m.k_cause,
+                                         'status_note', m.k_note),
               'merged', jsonb_build_object('id', m.u_id, 'status', m.u_status, 'status_at', m.u_at,
-                                           'status_reason', m.u_reason, 'status_note', m.u_note)),
+                                           'status_reason', m.u_reason, 'status_cause', m.u_cause,
+                                           'status_note', m.u_note)),
             jsonb_build_object('id', m.k_id, 'status', v_status, 'status_at', v_status_at,
-                               'status_reason', v_reason, 'status_note', v_note));
+                               'status_reason', v_reason, 'status_cause', v_cause, 'status_note', v_note));
     DELETE FROM detections d WHERE d.id = m.u_id;
     kept_id := m.k_id;
     merged_id := m.u_id;
