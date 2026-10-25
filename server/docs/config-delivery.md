@@ -1,8 +1,10 @@
 # Configuration delivery to the sensor – design
 
-Status: **built and deployed 2026-10-25; delivery OFF (`CONFIG_APPLY=0`)
-after the staged test failed at its first step** (section 15: Kismet refused
-the live `set_channel.cmd`; nothing was applied, capture unchanged). Decisions C1-C13 accepted as recommended
+Status: **built, deployed and ON since 2026-10-25 14:44:50** (`CONFIG_APPLY=1`).
+The first staged test failed (section 15: Kismet refused the live
+`set_channel.cmd`); the applier now applies by **restarting Kismet** (C1's
+alternative, the developer's decision) and the second staged test passed
+(section 16). Decisions C1-C13 accepted as recommended
 (2026-10-25). As built and deviations: section 14. It takes up what live
 upload D9 deferred (`live-upload.md` 13.1): the desired capture
 configuration the operator saves in Settings -> Sensors (`sensor_config`)
@@ -505,3 +507,27 @@ What it shows, and what to decide before a second attempt:
 3. A rollback that only failed to *talk* to Kismet is reported `failed`
    although capture never changed - the result should say what the polls
    show.
+
+## 16. Staged test 2, 2026-10-25 - passed (apply by Kismet restart)
+
+Changes before it (commit `32f19ba`): apply = write the files, restart
+Kismet (and the collector only for a new poll interval); the result is
+judged from the polls alone - 3 consecutive collecting polls with the list
+(`ds_hop_n`, `ds_hop_ok`), spaced `poll_s`, packets rising - a restart or
+REST call that errors decides nothing; Kismet REST timeout 45 s; the hop
+guard is stopped for the apply and started in a `finally`; each restart's
+capture gap (last collecting poll before, first after) is in the checks;
+`VERIFY_S` / `ROLLBACK_VERIFY_S` 300 s.
+
+| Step | Version | Result | Kismet down -> source ready | Effective |
+|---|---|---|---|---|
+| all_89 -> ht20_37 | v5 (retry of v4) | applied | 14:45:40 -> 14:45:45 (~5 s) | 14:46:07 (boundary) |
+| -> all_89 with `VERIFY_S=30` (forced) | v6 | rolled_back to ht20_37 | 14:48:41 -> 14:48:45, rollback 14:49:12 -> 14:49:16 | coverage window 14:48:37 - 14:49:37 |
+| ht20_37 -> all_89 | v7 (retry of v6) | applied | 14:52:10 -> 14:52:13 (~3 s) | 14:52:37 (boundary) |
+
+No poll was missed in any restart (one poll interval between the last poll
+on the old list and the first on the new); seq contiguous, 0 lost. Every
+outcome reached the server as designed: confirmations with their
+boundaries, the refusal with its coverage window, `config_rolled_back`
+opened and closed by the next applied version, the first test's
+`config_failed` closed by v5. Final state: all_89, delivery on.

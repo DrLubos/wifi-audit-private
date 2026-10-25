@@ -212,8 +212,10 @@ Conventions for the stack:
   - **Configuration delivery (schema 18, 2026-10-25; `docs/config-delivery.md`):**
     the desired `sensor_config` rides in the responses to the uploader's own
     requests, only to an uploader reporting `config_state.accepting` (Pi
-    `CONFIG_APPLY=1`, **off by default and off now** - enabling it changes
-    capture: the developer's; the first staged test failed, design section 15); reported attempts become
+    `CONFIG_APPLY=1`, **on since 2026-10-25** after the second staged test
+    passed - design section 16; the applier restarts Kismet; saving a
+    configuration changes capture, so Claude saves none without the
+    developer's OK); reported attempts become
     `sensor_config_attempts`, `confirmed_at` and a dated `change` boundary in
     `sensor_annotations`; refusals, rollbacks and failures are never
     re-delivered unless retried; `polls.config_version` per poll.
