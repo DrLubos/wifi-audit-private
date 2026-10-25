@@ -48,11 +48,15 @@ SELECT se.id, se.name, se.location, se.hardware,
         ORDER BY c.version DESC LIMIT 1) AS config,
        (SELECT json_build_object('version', c.version, 'plan', c.channel_plan, 'channels', c.channels,
                                  'n_channels', c.n_channels, 'dwell_s', c.dwell_s, 'poll_s', c.poll_s,
-                                 'created_at', c.created_at)
+                                 'created_at', c.created_at, 'delivered_at', c.delivered_at,
+                                 'refused_at', c.refused_at, 'refused_reason', c.refused_reason)
         FROM sensor_config c WHERE c.sensor_id = se.id AND c.confirmed_at IS NULL
           AND c.version > coalesce((SELECT max(k.version) FROM sensor_config k
                                     WHERE k.sensor_id = se.id AND k.confirmed_at IS NOT NULL), 0)
-        ORDER BY c.version DESC LIMIT 1) AS pending
+        ORDER BY c.version DESC LIMIT 1) AS pending,
+       (st.heartbeat #>> '{config_state,accepting}')::boolean AS config_accepting,
+       (SELECT a.result FROM sensor_config_attempts a WHERE a.sensor_id = se.id
+        ORDER BY a.reported_at DESC, a.version DESC LIMIT 1) AS config_attempt
 FROM sensors se
 LEFT JOIN sensor_summary ss ON ss.sensor_id = se.id
 LEFT JOIN sensor_status st ON st.sensor_id = se.id

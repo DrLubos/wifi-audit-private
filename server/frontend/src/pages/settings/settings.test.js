@@ -72,8 +72,27 @@ test("channel plans and the stride rule", () => {
   eq(planText({ channel_plan: "all_89", n_channels: 89 }), "89 settings (20/40/80 MHz)");
   eq(planText({ channel_plan: "locked", channels: ["6"], n_channels: 1 }), "locked to channel 6");
   eq(planText({ channel_plan: "custom", n_channels: 90 }), "custom list · 90 settings");
-  eq(configState({ current: { confirmed_at: "2026-09-27T13:04:57Z" }, pending: null }, TZ).text, "In effect since 27 Sep 15:04");
-  eq(configState({ current: null, pending: { version: 4 } }, TZ).text, "Saved, not delivered");
+  eq(configState({ current: { confirmed_at: "2026-09-27T13:04:57Z" }, pending: null }, TZ).text, "Applied since 27 Sep 15:04");
+  // configuration delivery (docs/config-delivery.md 8): every state of a pending version
+  const p4 = { version: 4 };
+  eq(configState({ current: null, pending: p4, delivery: { accepting: false } }, TZ).text,
+     "Pending v4 - this sensor does not accept configuration (CONFIG_APPLY=0)");
+  eq(configState({ current: null, pending: p4, delivery: { accepting: true } }, TZ).text,
+     "Pending v4 - waiting for the sensor's next upload");
+  eq(configState({ current: null, pending: p4, delivery: null }, TZ).text,
+     "Pending v4 - this sensor does not accept configuration (CONFIG_APPLY=0)");
+  eq(configState({ current: null, pending: { ...p4, delivered_at: "2026-10-25T10:00:00Z" },
+                   delivery: { accepting: true, attempt: { version: 4, result: "applying" } } }, TZ).text,
+     "Applying v4 - verifying capture, up to 3 min");
+  eq(configState({ current: null, pending: { ...p4, delivered_at: "2026-10-25T10:00:00Z" },
+                   delivery: { accepting: true, attempt: { version: 4, result: "received" } } }, TZ).text,
+     "Delivered v4 - waiting for the sensor's result");
+  const refused = configState({ current: null, pending: { ...p4, refused_at: "2026-10-25T10:05:00Z",
+                                                          refused_reason: "rolled_back: hop list 1/37" },
+                                delivery: { accepting: true } }, TZ);
+  eq([refused.cls, refused.text], ["bad", "Refused v4 - rolled_back: hop list 1/37"]);
+  eq(configState({ current: { version: 3, confirmed_at: "2026-09-27T13:04:57Z" }, pending: null }, TZ).text,
+     "Applied v3 since 27 Sep 15:04");
 });
 
 test("the adapter line and the account's wall time", () => {
@@ -108,9 +127,10 @@ test("history rows", () => {
   const rows = historyRows([
     { sensor: "pi-fri", ts: "2026-10-12T16:00:00Z", boundary: true, kind: "hardware_change", label: "Hardware change: swapped antenna" },
     { sensor: "pi-fri", ts: "2026-09-27T13:04:57Z", boundary: true, kind: "change", label: "Hop list: 89 entries" },
-    { sensor: "pi-fri", ts: "2026-09-27T14:15:50Z", boundary: false, kind: "change", label: "Hop guard" }], TZ);
+    { sensor: "pi-fri", ts: "2026-09-27T14:15:50Z", boundary: false, kind: "change", label: "Hop guard" },
+    { sensor: "pi-fri", ts: "2026-10-25T10:00:00Z", boundary: false, kind: "coverage", label: "Configuration v4 tried, rolled back" }], TZ);
   eq(rows.map((r) => [r.ts, r.effect]), [["12 Oct 18:00", "RSSI baselines start again"], ["27 Sep 15:04", "evaluated apart"],
-                                         ["27 Sep 16:15", "no boundary"]]);
+                                         ["27 Sep 16:15", "no boundary"], ["25 Oct 11:00", "tried and rolled back - no boundary"]]);
 });
 
 test("sensors: names, the body, rename and the guarded delete", () => {

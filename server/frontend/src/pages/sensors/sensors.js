@@ -117,11 +117,18 @@ export function hopBadge(s) {
            title: "hop entries visited / in the list, at the last collecting poll" };
 }
 
-// the card's foot: a pending change (not delivered until the sensor upload
-// exists, Q10) or since when the configuration is in effect
+// the card's foot: a pending change and where its delivery stands
+// (docs/config-delivery.md 8), or since when the configuration is in effect
 export function footText(s, tz) {
-  if (s.pending) {
-    return { warn: true, text: `Pending change: ${configText(s.pending)} - not delivered, configuration delivery to the sensor is not built yet` };
+  const p = s.pending;
+  if (p) {
+    const d = s.config_delivery ?? {};
+    if (p.refused_at) return { warn: true, text: `Refused change: ${configText(p)} - ${p.refused_reason ?? "no reason given"}` };
+    const state = d.attempt === "applying" && p.delivered_at ? "the sensor is applying and verifying it"
+      : p.delivered_at ? "delivered, waiting for the sensor's result"
+        : d.accepting ? "waiting for the sensor's next upload"
+          : "this sensor does not accept configuration (CONFIG_APPLY=0)";
+    return { warn: true, text: `Pending change: ${configText(p)} - ${state}` };
   }
   if (s.config?.confirmed_at) return { warn: false, text: `Configuration in effect since ${fmtDateTime(s.config.confirmed_at, tz)}` };
   return { warn: false, text: "No configuration recorded" };

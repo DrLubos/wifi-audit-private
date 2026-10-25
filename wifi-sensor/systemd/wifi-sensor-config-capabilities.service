@@ -1,0 +1,20 @@
+# What the capture adapter can tune (Kismet's channel list for the source) and
+# the regulatory country, for the uploader's heartbeat; the server checks every
+# saved configuration against it (config-delivery.md 4.2).
+[Unit]
+Description=Wi-Fi sensor: record the capture capabilities
+After=kismet.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 __INSTALL_DIR__/config-apply/config_apply.py capabilities
+TimeoutStartSec=60
+StateDirectory=wifi-sensor-config
+StateDirectoryMode=0755
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK

@@ -53,8 +53,14 @@ test("the card", () => {
   eq(hopBadge(FRI), { cls: "ok", text: "Channels 89/89", title: "hop entries visited / in the list, at the last collecting poll" });
   eq(hopBadge({ hop: { n: 90, visited: 45, ok: true } }).cls, "warn");
   eq(footText(FRI, TZ), { warn: false, text: "Configuration in effect since 27 Sep 15:04" });
-  eq(footText({ ...FRI, pending: { plan: "all_89", n_channels: 89, dwell_s: 0.2, poll_s: 60 } }, TZ).text,
-     "Pending change: 89 channels · 0.2 s dwell · poll 60 s - not delivered, configuration delivery to the sensor is not built yet");
+  const p60 = { version: 4, plan: "all_89", n_channels: 89, dwell_s: 0.2, poll_s: 60 };
+  eq(footText({ ...FRI, pending: p60 }, TZ).text,
+     "Pending change: 89 channels · 0.2 s dwell · poll 60 s - this sensor does not accept configuration (CONFIG_APPLY=0)");
+  eq(footText({ ...FRI, pending: p60, config_delivery: { accepting: true, attempt: null } }, TZ).text,
+     "Pending change: 89 channels · 0.2 s dwell · poll 60 s - waiting for the sensor's next upload");
+  eq(footText({ ...FRI, pending: { ...p60, refused_at: "2026-10-25T10:05:00Z", refused_reason: "rejected: 14 not supported" },
+                config_delivery: { accepting: true } }, TZ),
+     { warn: true, text: "Refused change: 89 channels · 0.2 s dwell · poll 60 s - rejected: 14 not supported" });
   eq(sinceText(FRI, TZ), "since 15 Sep 2026");
   const ad = { name: "RTL8821CU USB adapter", usb_id: "0bda:c811" };
   eq(adapterText(ad, "2026-10-13T12:00:00Z", TZ), "RTL8821CU USB adapter · 0bda:c811 · last hardware change 13 Oct 14:00");

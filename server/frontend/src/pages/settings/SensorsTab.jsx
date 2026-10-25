@@ -77,16 +77,18 @@ function ConfigCard({ d, account }) {
       config: { channel_plan: plan, channels: plan === "custom" ? picked.list : undefined,
                 lock_channel: plan === "locked" ? lock : undefined, dwell_s: dwell, poll_s: poll },
     }, ["settings.sensors", "sensors"]),
-    (out) => `Saved as version ${out.sensors.map((s) => `${s.version} for ${s.name}`).join(", ")} - not delivered: the sensor upload is not built yet.`,
+    (out) => `Saved as version ${out.sensors.map((s) => `${s.version} for ${s.name}`).join(", ")} - delivered with the sensor's next upload when it accepts configuration (CONFIG_APPLY=1); it is applied only if capture verifies, else rolled back.`,
   );
   return (
     <section className="card set-card" aria-labelledby="sen-h">
       <div className="set-head">
         <h2 id="sen-h">Capture configuration</h2>
         <span className="muted small">
-          Select one, several or all sensors and give them a common configuration. It is saved as the desired
-          configuration; delivery to the sensor comes with the sensor upload (a later phase), until then it waits
-          as “saved, not delivered”. “Sensor settings” on the Sensors page opens this tab with that sensor selected.
+          Select one, several or all sensors and give them a common configuration. It is checked against what each
+          sensor reported it can tune, saved as the desired configuration and delivered with the sensor's next
+          upload - only to a sensor that accepts configuration (CONFIG_APPLY=1). The sensor applies it, verifies
+          that capture resumes and otherwise rolls back; each applied change is a dated dataset boundary.
+          “Sensor settings” on the Sensors page opens this tab with that sensor selected.
         </span>
       </div>
       <div className="scroll-x">

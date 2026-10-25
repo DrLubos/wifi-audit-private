@@ -40,13 +40,13 @@ class V9(unittest.TestCase):
         s.close()
 
     def test_v8_to_v9(self):
-        s = Store(self.path)
-        s.write_poll(TS, HEALTH, [shape_device(AP_RAW, TS)], [], 42)
-        s.close()
+        # a v8 polls table (without config_version) with one poll; DROP COLUMN is
+        # avoided - older SQLite versions trip over the commented column list
         db = sqlite3.connect(self.path)
-        db.execute("ALTER TABLE polls DROP COLUMN config_version")
-        db.execute("UPDATE meta SET value = '8' WHERE key = 'schema_version'")
-        db.commit()
+        db.executescript("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+                         "INSERT INTO meta VALUES ('schema_version', '8'), ('buffer_id', 'b');"
+                         "CREATE TABLE polls (id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, ok INTEGER NOT NULL DEFAULT 1);"
+                         "INSERT INTO polls (ts) VALUES (%d);" % TS)
         db.close()
         s = Store(self.path)
         self.assertEqual(s.get_meta("schema_version"), "9")

@@ -1,0 +1,19 @@
+# At boot, before Kismet and the collector: an apply that a reboot or power
+# cut interrupted is undone (the last good configuration files are restored),
+# so a boot always starts on a verified configuration (config-delivery.md 5.2).
+# A failure here never holds the boot up (ExecStart=-).
+[Unit]
+Description=Wi-Fi sensor: undo an interrupted capture-configuration apply
+DefaultDependencies=no
+After=local-fs.target
+Before=kismet.service wifi-sensor-collector.service
+
+[Service]
+Type=oneshot
+ExecStart=-/usr/bin/python3 __INSTALL_DIR__/config-apply/config_apply.py recover
+TimeoutStartSec=30
+StateDirectory=wifi-sensor-config
+StateDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

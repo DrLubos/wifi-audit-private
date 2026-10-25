@@ -207,10 +207,26 @@ export function cycleText(n, dwell) {
   return `cycle ≈ ${(Math.round(n * dwell * 10) / 10).toFixed(1)} s`;
 }
 
-// the configuration column: confirmed / pending (not delivered, Q10)
+// the configuration column (docs/config-delivery.md 8): applied, or the state
+// of a pending version - refused, applying, delivered, waiting, not accepted
 export function configState(s, tz) {
-  if (s.pending) return { cls: "warn", text: "Saved, not delivered", title: "the sensor upload with configuration delivery is not built yet" };
-  if (s.current?.confirmed_at) return { cls: "ok", text: `In effect since ${fmtDateTime(s.current.confirmed_at, tz)}` };
+  const p = s.pending;
+  if (p) {
+    const v = `v${p.version}`;
+    const att = s.delivery?.attempt && s.delivery.attempt.version === p.version ? s.delivery.attempt.result : null;
+    if (p.refused_at) return { cls: "bad", text: `Refused ${v} - ${p.refused_reason ?? "no reason given"}`,
+                               title: "the sensor did not keep this configuration; the previous one runs" };
+    if (att === "applying") return { cls: "warn", text: `Applying ${v} - verifying capture, up to 3 min` };
+    if (p.delivered_at) return { cls: "warn", text: `Delivered ${v} - waiting for the sensor's result` };
+    if (!s.delivery?.accepting) {
+      return { cls: "warn", text: `Pending ${v} - this sensor does not accept configuration (CONFIG_APPLY=0)`,
+               title: "set CONFIG_APPLY=1 in the sensor's uploader.conf to have it applied" };
+    }
+    return { cls: "warn", text: `Pending ${v} - waiting for the sensor's next upload` };
+  }
+  if (s.current?.confirmed_at) {
+    return { cls: "ok", text: `Applied ${s.current.version ? `v${s.current.version} ` : ""}since ${fmtDateTime(s.current.confirmed_at, tz)}` };
+  }
   return { cls: "neu", text: "none recorded" };
 }
 
@@ -301,6 +317,8 @@ export function deleteGuard(meta, name, typed) {
 export function historyRows(history, tz) {
   return (history ?? []).map((h, i) => ({
     key: `${h.ts}|${h.sensor}|${i}`, ts: fmtDateTime(h.ts, tz), sensor: h.sensor, label: h.label,
-    boundary: h.boundary, effect: h.kind === "hardware_change" ? "RSSI baselines start again" : h.boundary ? "evaluated apart" : "no boundary",
+    boundary: h.boundary,
+    effect: h.kind === "hardware_change" ? "RSSI baselines start again"
+      : h.kind === "coverage" ? "tried and rolled back - no boundary" : h.boundary ? "evaluated apart" : "no boundary",
   }));
 }

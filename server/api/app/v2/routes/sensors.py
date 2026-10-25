@@ -33,7 +33,7 @@ def _config(c):
     if c is None:
         return None
     c = dict(c)
-    for k in ("confirmed_at", "created_at"):
+    for k in ("confirmed_at", "created_at", "delivered_at", "refused_at"):
         if k in c:
             c[k] = _ts(c[k])
     return c
@@ -86,6 +86,8 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
                             "max_recovery_s": r["max_recovery_s"], "restarts": r["restarts"] or 0},
             "aps_7d": r["aps_7d"] or 0, "aps_only_here_7d": r["aps_only_here_7d"] or 0,
             "config": _config(r["config"]), "pending": _config(r["pending"]),
+            # configuration delivery (schema 18): the uploader accepts configurations, its newest attempt
+            "config_delivery": {"accepting": r["config_accepting"], "attempt": r["config_attempt"]},
             # the adapter (read-only, schema 13) and the last hand-entered hardware change
             "adapter": r["adapter"], "last_hardware_change": iso(r["last_hardware_change"]),
             # live upload (schema 14; null for a sensor without it)

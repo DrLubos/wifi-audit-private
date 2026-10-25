@@ -199,15 +199,22 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
         history = deps.run(conn, _Q, "sensor_history", account_id=acc["id"])
         meta = {m["name"]: m for m in deps.run(conn, _Q, "sensor_meta", account_id=acc["id"])}
         adapters = {a["sensor"]: a for a in deps.run(conn, _Q, "sensor_adapters", account_id=acc["id"])}
+        delivery = {d["sensor"]: d for d in deps.run(conn, _Q, "sensor_delivery", account_id=acc["id"])}
         out = []
         for s in acc["sensors"]:
-            mine = [dict(v, created_at=iso(v["created_at"]), confirmed_at=iso(v["confirmed_at"]))
+            mine = [dict(v, created_at=iso(v["created_at"]), confirmed_at=iso(v["confirmed_at"]),
+                         delivered_at=iso(v["delivered_at"]), refused_at=iso(v["refused_at"]))
                     for v in versions if v["sensor"] == s["name"]]
             current = next((v for v in mine if v["confirmed_at"]), None)
             pending = mine[0] if mine and not mine[0]["confirmed_at"] else None
             m = meta[s["name"]]
             ad = adapters.get(s["name"])
+            dl = delivery.get(s["name"]) or {}
+            attempt = dl.get("attempt")
             out.append({"name": s["name"], "current": current, "pending": pending, "versions": mine,
+                        "delivery": {"accepting": dl.get("accepting"), "capabilities_at": iso(dl.get("capabilities_at")),
+                                     "attempt": None if attempt is None else dict(
+                                         attempt, reported_at=iso(shape.parse_ts(attempt["reported_at"])))},
                         "meta": {"location": m["location"], "description": m["description"],
                                  "hardware": m["hardware"], "has_polls": s["first_poll"] is not None},
                         "adapter": None if ad is None else dict(

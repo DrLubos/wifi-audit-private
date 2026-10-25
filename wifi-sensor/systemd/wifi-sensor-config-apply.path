@@ -1,0 +1,13 @@
+# Configuration delivery (server/docs/config-delivery.md 5.1): the uploader
+# writes a delivered configuration to its state directory only with
+# CONFIG_APPLY=1; this starts the root applier when it appears or changes.
+# Installed by install_config_apply.sh.
+[Unit]
+Description=Wi-Fi sensor: apply a delivered capture configuration (watch)
+
+[Path]
+PathChanged=/var/lib/wifi-sensor-uploader/config/desired.json
+Unit=wifi-sensor-config-apply.service
+
+[Install]
+WantedBy=paths.target

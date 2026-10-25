@@ -21,10 +21,25 @@ WHERE st.account_id = %(account_id)s
 -- Every capture configuration version of the account's sensors, newest
 -- first (the newest is the desired one; confirmed_at NULL = not applied yet).
 SELECT se.name AS sensor, c.version, c.channel_plan, c.channels, c.n_channels, c.dwell_s, c.poll_s,
-       c.created_at, c.created_by, c.confirmed_at, c.note
+       c.created_at, c.created_by, c.confirmed_at, c.note,
+       c.delivered_at, c.refused_at, c.refused_reason       -- schema 18 (docs/config-delivery.md)
 FROM sensor_config c
 JOIN sensors se ON se.id = c.sensor_id AND se.account_id = %(account_id)s
 ORDER BY se.id, c.version DESC
+
+-- name: sensor_delivery
+-- Per sensor what its uploader reports about configuration delivery (schema
+-- 18): whether it accepts configurations (CONFIG_APPLY), when it last
+-- reported its capabilities, and its newest attempt.
+SELECT se.name AS sensor, (st.heartbeat #>> '{config_state,accepting}')::boolean AS accepting,
+       st.capabilities_at,
+       (SELECT json_build_object('version', a.version, 'result', a.result, 'reason', a.reason,
+                                 'reported_at', a.reported_at)
+        FROM sensor_config_attempts a WHERE a.sensor_id = se.id
+        ORDER BY a.reported_at DESC, a.version DESC LIMIT 1) AS attempt
+FROM sensors se
+LEFT JOIN sensor_status st ON st.sensor_id = se.id
+WHERE se.account_id = %(account_id)s
 
 -- name: sensor_history
 -- The documented changes of the account's sensors, newest first; boundary =
@@ -34,6 +49,7 @@ SELECT se.name AS sensor, a.starts_at AS ts, a.boundary, a.label, a.ref, a.kind
 FROM sensor_annotations a
 JOIN sensors se ON se.id = a.sensor_id AND se.account_id = %(account_id)s
 WHERE a.kind IN ('change', 'hardware_change')
+   OR (a.kind = 'coverage' AND a.ref LIKE 'sensor_config v%%')   -- a delivered configuration rolled back (schema 18)
 ORDER BY a.starts_at DESC
 
 -- name: sensor_meta
@@ -99,3 +115,7 @@ WHERE sensor_id = %(sensor_id)s
   AND (polls > 0 OR obs_total > 0 OR alerts > 0 OR baselines > 0 OR first_poll IS NOT NULL
        OR devices_by_type <> '{}'::jsonb)
 ORDER BY 1
+
+-- name: sensor_capabilities
+-- What the sensor reported it can tune (schema 18): a saved configuration is checked against it.
+SELECT capabilities FROM sensor_status WHERE sensor_id = %(sensor_id)s

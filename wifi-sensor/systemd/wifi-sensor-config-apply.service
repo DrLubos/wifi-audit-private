@@ -1,0 +1,25 @@
+# The capture-configuration applier (sensor/config_apply.py): validates the
+# delivered configuration against the live adapter, writes kismet_site.conf /
+# collector.conf, applies the hop list live, verifies collecting polls and
+# rolls back to the last good configuration otherwise (config-delivery.md 5).
+# Root, but no network beyond Kismet's loopback REST; writes only the two
+# configuration files and its own state.
+[Unit]
+Description=Wi-Fi sensor: apply a delivered capture configuration
+After=kismet.service wifi-sensor-collector.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 __INSTALL_DIR__/config-apply/config_apply.py apply
+TimeoutStartSec=15min
+StateDirectory=wifi-sensor-config
+StateDirectoryMode=0755
+ProtectSystem=strict
+# the buffer is read-only; a WAL reader still writes its -shm file
+ReadWritePaths=/etc/kismet /etc/wifi-sensor /var/lib/wifi-sensor
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
