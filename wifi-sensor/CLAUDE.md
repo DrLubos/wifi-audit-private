@@ -63,7 +63,8 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   with verify and automatic rollback, a recover unit before Kismet at boot,
   hourly capabilities). **`CONFIG_APPLY` stays 0 and the staged test is not
   run without the developer's explicit OK** - an applied configuration
-  changes capture. Note: `install_sensor.sh` rewrites `kismet_site.conf` from
+  changes capture. The first staged test (2026-10-25) failed: Kismet refused
+  the live `set_channel.cmd` (design section 15); nothing was applied. Note: `install_sensor.sh` rewrites `kismet_site.conf` from
   `CAPTURE_CHANNELS` and would replace a delivered configuration (open point
   in the design's section 14).
 - **Never** in the deployed sensor: active attacks, deauth, handshake capture,

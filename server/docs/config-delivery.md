@@ -1,9 +1,8 @@
 # Configuration delivery to the sensor – design
 
-Status: **built 2026-10-25 and deployed with `CONFIG_APPLY=0`** - delivery
-is OFF: no sensor accepts a configuration until the developer sets
-`CONFIG_APPLY=1` after the staged test of section 12 (which changes capture
-and needs the developer's OK). Decisions C1-C13 accepted as recommended
+Status: **built and deployed 2026-10-25; delivery OFF (`CONFIG_APPLY=0`)
+after the staged test failed at its first step** (section 15: Kismet refused
+the live `set_channel.cmd`; nothing was applied, capture unchanged). Decisions C1-C13 accepted as recommended
 (2026-10-25). As built and deviations: section 14. It takes up what live
 upload D9 deferred (`live-upload.md` 13.1): the desired capture
 configuration the operator saves in Settings -> Sensors (`sensor_config`)
@@ -452,14 +451,11 @@ Deviations from the design text above:
 
 **Before enabling (`CONFIG_APPLY=1`) - open points for the developer:**
 
-1. **`install_sensor.sh` and a delivered configuration**: the installer
-   rewrites `kismet_site.conf` from its own `CAPTURE_CHANNELS`. After a
-   delivered configuration is applied, a later `install_sensor.sh` run would
-   silently replace it (the applier's `applied.json` would then name a
-   configuration that no longer runs). Options: the installer reads
-   `/var/lib/wifi-sensor-config/applied.json` and keeps its list, or warns
-   and refuses while a delivered configuration is applied. Not built (an
-   `install_sensor.sh` change is the developer's).
+1. **`install_sensor.sh` and a delivered configuration** - decided and built
+   2026-10-25: while `/var/lib/wifi-sensor-config/applied.json` exists the
+   installer keeps the current `kismet_site.conf`'s `channels=` /
+   `channel_hoprate=` (stride-checked, `CAPTURE_CHANNELS` ignored with a
+   warning); test `sensor/tests/test_install_keeps_delivered.py`.
 2. The staged test of section 12 (`all_89 -> ht20_37 -> all_89`, one forced
    rollback), with a `findings.md` section 7 row each.
 
@@ -472,3 +468,40 @@ two requests); collector v9 09:14:37, uploader 1.2 09:15:41, applier units
 09:17:00 on the Pi - Kismet and the collector not restarted by the applier.
 On the server: heartbeat `config_state.accepting` false, capabilities 91
 settings / SK, 0 attempts; polls contiguous (0 seq gaps), latency p50 2.7 s.
+
+## 15. Staged test 2026-10-25 - aborted, nothing applied
+
+Run with the developer's OK (`CONFIG_APPLY=1`; the three test writes sent by
+Claude with the write token read on the box, never printed). Times UTC;
+`findings.md` section 7 has the full row.
+
+- v4 = `ht20_37` saved 13:39:34 and delivered; the applier wrote the files
+  (13:39:41) and called `set_channel.cmd`; **its 10-s REST timeout expired**.
+  The rollback restored the last good files (sha256 = the pre-test copies)
+  and its own call timed out too -> `failed` (13:40:01); server: v4 refused,
+  `config_failed` event, no boundary.
+- **Kismet refused every request after exactly 30 s** ("failed to set
+  channel list or hopping": 13:40:11, 13:40:41, 13:41:12 - the applier's, the
+  hop guard's, which had read the new file at 13:39:50, and the rollback's).
+  The live hop list never changed (89/89 on every poll); capture unaffected.
+- Abort rule applied: files all_89 (pre-test), `CONFIG_APPLY=0` 13:43:42.
+  The forced rollback and the return to all_89 were not run.
+
+What it shows, and what to decide before a second attempt:
+
+1. **The live path (C1) does not work on this sensor as built**: Kismet
+   2025-09 waits 30 s for the rtw88 capture helper to acknowledge a channel
+   set on a running source and gets no answer (the hop guard's re-applies
+   work - they reach a freshly re-opened source). Options: (a) apply by
+   restarting Kismet (the C1 alternative: the file is what a restart reads;
+   a 30-60 s capture gap per change, recorded); (b) find out why the
+   running helper does not acknowledge (Kismet's source, a test with the
+   current list only) and keep the live path. Recommendation: (a), it is the
+   boot path that runs every day.
+2. **Applier fixes regardless of 1**: the REST timeout must exceed Kismet's
+   30 s; a timed-out call must not be treated as "not applied" (verify from
+   the polls); the hop guard must not re-apply a list while the applier
+   holds its lock (here it pushed the 37-list too).
+3. A rollback that only failed to *talk* to Kismet is reported `failed`
+   although capture never changed - the result should say what the polls
+   show.

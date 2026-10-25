@@ -204,16 +204,16 @@ Conventions for the stack:
     only with a baseline of its period. Never fit or compare an RSSI statistic
     across a hardware change. Fixture test `tests/sql/hardware_test.sql`; read-only
     check `check_schema13.sql`.
-  - **The label's cause (schema 17, 2026-10-25):** a benign or
-    false-positive label needs `detections.status_cause` from a fixed list of
-    11 (`writes.CAUSES` = the constraint = `events.js` CAUSES, tested;
+  - **The label's cause (schema 17, 2026-10-25; `duplicate` added in schema 19):**
+    a benign or false-positive label needs `detections.status_cause` from a fixed list of
+    12 (`writes.CAUSES` = the constraint = `events.js` CAUSES, tested;
     `unknown` = no known cause, `other` needs a note); confirmed and open have
     none. `evaluation/rq2` reads it (the rules there are suggestions only).
   - **Configuration delivery (schema 18, 2026-10-25; `docs/config-delivery.md`):**
     the desired `sensor_config` rides in the responses to the uploader's own
     requests, only to an uploader reporting `config_state.accepting` (Pi
     `CONFIG_APPLY=1`, **off by default and off now** - enabling it changes
-    capture: the developer's); reported attempts become
+    capture: the developer's; the first staged test failed, design section 15); reported attempts become
     `sensor_config_attempts`, `confirmed_at` and a dated `change` boundary in
     `sensor_annotations`; refusals, rollbacks and failures are never
     re-delivered unless retried; `polls.config_version` per poll.
