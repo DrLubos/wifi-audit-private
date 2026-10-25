@@ -53,6 +53,19 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   always verified). It never writes the buffer; its own state (cursor,
   counters, server anchors) is a JSON file, and a lost one restarts from the
   server's last poll.
+- **Configuration delivery (built and installed 2026-10-25, OFF;
+  `../server/docs/config-delivery.md`):** collector buffer v9
+  (`polls.config_version` from `/var/lib/wifi-sensor-config/applied.json`),
+  uploader 1.2 (`uploader/configsync.py`: a delivered configuration goes to
+  `/var/lib/wifi-sensor-uploader/config/desired.json` only with
+  `CONFIG_APPLY=1` in `uploader.conf`), and the root applier
+  `sensor/config_apply.py` (`install_config_apply.sh`: `.path`-triggered apply
+  with verify and automatic rollback, a recover unit before Kismet at boot,
+  hourly capabilities). **`CONFIG_APPLY` stays 0 and the staged test is not
+  run without the developer's explicit OK** - an applied configuration
+  changes capture. Note: `install_sensor.sh` rewrites `kismet_site.conf` from
+  `CAPTURE_CHANNELS` and would replace a delivered configuration (open point
+  in the design's section 14).
 - **Never** in the deployed sensor: active attacks, deauth, handshake capture,
   password cracking, GPS, or a Flask web UI. This sensor is passive-only.
 

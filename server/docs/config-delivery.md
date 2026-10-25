@@ -1,11 +1,14 @@
 # Configuration delivery to the sensor – design
 
-Status: **design only (2026-10-24), nothing built or deployed.** It takes up
-what live upload D9 deferred (`live-upload.md` 13.1): the desired capture
-configuration the operator saves in Settings -> Sensors (`sensor_config`,
-today "saved, not delivered", PLAN Q10) reaches the Pi, is applied safely,
-and its effect is a dated dataset boundary. Decisions C1-C12 in section 10
-are the developer's.
+Status: **built 2026-10-25 and deployed with `CONFIG_APPLY=0`** - delivery
+is OFF: no sensor accepts a configuration until the developer sets
+`CONFIG_APPLY=1` after the staged test of section 12 (which changes capture
+and needs the developer's OK). Decisions C1-C13 accepted as recommended
+(2026-10-25). As built and deviations: section 14. It takes up what live
+upload D9 deferred (`live-upload.md` 13.1): the desired capture
+configuration the operator saves in Settings -> Sensors (`sensor_config`)
+reaches the Pi, is applied safely, and its effect is a dated dataset
+boundary.
 
 Inputs (read 2026-10-24): `api/app/v2/writes.py` (`parse_capture_config`,
 `plan_channels`, the stride rule), `app/v2/sql/writes.sql`
@@ -419,3 +422,43 @@ not report `config_state`; 4-5 do nothing with `CONFIG_APPLY=0`; the UI
 shows the new states once reports exist. Rollback of the whole feature:
 `CONFIG_APPLY=0` on the Pi (the applier never runs), schema 17's
 `rollback_schema17.sql`.
+
+## 14. As built (2026-10-25)
+
+| Part | Where |
+|---|---|
+| Rules, canonical JSON, sha256 | `wifi-sensor/sensor/capture_config.py`; server `api/app/v2/writes.py` `check_capture_config()`, `config_canonical()`; one fixture `wifi-sensor/sensor/tests/capture_config_cases.json` run by both (`sensor/tests/test_capture_config.py`, `api/tests/test_config_delivery.py`) |
+| Schema 18 | `ops/migrate_schema18.sh` / `.sql`, `rollback_schema18.sql`; `tests/test_schema_files.py` Schema18 |
+| Ingest | `api/app/ingest/validate.py` (`config_state`, `capabilities` of the heartbeat), `config.py` (delivery, attempt actions), `routes.py` `_config_report()` / `_config_out()`, `sql/ingest.sql` (the `config_*` statements); `api/tests/test_ingest_config.py` |
+| Save | `POST /api/v2/settings/sensors`: checked against the sensor's capabilities, stored with its sha256 |
+| Pi | collector buffer v9 (`polls.config_version`), uploader 1.2 (`uploader/configsync.py`), the applier `sensor/config_apply.py` + units `systemd/wifi-sensor-config-*`, `install_config_apply.sh`; tests `collector/tests/test_store_v9.py`, `uploader/tests/test_configsync.py`, `sensor/tests/test_config_apply.py` |
+| UI | `frontend/src/pages/settings/settings.js` `configState()`, `sensors/sensors.js` `footText()`, the configuration history shows rolled-back windows |
+
+Deviations from the design text above:
+
+- `sensor_config.sha256` is hex `text` (with a CHECK), not `bytea`; the
+  dwell is rounded to 3 decimals in the canonical JSON (a `real` column
+  reads 0.2 back as 0.20000000298).
+- `config_state` is stored with the rest of the heartbeat
+  (`sensor_status.heartbeat`); only the capabilities got their own columns.
+- The UI shows each pending version's state, the reason of a refusal and
+  the rolled-back windows in the configuration history; the
+  `sensor_config_attempts` rows are not listed one by one (the settings
+  response carries the newest attempt).
+- The applier's verification counts 3 consecutive collecting polls with
+  `ds_hop_n` = N and `ds_hop_ok` (the collector compares the live list with
+  the new file), spaced `poll_s` ± 2 s, rising `ds_packets`, plus Kismet's
+  live list and rate.
+
+**Before enabling (`CONFIG_APPLY=1`) - open points for the developer:**
+
+1. **`install_sensor.sh` and a delivered configuration**: the installer
+   rewrites `kismet_site.conf` from its own `CAPTURE_CHANNELS`. After a
+   delivered configuration is applied, a later `install_sensor.sh` run would
+   silently replace it (the applier's `applied.json` would then name a
+   configuration that no longer runs). Options: the installer reads
+   `/var/lib/wifi-sensor-config/applied.json` and keeps its list, or warns
+   and refuses while a delivered configuration is applied. Not built (an
+   `install_sensor.sh` change is the developer's).
+2. The staged test of section 12 (`all_89 -> ht20_37 -> all_89`, one forced
+   rollback), with a `findings.md` section 7 row each.

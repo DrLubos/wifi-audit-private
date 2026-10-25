@@ -1927,8 +1927,10 @@ the kept 108 MB pre-v6 dump); the buffer snapshots are gone from the box.
 So the disk is no longer the near-term risk; the decision that has a date is
 raw-observation retention / partitioning (`live-upload.md` 9.3 C/D) -
 before ~February 2027 if partitioning is wanted, since its table rewrite
-needs the free space. Also open (the developer's): `backup.sh` is not
-scheduled - a daily run copied off the box would cost ~20 MB/day here.
+needs the free space. **Decided 2026-10-25: retention / partitioning is
+decided later, before February 2027** (keep this row until then). Backups
+are nightly since 2026-10-25 (`ops/backup_nightly.sh`, KEEP 7, pulled to
+the Mac hourly) - the "+ 7 daily dumps" scenario is now the real one.
 
 ---
 

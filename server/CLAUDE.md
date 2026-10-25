@@ -204,6 +204,24 @@ Conventions for the stack:
     only with a baseline of its period. Never fit or compare an RSSI statistic
     across a hardware change. Fixture test `tests/sql/hardware_test.sql`; read-only
     check `check_schema13.sql`.
+  - **The label's cause (schema 17, 2026-10-25):** a benign or
+    false-positive label needs `detections.status_cause` from a fixed list of
+    11 (`writes.CAUSES` = the constraint = `events.js` CAUSES, tested;
+    `unknown` = no known cause, `other` needs a note); confirmed and open have
+    none. `evaluation/rq2` reads it (the rules there are suggestions only).
+  - **Configuration delivery (schema 18, 2026-10-25; `docs/config-delivery.md`):**
+    the desired `sensor_config` rides in the responses to the uploader's own
+    requests, only to an uploader reporting `config_state.accepting` (Pi
+    `CONFIG_APPLY=1`, **off by default and off now** - enabling it changes
+    capture: the developer's); reported attempts become
+    `sensor_config_attempts`, `confirmed_at` and a dated `change` boundary in
+    `sensor_annotations`; refusals, rollbacks and failures are never
+    re-delivered unless retried; `polls.config_version` per poll.
+  - **Backups:** `ops/backup_nightly.sh` runs `backup.sh` (KEEP 7) at 01:05 UTC
+    from the box user's crontab (`ops/backup_cron.sh`) and writes
+    `<dump>.sha256` + `backups/LATEST`; the developer's Mac pulls the newest
+    dump hourly (`ops/mac/pull_backup.sh`, a user LaunchAgent) into
+    `~/wifi-audit-backups/nightly/` (sha256 checked, newest 14 kept).
   - **Writes (phase 5):** every write endpoint needs `WRITE_TOKEN` (`.env`,
     passed by compose; empty = writes disabled) and runs in
     `deps.write_tx()` (audit_log rows, `accounts.write_version + 1`); the
