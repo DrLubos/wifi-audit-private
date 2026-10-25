@@ -8,6 +8,7 @@ library only:
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 
 from evaluation.rq3 import sim
 
@@ -45,6 +46,43 @@ class Sampling(unittest.TestCase):
     def test_pg_array_literal_and_chunks(self):
         self.assertEqual(sim.pg_array([0, 60]), "{1970-01-01T00:00:00Z,1970-01-01T00:01:00Z}")
         self.assertEqual(sim.chunks(list(range(7)), 3), [[0, 1, 2], [3, 4, 5], [6]])
+
+
+class WorkingHours(unittest.TestCase):
+    """Weekdays 08:00-17:00 Europe/Bratislava: the window must lie inside."""
+    TZ = "Europe/Bratislava"
+
+    @staticmethod
+    def utc(*a):
+        return int(datetime(*a, tzinfo=timezone.utc).timestamp())
+
+    def test_window_inside_working_hours(self):
+        ok = sim.in_working_hours
+        # Monday 2026-10-19, CEST (UTC+2): 08:00 local = 06:00 UTC
+        self.assertTrue(ok(self.utc(2026, 10, 19, 6, 0), 900, self.TZ))
+        self.assertFalse(ok(self.utc(2026, 10, 19, 5, 59), 900, self.TZ))        # starts 07:59
+        self.assertTrue(ok(self.utc(2026, 10, 19, 14, 0), 3600, self.TZ))        # 16:00-17:00
+        self.assertFalse(ok(self.utc(2026, 10, 19, 14, 1), 3600, self.TZ))       # ends 17:01
+        self.assertFalse(ok(self.utc(2026, 10, 24, 8, 0), 900, self.TZ))         # Saturday
+        self.assertFalse(ok(self.utc(2026, 10, 25, 8, 0), 900, self.TZ))         # Sunday
+        # after the DST end (CET, UTC+1): 08:00 local = 07:00 UTC
+        self.assertFalse(ok(self.utc(2026, 10, 26, 6, 30), 900, self.TZ))
+        self.assertTrue(ok(self.utc(2026, 10, 26, 7, 0), 900, self.TZ))
+        self.assertTrue(ok(self.utc(2026, 10, 24, 8, 0), 900, self.TZ, hours="24h"))
+
+    def test_sampling_respects_the_variant(self):
+        start = self.utc(2026, 10, 19, 0, 0)                                    # a week of polls
+        ts = list(range(start, start + 7 * 86400, 30))
+        work = sim.sample_starts(ts, 200, 900, seed=1, hours="work", tz=self.TZ)
+        self.assertEqual(len(work), 200)
+        self.assertTrue(all(sim.in_working_hours(t, 900, self.TZ) for t in work))
+        self.assertNotEqual(work, sim.sample_starts(ts, 200, 900, seed=1))       # 24h differs
+        pairs = sim.sample_pairs(ts, 20, 86400, 3600, seed=1, hours="work", tz=self.TZ)
+        self.assertTrue(pairs)
+        for t1, t2 in pairs:
+            self.assertTrue(sim.in_working_hours(t1, 3600, self.TZ))
+            self.assertTrue(sim.in_working_hours(t2, 3600, self.TZ))
+            self.assertGreaterEqual(t2, t1 + 86400)
 
 
 class Stats(unittest.TestCase):

@@ -30,12 +30,15 @@ def main(argv=None):
     pl.add_argument("--pair-duration", type=int, default=3600, help="length of each audit of a pair, s")
     pl.add_argument("--seed", default="20261024")
     pl.add_argument("--chunk", type=int, default=25, help="windows per SQL statement (25)")
+    pl.add_argument("--hours", choices=sim.HOURS, default="24h",
+                    help="audit starts at any time (24h) or on weekdays 08:00-17:00 local (work)")
+    pl.add_argument("--tz", default=sim.TZ)
     rp = sub.add_parser("report")
     rp.add_argument("out")
     a = p.parse_args(argv)
     if a.cmd == "plan":
         plan = sim.write_plan(a.timeline_csv, a.out, a.durations, a.n, a.gaps, a.pairs, a.pair_duration,
-                              a.seed, a.chunk)
+                              a.seed, a.chunk, a.hours, a.tz)
         print("planned: %s windows, %s pairs" % (
             {d: len(v) for d, v in plan["windows"].items()}, {g: len(v) for g, v in plan["pairs"].items()}))
         return 0

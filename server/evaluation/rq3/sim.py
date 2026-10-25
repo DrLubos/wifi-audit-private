@@ -16,39 +16,68 @@ import os
 import random
 import statistics
 from collections import OrderedDict, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
+from zoneinfo import ZoneInfo
 
 POLL_S = 30                      # the collector's poll interval
+TZ = "Europe/Bratislava"         # the account's time zone
+WORK_FROM, WORK_TO = time(8, 0), time(17, 0)
+HOURS = ("24h", "work")          # audit starts at any time / weekdays 08:00-17:00 local
+
+
+def in_working_hours(t, duration_s, tz=TZ, hours="work"):
+    """True when the window [t, t + duration) lies inside one weekday's
+    08:00-17:00 local time (always true for the "24h" variant). Public
+    holidays are not modelled."""
+    if hours == "24h":
+        return True
+    z = ZoneInfo(tz)
+    a = datetime.fromtimestamp(t, z)
+    b = datetime.fromtimestamp(t + duration_s, z)
+    return (a.weekday() < 5 and a.date() == b.date()
+            and a.time() >= WORK_FROM and b.time() <= WORK_TO)
 
 
 # --- sampling ------------------------------------------------------------------------------------
 
-def sample_starts(ts, n, duration_s, seed):
+def _seed(seed, hours, *parts):
+    # the 24h variant keeps the seeds of the runs before the working-hours one
+    return ":".join(str(x) for x in (seed,) + parts + (() if hours == "24h" else (hours,)))
+
+
+def sample_starts(ts, n, duration_s, seed, hours="24h", tz=TZ):
     """n audit starts drawn without replacement from the collecting polls ts
-    (sorted unix seconds) whose window [t, t + duration) ends by the last poll.
-    Uniform over collecting time, since polls are evenly spaced."""
+    (sorted unix seconds) whose window [t, t + duration) ends by the last poll
+    (and, for "work", lies in working hours). Uniform over (working-hours)
+    collecting time, since polls are evenly spaced."""
     if not ts:
         return []
-    cand = [t for t in ts if t + duration_s <= ts[-1]]
+    cand = [t for t in ts if t + duration_s <= ts[-1] and in_working_hours(t, duration_s, tz, hours)]
     if n >= len(cand):
         return cand
-    return sorted(random.Random("%s:%s" % (seed, duration_s)).sample(cand, n))
+    return sorted(random.Random(_seed(seed, hours, duration_s)).sample(cand, n))
 
 
-def sample_pairs(ts, n, gap_s, duration_s, seed):
+def sample_pairs(ts, n, gap_s, duration_s, seed, hours="24h", tz=TZ):
     """n (t1, t2) pairs: t1 a random collecting poll, t2 the first collecting
     poll at or after t1 + gap (a repeat audit comes back after the gap; when
-    the sensor was down then, at its next collecting poll)."""
+    the sensor was down then, at its next collecting poll); for "work" both
+    windows in working hours (t2 then the first such poll after the gap)."""
     if not ts:
         return []
+    ok = [in_working_hours(t, duration_s, tz, hours) for t in ts]
     out = []
-    for t1 in ts:
+    for k, t1 in enumerate(ts):
+        if not ok[k]:
+            continue
         i = bisect.bisect_left(ts, t1 + gap_s)
+        while i < len(ts) and not ok[i]:
+            i += 1
         if i < len(ts) and ts[i] + duration_s <= ts[-1]:
             out.append((t1, ts[i]))
     if n >= len(out):
         return out
-    return sorted(random.Random("%s:pair:%s" % (seed, gap_s)).sample(out, n))
+    return sorted(random.Random(_seed(seed, hours, "pair", gap_s)).sample(out, n))
 
 
 def iso(t):
@@ -68,7 +97,7 @@ def read_timeline(path):
         return sorted(int(float(r["ts"])) for r in csv.DictReader(f))
 
 
-def write_plan(timeline_csv, out_dir, durations, n, gaps, n_pairs, pair_duration, seed, chunk=25):
+def write_plan(timeline_csv, out_dir, durations, n, gaps, n_pairs, pair_duration, seed, chunk=25, hours="24h", tz=TZ):
     """The sampled windows and pairs: plan/windows_<d>_<k>.txt, plan/pairs_<gap>_<k>_t1.txt and
     _t2.txt (array literals), and sampled.csv (every audit, for the record)."""
     ts = read_timeline(timeline_csv)
@@ -77,7 +106,7 @@ def write_plan(timeline_csv, out_dir, durations, n, gaps, n_pairs, pair_duration
     plan = {"windows": OrderedDict(), "pairs": OrderedDict()}
     rows = []
     for d in durations:
-        starts = sample_starts(ts, n, d, seed)
+        starts = sample_starts(ts, n, d, seed, hours, tz)
         plan["windows"][d] = []
         for k, c in enumerate(chunks(starts, chunk)):
             p = os.path.join(pdir, "windows_%d_%03d.txt" % (d, k))
@@ -86,7 +115,7 @@ def write_plan(timeline_csv, out_dir, durations, n, gaps, n_pairs, pair_duration
             plan["windows"][d].append(p)
         rows += [("window", d, d, iso(t), "") for t in starts]
     for g in gaps:
-        pairs = sample_pairs(ts, n_pairs, g, pair_duration, seed)
+        pairs = sample_pairs(ts, n_pairs, g, pair_duration, seed, hours, tz)
         plan["pairs"][g] = []
         for k, c in enumerate(chunks(pairs, chunk)):
             p1 = os.path.join(pdir, "pairs_%d_%03d_t1.txt" % (g, k))

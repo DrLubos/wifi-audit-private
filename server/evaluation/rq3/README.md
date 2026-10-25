@@ -12,6 +12,7 @@ security-level changes, events.
 # on the box, from server/ (~12 min with the defaults; the db is read in small chunks)
 evaluation/rq3/export.sh --from 2026-09-15 --to 2026-10-24
 evaluation/rq3/export.sh --n 200 --durations 900,3600,14400 --pairs 100 --gaps 86400,604800 --seed 7
+evaluation/rq3/export.sh --from 2026-09-15 --to 2026-10-24 --hours work     # weekdays 08:00-17:00 only
 # on the Mac
 scp -r google:rq3-exports/<folder> .
 ```
@@ -38,6 +39,16 @@ count shows it. The seed is fixed (`--seed`, default `20261024`); every
 sampled audit is listed in `sampled.csv`, so a run can be checked by hand.
 Repeat audits: *t1* drawn the same way, *t2* = the first collecting poll at
 or after *t1 + gap*.
+
+**Two variants** (`--hours`): `24h` - starts at any time of day and week;
+`work` - the whole audit window inside **weekdays 08:00-17:00
+Europe/Bratislava** (a one-shot audit as an operator would do it; DST
+handled by the time zone, public holidays not modelled), and for a repeat
+audit *t2* the first such collecting poll at or after *t1 + gap* (a 1-day
+gap from a Friday lands on Monday). The continuous reference is the same
+for both: the whole record, all hours - which is the comparison RQ3 asks
+for. The 24h variant draws with the same seeds as before the variant
+existed, so its runs are reproducible.
 
 **The continuous reference** (`reference.csv`) is the record over
 [`--from`, `--to`): every AP heard (an hour of `ap_rssi_hourly` with
@@ -111,10 +122,9 @@ invisible to the pair; several changes collapse into one.
 - The continuous record is the reference, not the ground truth: hopping
   89 channels at ~0.2 s misses frames (findings 7), so both sides miss the
   same things; the comparison is about time coverage only.
-- Starts are uniform over day and night. A real audit happens in working
-  hours; the sensor is in a dormitory (evening and night peaks are normal).
-  Restricting the starts to working hours is a parameter not built yet (a
-  decision, README of the report).
+- The sensor is in a dormitory: evening and night peaks are normal, so the
+  `work` variant sees fewer transient devices and fewer client-driven
+  events than `24h`; report both.
 - `aps` counts an AP after one frame. An audit tool that needs several
   beacons, or a person reading a list, would find fewer.
 - Channel changes are dominated by the campus APs' dynamic channel
