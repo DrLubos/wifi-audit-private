@@ -107,14 +107,26 @@ def load_json(path, limit=None):
 
 
 def write_atomic(path, text, mode=0o644):
-    """temp file in the same directory, fsync, rename, fsync the directory."""
+    """temp file in the same directory, fsync, rename, fsync the directory.
+    An existing file keeps its mode and owner (collector.conf is 0640
+    root:<sensor user> when it holds KISMET_PASS)."""
     d = os.path.dirname(os.path.abspath(path))
     tmp = os.path.join(d, ".%s.tmp" % os.path.basename(path))
+    try:
+        st = os.stat(path)
+        mode, owner = st.st_mode & 0o7777, (st.st_uid, st.st_gid)
+    except FileNotFoundError:
+        owner = None
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
         f.flush()
         os.fsync(f.fileno())
     os.chmod(tmp, mode)
+    if owner is not None and hasattr(os, "chown"):
+        try:
+            os.chown(tmp, *owner)
+        except PermissionError:          # not root (tests): the owner is the caller's anyway
+            pass
     os.replace(tmp, path)
     fd = os.open(d, os.O_RDONLY)
     try:

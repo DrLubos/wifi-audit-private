@@ -144,6 +144,20 @@ class Files(unittest.TestCase):
         self.assertEqual(ca.hop_rate(1.0), 1)
 
 
+class Modes(unittest.TestCase):
+    def test_an_existing_files_mode_is_kept(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "collector.conf")
+            with open(p, "w") as f:
+                f.write("KISMET_PASS=x\n")
+            os.chmod(p, 0o640)
+            ca.write_atomic(p, "KISMET_PASS=x\nPOLL_INTERVAL=60\n")
+            self.assertEqual(os.stat(p).st_mode & 0o777, 0o640)
+            n = os.path.join(d, "new.json")
+            ca.write_atomic(n, "{}")
+            self.assertEqual(os.stat(n).st_mode & 0o777, 0o644)
+
+
 class Apply(Rig):
     def test_applied(self):
         self.deliver()
