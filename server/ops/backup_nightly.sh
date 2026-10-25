@@ -2,7 +2,7 @@
 # Nightly database backup on the box (run by cron, ops/backup_cron.sh):
 # ./backup.sh with KEEP=7, then a sha256 file next to the new dump
 # (backups/<dump>.sha256, `sha256sum` format) and backups/LATEST (its file
-# name) - what the Mac's pull job (ops/mac/pull_backup.sh) reads. One run at
+# name) - what ops/fetch_backup.sh, run by hand on the Mac, reads. One run at
 # a time (flock). Read-only on the database, like backup.sh.
 #
 #   cd ~/wifi-audit/server && ops/backup_nightly.sh       # by hand, the same as the cron run

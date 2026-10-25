@@ -116,13 +116,27 @@ The seeded dataset lives in the `db-data` volume only, so back it up:
 
 ```
 ./backup.sh                                   # -> backups/<db>-<UTC stamp>.dump (custom format, validated, gitignored)
-scp google:~/wifi-audit/server/backups/<file> ~/somewhere-safe/    # copy it OFF the box
 ```
 
 `backup.sh` reads `.env`, runs `pg_dump -Fc` inside the `db` container (read-only
 on the database), checks the archive with `pg_restore --list`, prints size and
-sha256, and keeps the newest `KEEP` dumps (default 7). A cron line on the box, if
-wanted: `17 3 * * * cd ~/wifi-audit/server && ./backup.sh >> backups/backup.log 2>&1`.
+sha256, and keeps the newest `KEEP` dumps (default 7).
+
+**Nightly on the box** (since 2026-10-25): `ops/backup_nightly.sh` at 01:05 UTC
+from the box user's crontab (`ops/backup_cron.sh install | remove | show`;
+log `~/backup-nightly.log`) runs `backup.sh` with KEEP 7 and writes
+`backups/<dump>.sha256` and `backups/LATEST`.
+
+**Off the box, by hand** - from the Mac, copy the newest dump to
+`~/wifi-audit-backups/` with the sha256 checked on both sides:
+
+```
+server/ops/fetch_backup.sh            # resumes if interrupted; "already in ..., sha256 equal" when done before
+```
+
+The same by hand, without the script: `ssh google 'cd wifi-audit/server/backups && sha256sum $(ls -1t *.dump | head -1)'`,
+`scp google:wifi-audit/server/backups/<dump> ~/wifi-audit-backups/`, then
+`shasum -a 256 ~/wifi-audit-backups/<dump>` - the two hashes must be equal.
 
 Restore into the running stack (replaces the current contents; `--clean` drops
 and recreates every object in the dump, including the function and the view):

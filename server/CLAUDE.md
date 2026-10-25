@@ -219,9 +219,9 @@ Conventions for the stack:
     re-delivered unless retried; `polls.config_version` per poll.
   - **Backups:** `ops/backup_nightly.sh` runs `backup.sh` (KEEP 7) at 01:05 UTC
     from the box user's crontab (`ops/backup_cron.sh`) and writes
-    `<dump>.sha256` + `backups/LATEST`; the developer's Mac pulls the newest
-    dump hourly (`ops/mac/pull_backup.sh`, a user LaunchAgent) into
-    `~/wifi-audit-backups/nightly/` (sha256 checked, newest 14 kept).
+    `<dump>.sha256` + `backups/LATEST`; the developer copies dumps off the box
+    by hand (`ops/fetch_backup.sh` on the Mac: newest dump to
+    `~/wifi-audit-backups/`, sha256 checked on both sides; README).
   - **Writes (phase 5):** every write endpoint needs `WRITE_TOKEN` (`.env`,
     passed by compose; empty = writes disabled) and runs in
     `deps.write_tx()` (audit_log rows, `accounts.write_version + 1`); the

@@ -1929,8 +1929,8 @@ raw-observation retention / partitioning (`live-upload.md` 9.3 C/D) -
 before ~February 2027 if partitioning is wanted, since its table rewrite
 needs the free space. **Decided 2026-10-25: retention / partitioning is
 decided later, before February 2027** (keep this row until then). Backups
-are nightly since 2026-10-25 (`ops/backup_nightly.sh`, KEEP 7, pulled to
-the Mac hourly) - the "+ 7 daily dumps" scenario is now the real one.
+are nightly since 2026-10-25 (`ops/backup_nightly.sh`, KEEP 7; copied to
+the Mac by hand with `ops/fetch_backup.sh`) - the "+ 7 daily dumps" scenario is now the real one.
 
 ---
 
