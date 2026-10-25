@@ -462,3 +462,13 @@ Deviations from the design text above:
    `install_sensor.sh` change is the developer's).
 2. The staged test of section 12 (`all_89 -> ht20_37 -> all_89`, one forced
    rollback), with a `findings.md` section 7 row each.
+
+**Deploy record (2026-10-25, UTC):** backup `wifi_audit-20261025T090024Z.dump`
+copied to the Mac, sha256 equal; `ops/migrate_schema18.sh` 09:09:23-09:09:37,
+all 11 fixture tests PASS (incl. `events` with the cause through the merge,
+`labels`); api + refresher 09:10, frontend (14/14 test files) 09:11; smoke
+0 failures (one transient 304 miss in the first run: a refresh between the
+two requests); collector v9 09:14:37, uploader 1.2 09:15:41, applier units
+09:17:00 on the Pi - Kismet and the collector not restarted by the applier.
+On the server: heartbeat `config_state.accepting` false, capabilities 91
+settings / SK, 0 attempts; polls contiguous (0 seq gaps), latency p50 2.7 s.
