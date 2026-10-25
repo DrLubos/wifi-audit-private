@@ -76,7 +76,7 @@ WITH ev AS MATERIALIZED (
   LIMIT %(limit)s::int
 ), page AS MATERIALIZED (
   SELECT d.id, d.ts, d.ts_end, d.severity, d.kind, d.type, d.summary, d.mac, d.ssid, d.status, d.status_at,
-         d.status_reason, d.sensor_id, coalesce(nullif(su.ssid, ''), su.name_seen, d.ssid) AS network,
+         d.status_reason, d.status_cause, d.sensor_id, coalesce(nullif(su.ssid, ''), su.name_seen, d.ssid) AS network,
          t.ts_first, t.members
   FROM top t
   JOIN detections d ON d.id = t.id
@@ -88,7 +88,7 @@ WITH ev AS MATERIALIZED (
 )
 SELECT p.id, p.ts, p.ts_end, p.severity, p.kind, p.type, {{_label}} AS type_label, p.summary,
        upper(p.mac::text) AS bssid, p.ssid, p.network, c.classification, s.name AS sensor, p.status, p.status_at,
-       p.status_reason, p.ts_first, p.members, (p.ts AT TIME ZONE %(tz)s::text)::date AS day
+       p.status_reason, p.status_cause, p.ts_first, p.members, (p.ts AT TIME ZONE %(tz)s::text)::date AS day
 FROM page p
 JOIN sensors s ON s.id = p.sensor_id
 LEFT JOIN kismet_alert_rules r ON p.kind = 'kismet' AND r.header = p.type
@@ -98,7 +98,7 @@ ORDER BY p.ts DESC, p.id DESC
 -- name: members
 -- The events of the page's grouped rows (feed.members) with their BSSIDs
 -- (the APs of one network).
-SELECT d.id, d.ts, d.ts_end, d.summary, d.status_at, d.status_reason, upper(d.mac::text) AS bssid
+SELECT d.id, d.ts, d.ts_end, d.summary, d.status_at, d.status_reason, d.status_cause, upper(d.mac::text) AS bssid
 FROM detections d
 WHERE d.id = ANY (%(ids)s::bigint[])
 ORDER BY d.ts DESC, d.id DESC
@@ -106,7 +106,8 @@ ORDER BY d.ts DESC, d.id DESC
 -- name: event
 SELECT p.id, p.ts, p.ts_end, p.severity, p.kind, p.type, {{_label}} AS type_label, p.summary,
        upper(p.mac::text) AS bssid, p.ssid, coalesce(nullif(su.ssid, ''), su.name_seen, p.ssid) AS network,
-       s.name AS sensor, p.status, p.status_at, p.status_reason, p.status_note, p.evidence, p.created_at, p.updated_at,
+       s.name AS sensor, p.status, p.status_at, p.status_reason, p.status_cause, p.status_note, p.evidence,
+       p.created_at, p.updated_at,
        a.id AS ap_id, (SELECT v.classification FROM account_aps v WHERE v.ap_id = a.id) AS classification
 FROM detections p
 JOIN sensors s ON s.id = p.sensor_id AND s.account_id = %(account_id)s
@@ -140,7 +141,7 @@ ORDER BY se.id
 -- name: labels
 -- The current labels of the given events of the account (the old values
 -- of a status write, audit_log).
-SELECT d.id, d.status, d.status_reason, d.status_note, d.status_at
+SELECT d.id, d.status, d.status_reason, d.status_cause, d.status_note, d.status_at
 FROM detections d
 JOIN sensors se ON se.id = d.sensor_id AND se.account_id = %(account_id)s
 WHERE d.id = ANY (%(ids)s::bigint[])
@@ -161,7 +162,7 @@ ORDER BY l.at DESC, l.id DESC
 SELECT p.id, p.ts, p.ts_end, se.name AS sensor, p.kind, p.type, {{_label}} AS type_label, p.severity,
        CASE WHEN a.id IS NOT NULL THEN upper(p.mac::text) END AS bssid,
        coalesce(nullif(su.ssid, ''), su.name_seen, p.ssid) AS ssid,
-       p.status, p.status_reason, p.status_note, p.status_at
+       p.status, p.status_reason, p.status_cause, p.status_note, p.status_at
 FROM detections p
 JOIN sensors se ON se.id = p.sensor_id AND se.account_id = %(account_id)s
 LEFT JOIN ap_summary su ON su.sensor_id = p.sensor_id AND su.device_key = p.device_key
@@ -172,8 +173,10 @@ ORDER BY p.ts, p.id
 -- name: export_history
 -- Every change of a label, oldest first (long format: one row per change).
 SELECT l.at, split_part(l.target, ':', 2)::bigint AS event_id, d.kind, d.type,
-       l.old->>'status' AS old_status, l.old->>'reason' AS old_reason, l.old->>'note' AS old_note,
-       l.new->>'status' AS new_status, l.new->>'reason' AS new_reason, l.new->>'note' AS new_note
+       l.old->>'status' AS old_status, l.old->>'reason' AS old_reason, l.old->>'cause' AS old_cause,
+       l.old->>'note' AS old_note,
+       l.new->>'status' AS new_status, l.new->>'reason' AS new_reason, l.new->>'cause' AS new_cause,
+       l.new->>'note' AS new_note
 FROM audit_log l
 LEFT JOIN detections d ON d.id = split_part(l.target, ':', 2)::bigint
 WHERE l.account_id = %(account_id)s AND l.action = 'event.status'

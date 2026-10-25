@@ -21,20 +21,13 @@ def ev(**kw):
     return row
 
 
-class NoteCause(unittest.TestCase):
-    def test_tag_anywhere_in_the_note_case_insensitive(self):
-        self.assertEqual(a.note_cause("open network. Cause:Kismet_Rule"), ("kismet_rule", None))
-        self.assertEqual(a.note_cause("cause: rssi_floor (weak hotspot)"), ("rssi_floor", None))
-
-    def test_no_tag(self):
-        self.assertEqual(a.note_cause(""), (None, None))
-        self.assertEqual(a.note_cause("because of the floor"), (None, None))
-
-    def test_unknown_slug_is_other_and_reported(self):
-        self.assertEqual(a.note_cause("cause:moon_phase"), ("other", "moon_phase"))
-
-    def test_first_tag_wins(self):
-        self.assertEqual(a.note_cause("cause:pipeline_bug cause:other"), ("pipeline_bug", None))
+class Vocabulary(unittest.TestCase):
+    def test_same_causes_as_the_api(self):
+        import os as _os
+        import re as _re
+        api = open(_os.path.join(_os.path.dirname(__file__), "..", "..", "api", "app", "v2", "writes.py")).read()
+        keys = _re.findall(r'^\s+\("(\w+)", "', api[api.index("CAUSES = ("):api.index("CAUSE_KEYS")], _re.M)
+        self.assertEqual(keys, list(a.CAUSES))
 
 
 class RuleCause(unittest.TestCase):
@@ -94,11 +87,17 @@ class RuleCause(unittest.TestCase):
 
 
 class Assign(unittest.TestCase):
-    def test_the_operator_tag_wins_and_the_rule_is_kept(self):
+    def test_the_label_cause_wins_and_the_rule_is_kept(self):
         r = a.assign(ev(ap_level_at="open", status="benign", status_reason="expected_behaviour",
-                        note="cause:client_behaviour"))
+                        status_cause="client_behaviour", note="cause:kismet_rule is only text now"))
         self.assertEqual((r["cause"], r["cause_source"], r["rule_cause"]),
-                         ("client_behaviour", "note", "kismet_rule"))
+                         ("client_behaviour", "label", "kismet_rule"))
+
+    def test_label_unknown_is_not_traced(self):
+        r = a.assign(ev(type="DEAUTHFLOOD", rule="DEAUTHFLOOD", status="benign", status_reason="accepted_risk",
+                        status_cause="unknown"))
+        self.assertEqual((r["cause"], r["cause_source"]), ("unknown", "label"))
+        self.assertFalse(a.traced(r))
 
     def test_rule_only(self):
         r = a.assign(ev(ap_level_at="open"))
@@ -116,13 +115,14 @@ class Assign(unittest.TestCase):
 class Aggregate(unittest.TestCase):
     def rows(self):
         return [a.assign(r) for r in [
-            ev(id=1, ap_level_at="open", status="false_positive", status_reason="rule_defect"),
-            ev(id=2, ap_level_at="open", status="benign", status_reason="expected_behaviour"),
+            ev(id=1, ap_level_at="open", status="false_positive", status_reason="rule_defect",
+               status_cause="kismet_rule"),
+            ev(id=2, ap_level_at="open", status="benign", status_reason="expected_behaviour", status_cause="kismet_rule"),
             ev(id=3, ap_level_at="open"),
             ev(id=4, ap_level_at="strong", ap_mfp_at="required", status="confirmed",
                status_reason="security_relevant"),
             ev(id=5, kind="sensor", type="upload_retention_risk", rule="upload_retention_risk",
-               backlog_on_server="t", status="false_positive", status_reason="artefact"),
+               backlog_on_server="t", status="false_positive", status_reason="artefact", status_cause="pipeline_bug"),
         ]]
 
     def test_rates_per_rule(self):
@@ -156,7 +156,8 @@ class Aggregate(unittest.TestCase):
 
     def test_causes_and_traced_share(self):
         cs = {(r["kind"], r["type"], r["cause"], r["source"]): r for r in a.by_cause(self.rows())}
-        self.assertEqual(cs[("kismet", "NOCLIENTMFP", "kismet_rule", "rule")]["n"], 3)
+        self.assertEqual(cs[("kismet", "NOCLIENTMFP", "kismet_rule", "label")]["n"], 2)
+        self.assertEqual(cs[("kismet", "NOCLIENTMFP", "kismet_rule", "rule")]["n"], 1)
         self.assertEqual(cs[("kismet", "NOCLIENTMFP", "", "none")]["n"], 1)
         s = {r["metric"]: r["value"] for r in a.summary(self.rows())}
         self.assertEqual(s["events"], 5)
@@ -168,11 +169,14 @@ class Aggregate(unittest.TestCase):
         self.assertEqual(s["not_security_labelled"], 3)
         self.assertAlmostEqual(s["not_security_traced_share"], 1.0)
 
-    def test_rule_vs_note_agreement(self):
-        rows = [a.assign(ev(id=1, ap_level_at="open", note="cause:kismet_rule")),
-                a.assign(ev(id=2, ap_level_at="open", note="cause:client_behaviour")),
-                a.assign(ev(id=3, note="cause:other"))]
-        ag = {(r["rule_cause"], r["note_cause"]): r["n"] for r in a.agreement(rows)}
+    def test_rule_vs_label_agreement(self):
+        lab = dict(status="benign", status_reason="expected_behaviour")
+        rows = [a.assign(ev(id=1, ap_level_at="open", status_cause="kismet_rule", **lab)),
+                a.assign(ev(id=2, ap_level_at="open", status_cause="client_behaviour", **lab)),
+                a.assign(ev(id=3, status_cause="other", note="x", **lab)),
+                a.assign(ev(id=4, ap_level_at="open"))]
+        ag = {(r["rule_cause"], r["label_cause"]): r["n"] for r in a.agreement(rows)}
+        self.assertEqual(len(ag), 3)
         self.assertEqual(ag[("kismet_rule", "kismet_rule")], 1)
         self.assertEqual(ag[("kismet_rule", "client_behaviour")], 1)
         self.assertEqual(ag[("", "other")], 1)
@@ -185,7 +189,8 @@ class Files(unittest.TestCase):
             with open(src, "w", newline="") as f:
                 w = csv.DictWriter(f, fieldnames=a.EVENT_COLUMNS)
                 w.writeheader()
-                w.writerow(ev(ap_level_at="open", note="seen from aa:bb:cc:dd:ee:ff cause:kismet_rule"))
+                w.writerow(ev(ap_level_at="open", status="benign", status_reason="expected_behaviour",
+                              status_cause="kismet_rule", note="seen from aa:bb:cc:dd:ee:ff"))
             out = os.path.join(d, "out")
             a.run(src, out)
             names = sorted(os.listdir(out))

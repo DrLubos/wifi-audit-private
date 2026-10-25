@@ -4,10 +4,12 @@ known cause. Pure functions over the rows events.sql exports; standard
 library only. README.md defines every metric.
 
 A cause comes from two places:
-  note  - the operator's tag `cause:<slug>` in the label note (authoritative);
-  rule  - a documented, deterministic reading of the data (RULES below).
-The note wins; the rule's answer is kept in `rule_cause` so the two can be
-compared (agreement.csv).
+  label - the operator's cause of a benign / false-positive label
+          (detections.status_cause, schema 17; authoritative);
+  rule  - a documented, deterministic reading of the data (rule_cause below).
+The label wins; the rule's answer is kept in `rule_cause` so the two can be
+compared (agreement.csv). The label cause "unknown" (looked at, no known
+cause) does not count as traced.
 """
 
 import csv
@@ -20,7 +22,7 @@ from ..metrics import wilson_ci
 # events.sql's columns, in order
 EVENT_COLUMNS = (
     "id", "sensor", "kind", "type", "rule", "severity", "ts", "ts_end", "duration_s", "n_alerts",
-    "has_subject", "network_kind", "status", "status_reason", "status_at", "note",
+    "has_subject", "network_kind", "status", "status_reason", "status_cause", "status_at", "note",
     "ap_level_at", "ap_mfp_at", "in_outage", "in_limited", "degraded_kinds", "channel_change_1h",
     "reverted_within_s", "backlog_on_server", "classification_now", "oui_allowed_later", "baseline_median",
 )
@@ -39,16 +41,17 @@ CAUSES = OrderedDict([
     ("sensor_degraded", "the capture was down or delivered no frames at the time (not hopping)"),
     ("ap_behaviour", "normal behaviour of the AP (dynamic channel selection, DFS, reboot, its owner's change)"),
     ("client_behaviour", "normal behaviour of clients (roaming, leaving, power save)"),
-    ("staged_test", "this project's own staged test"),
-    ("other", "another cause (named in the note), or an unknown slug"),
+    ("staged_test", "this project's own staged test (spill-over)"),
+    ("unknown", "no known cause (the operator looked; not traced)"),
+    ("other", "another cause, named in the label note"),
 ])
+# the same keys as api/app/v2/writes.py CAUSES (tests/test_rq2.py)
 
 SECURITY_KINDS = ("detection", "kismet", "config")
 STATUSES = ("open", "confirmed", "benign", "false_positive")
 FLOOR_BASELINE_DBM = -100.0      # an RSSI baseline at or below this sits on the censoring floor
 
 MAC_RE = re.compile(r"(?i)\b([0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b")
-_TAG_RE = re.compile(r"(?i)\bcause\s*:\s*([a-z0-9_]+)")
 
 OUTPUTS = ("events.csv", "by_rule.csv", "by_reason.csv", "by_cause.csv", "agreement.csv", "summary.csv")
 
@@ -62,18 +65,6 @@ def _f(v):
         return float(v)
     except (TypeError, ValueError):
         return None
-
-
-def note_cause(note):
-    """The first `cause:<slug>` in a note -> (slug, unknown slug or None).
-    An unknown slug counts as 'other' and is reported."""
-    m = _TAG_RE.search(note or "")
-    if not m:
-        return None, None
-    slug = m.group(1).lower()
-    if slug in CAUSES:
-        return slug, None
-    return "other", slug
 
 
 def rule_cause(row):
@@ -111,16 +102,21 @@ def assign(row):
     r = dict(row)
     r["scope"] = "security" if row["kind"] in SECURITY_KINDS else "sensor"
     rc, detail = rule_cause(row)
-    nc, unknown = note_cause(row.get("note"))
+    lc = row.get("status_cause") or ""
     r["rule_cause"], r["rule_detail"] = rc or "", detail or ""
-    r["note_cause"], r["note_unknown_slug"] = nc or "", unknown or ""
-    if nc:
-        r["cause"], r["cause_source"] = nc, "note"
+    r["label_cause"] = lc
+    if lc:
+        r["cause"], r["cause_source"] = lc, "label"
     elif rc:
         r["cause"], r["cause_source"] = rc, "rule"
     else:
         r["cause"], r["cause_source"] = "", "none"
     return r
+
+
+def traced(r):
+    """A known cause: from the label or a rule; the label's "unknown" is none."""
+    return bool(r["cause"]) and r["cause"] != "unknown"
 
 
 def _rate(k, n):
@@ -138,13 +134,13 @@ def _metrics(rows):
         m[name + "_rate"] = _rate(k, lab)
         lo, hi = wilson_ci(k, lab) if lab else ("", "")
         m[name + "_rate_lo"], m[name + "_rate_hi"] = lo, hi
-    traced = [r for r in rows if r["cause"]]
-    m["traced"] = len(traced)
-    m["traced_rule"] = sum(1 for r in traced if r["cause_source"] == "rule")
-    m["traced_note"] = sum(1 for r in traced if r["cause_source"] == "note")
-    m["traced_share"] = _rate(len(traced), n)
+    tr = [r for r in rows if traced(r)]
+    m["traced"] = len(tr)
+    m["traced_rule"] = sum(1 for r in tr if r["cause_source"] == "rule")
+    m["traced_label"] = sum(1 for r in tr if r["cause_source"] == "label")
+    m["traced_share"] = _rate(len(tr), n)
     ns = [r for r in rows if r["status"] in ("benign", "false_positive")]
-    m["not_security_traced_share"] = _rate(sum(1 for r in ns if r["cause"]), len(ns))
+    m["not_security_traced_share"] = _rate(sum(1 for r in ns if traced(r)), len(ns))
     return m
 
 
@@ -211,9 +207,9 @@ def by_cause(rows):
 
 
 def agreement(rows):
-    """Rule cause vs the operator's tag, for events that have a tag."""
-    c = Counter((r["rule_cause"], r["note_cause"]) for r in rows if r["note_cause"])
-    return [OrderedDict(rule_cause=rc, note_cause=nc, n=k, agree=rc == nc) for (rc, nc), k in sorted(c.items())]
+    """Rule cause vs the operator's label cause, for labels with a cause."""
+    c = Counter((r["rule_cause"], r["label_cause"]) for r in rows if r["label_cause"])
+    return [OrderedDict(rule_cause=rc, label_cause=lc, n=k, agree=rc == lc) for (rc, lc), k in sorted(c.items())]
 
 
 def summary(rows):
@@ -221,7 +217,6 @@ def summary(rows):
     lab = [r for r in rows if r["status"] != "open"]
     ns = [r for r in rows if r["status"] in ("benign", "false_positive")]
     fp = [r for r in rows if r["status"] == "false_positive"]
-    unknown = sorted({r["note_unknown_slug"] for r in rows if r["note_unknown_slug"]})
     items = [
         ("events", len(rows), "all kinds"),
         ("security_events", len(sec), "kinds detection, kismet, config"),
@@ -233,16 +228,16 @@ def summary(rows):
         ("benign", sum(1 for r in rows if r["status"] == "benign"), ""),
         ("false_positive", len(fp), ""),
         ("fp_rate", _rate(len(fp), len(lab)), "false_positive / labelled"),
-        ("events_traced", sum(1 for r in rows if r["cause"]), "a cause from a note tag or a rule"),
-        ("traced_share", _rate(sum(1 for r in rows if r["cause"]), len(rows)), "events_traced / events"),
-        ("traced_by_note", sum(1 for r in rows if r["cause_source"] == "note"), ""),
+        ("events_traced", sum(1 for r in rows if traced(r)), "a known cause from the label or a rule"),
+        ("traced_share", _rate(sum(1 for r in rows if traced(r)), len(rows)), "events_traced / events"),
+        ("traced_by_label", sum(1 for r in rows if traced(r) and r["cause_source"] == "label"), ""),
         ("traced_by_rule", sum(1 for r in rows if r["cause_source"] == "rule"), ""),
-        ("security_traced_share", _rate(sum(1 for r in sec if r["cause"]), len(sec)), ""),
+        ("labels_unknown_cause", sum(1 for r in rows if r["label_cause"] == "unknown"), "labelled: no known cause"),
+        ("security_traced_share", _rate(sum(1 for r in sec if traced(r)), len(sec)), ""),
         ("not_security_labelled", len(ns), "benign + false_positive"),
-        ("not_security_traced_share", _rate(sum(1 for r in ns if r["cause"]), len(ns)),
+        ("not_security_traced_share", _rate(sum(1 for r in ns if traced(r)), len(ns)),
          "of benign + false_positive, the share with a known cause"),
-        ("fp_traced_share", _rate(sum(1 for r in fp if r["cause"]), len(fp)), ""),
-        ("note_unknown_slugs", "|".join(unknown), "cause tags not in the vocabulary (counted as other)"),
+        ("fp_traced_share", _rate(sum(1 for r in fp if traced(r)), len(fp)), ""),
     ]
     for cause in CAUSES:
         items.append(("cause_" + cause, sum(1 for r in rows if r["cause"] == cause), CAUSES[cause]))
@@ -279,8 +274,7 @@ def write_csv(path, rows, fields=None):
             w.writerow({k: _fmt(r.get(k, "")) for k in fields})
 
 
-EVENT_OUT = list(EVENT_COLUMNS) + ["scope", "cause", "cause_source", "rule_cause", "rule_detail",
-                                   "note_cause", "note_unknown_slug"]
+EVENT_OUT = list(EVENT_COLUMNS) + ["scope", "cause", "cause_source", "rule_cause", "rule_detail", "label_cause"]
 
 
 def run(events_csv, out_dir):
@@ -291,6 +285,6 @@ def run(events_csv, out_dir):
     write_csv(os.path.join(out_dir, "by_reason.csv"), by_reason(rows))
     write_csv(os.path.join(out_dir, "by_cause.csv"), by_cause(rows))
     write_csv(os.path.join(out_dir, "agreement.csv"), agreement(rows),
-              ["rule_cause", "note_cause", "n", "agree"])
+              ["rule_cause", "label_cause", "n", "agree"])
     write_csv(os.path.join(out_dir, "summary.csv"), summary(rows))
     return rows

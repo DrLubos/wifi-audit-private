@@ -58,7 +58,7 @@ def _item(r, members=()):
                {"bssid": r["bssid"], "ssid": r["ssid"], "network": r["network"],
                 "classification": r["classification"]}),
         "sensors": [r["sensor"]], "status": r["status"], "status_at": iso(r["status_at"]),
-        "status_reason": r["status_reason"],
+        "status_reason": r["status_reason"], "status_cause": r.get("status_cause"),
     }
     if "members" in r:
         item["group"] = shape.event_group(r, members)
@@ -179,31 +179,35 @@ def event(request: Request, event_id: int = Path(ge=1, le=2 ** 63 - 1), acc=Depe
 
 def _label(acc, ids, body):
     """One label for the given events, one transaction, one audit row per event."""
-    status, reason, note = deps.invalid(writes.parse_status, body)
+    status, reason, cause, note = deps.invalid(writes.parse_status, body)
     with deps.write_tx(acc) as (conn, audit):
         old = {r["id"]: r for r in deps.run(conn, _Q, "labels", account_id=acc["id"], ids=ids)}
         missing = [i for i in ids if i not in old]
         if missing:
             raise HTTPException(status_code=404, detail="unknown event(s) %s" % missing[:10])
-        deps.run(conn, _QW, "event_status", account_id=acc["id"], ids=ids, status=status, reason=reason, note=note)
+        deps.run(conn, _QW, "event_status", account_id=acc["id"], ids=ids, status=status, reason=reason,
+                 cause=cause, note=note)
         for i in ids:
             o = old[i]
             audit("event.status", "event:%d" % i,
-                  {"status": o["status"], "reason": o["status_reason"], "note": o["status_note"]},
-                  {"status": status, "reason": reason, "note": note if note is not None else o["status_note"]})
-    return deps.written({"ids": ids, "status": status, "reason": reason})
+                  {"status": o["status"], "reason": o["status_reason"], "cause": o["status_cause"],
+                   "note": o["status_note"]},
+                  {"status": status, "reason": reason, "cause": cause,
+                   "note": note if note is not None else o["status_note"]})
+    return deps.written({"ids": ids, "status": status, "reason": reason, "cause": cause})
 
 
 @router.post("/{event_id}/status", dependencies=[Depends(deps.require_write)])
 def post_status(event_id: int = Path(ge=1, le=2 ** 63 - 1), body: dict = Body(...), acc=Depends(deps.get_account)):
-    """Label one event: {status, reason, note?} - open, or confirmed / benign /
-    false_positive with one of its reasons (schema 12; any event kind)."""
+    """Label one event: {status, reason, cause?, note?} - open, or confirmed /
+    benign / false_positive with one of its reasons (schema 12; any event
+    kind); benign and false_positive with a cause (schema 17)."""
     return _label(acc, [event_id], body)
 
 
 @router.post("/status", dependencies=[Depends(deps.require_write)])
 def post_status_bulk(body: dict = Body(...), acc=Depends(deps.get_account)):
     """Label several events at once (a selection, or a group row): {ids,
-    status, reason, note?}; each event gets its own audit row."""
+    status, reason, cause?, note?}; each event gets its own audit row."""
     ids = deps.invalid(writes.parse_ids, body)
     return _label(acc, ids, body)

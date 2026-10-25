@@ -97,7 +97,10 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 -- 16: refresh_runs - one row per refresher step, the refresh-duration series
 --    of the system evaluation (evaluation/pipeline/), which the container log
 --    lost on every recreate (ops/migrate_schema16.sh)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '16')
+-- 17: detections.status_cause - the cause of a benign / false-positive label
+--    from a fixed list (RQ2; evaluation/rq2), required for those two
+--    outcomes, 'other' only with a note (ops/migrate_schema17.sh)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '17')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- accounts and sensors ------------------------------------------------------------
@@ -467,6 +470,11 @@ CREATE TABLE IF NOT EXISTS detections (
   -- artefact). NULL only while open: every branch tests IS NOT NULL, since
   -- a CHECK that evaluates to NULL passes
   status_reason text,
+  -- the label's cause (schema 17, RQ2): why a benign or false-positive event
+  -- fired, from a fixed list - the same as CAUSES of api/app/v2/writes.py;
+  -- 'unknown' = no known cause, 'other' only with a note. NULL while open
+  -- and for confirmed
+  status_cause text,
   created_at  timestamptz NOT NULL DEFAULT now(),
   updated_at  timestamptz NOT NULL DEFAULT now(),   -- last change by a detector or refresh_events() (ETags)
   CONSTRAINT detections_status_reason CHECK (CASE status
@@ -474,7 +482,13 @@ CREATE TABLE IF NOT EXISTS detections (
     WHEN 'confirmed' THEN status_reason IS NOT NULL AND status_reason IN ('security_relevant', 'staged_test')
     WHEN 'benign' THEN status_reason IS NOT NULL AND status_reason IN ('expected_behaviour', 'accepted_risk')
     WHEN 'false_positive' THEN status_reason IS NOT NULL AND status_reason IN ('rule_defect', 'artefact')
-    ELSE false END));
+    ELSE false END),
+  CONSTRAINT detections_status_cause CHECK (CASE
+    WHEN status IN ('benign', 'false_positive') THEN status_cause IS NOT NULL
+      AND status_cause IN ('rssi_floor', 'channel_hopping', 'kismet_rule', 'allow_list_incomplete', 'pipeline_bug',
+                           'sensor_degraded', 'ap_behaviour', 'client_behaviour', 'staged_test', 'unknown', 'other')
+      AND (status_cause <> 'other' OR coalesce(btrim(status_note), '') <> '')
+    ELSE status_cause IS NULL END));
 CREATE INDEX IF NOT EXISTS detections_ts   ON detections (sensor_id, ts);
 CREATE INDEX IF NOT EXISTS detections_open ON detections (sensor_id, severity) WHERE status = 'open';
 CREATE INDEX IF NOT EXISTS detections_feed ON detections (ts DESC, id DESC);   -- keyset paging of the feed

@@ -40,6 +40,8 @@
 .v2 .label-form .check { display: inline-flex; gap: 8px; align-items: center; min-height: 36px; cursor: pointer; }
 .v2 .label-form .check input { width: 18px; height: 18px; margin: 0; }
 .v2 .label-note { flex: 1 1 280px; }
+.v2 .label-cause { flex: 1 1 280px; }
+.v2 .label-cause .in { height: 40px; }
 .v2 .label-note .in { height: 40px; }
 .v2 .label-foot { flex-basis: 100%; display: flex; gap: 10px; justify-content: flex-end; align-items: center; }
 .v2 .events-table .bad-text, .v2 .bulk-bar .bad-text, .v2 .ev-actions .bad-text { color: var(--bad-fg); }

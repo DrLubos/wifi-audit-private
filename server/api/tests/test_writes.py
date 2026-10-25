@@ -17,19 +17,50 @@ NOW = datetime(2026, 10, 12, 18, 0, tzinfo=timezone.utc)
 
 class Labels(unittest.TestCase):
     def test_three_outcomes_each_with_its_reason(self):
-        self.assertEqual(w.parse_status({"status": "benign", "reason": "expected_behaviour", "note": " open net "}),
-                         ("benign", "expected_behaviour", "open net"))
+        self.assertEqual(w.parse_status({"status": "benign", "reason": "expected_behaviour", "cause": "kismet_rule",
+                                         "note": " open net "}),
+                         ("benign", "expected_behaviour", "kismet_rule", "open net"))
         self.assertEqual(w.parse_status({"status": "confirmed", "reason": "staged_test"}),
-                         ("confirmed", "staged_test", None))
-        self.assertEqual(w.parse_status({"status": "false_positive", "reason": "artefact"}),
-                         ("false_positive", "artefact", None))
-        self.assertEqual(w.parse_status({"status": "open"}), ("open", None, None))
-        for bad in ({"status": "confirmed"}, {"status": "benign"}, {"status": "false_positive", "reason": None},
-                    {"status": "confirmed", "reason": "expected_behaviour"}, {"status": "benign", "reason": "rule_defect"},
-                    {"status": "false_positive", "reason": "staged_test"}, {"status": "open", "reason": "artefact"},
-                    {"status": "closed"}, {"status": "benign", "reason": "accepted_risk", "note": "x" * 1001}):
+                         ("confirmed", "staged_test", None, None))
+        self.assertEqual(w.parse_status({"status": "false_positive", "reason": "artefact", "cause": "rssi_floor"}),
+                         ("false_positive", "artefact", "rssi_floor", None))
+        self.assertEqual(w.parse_status({"status": "open"}), ("open", None, None, None))
+        for bad in ({"status": "confirmed"}, {"status": "benign", "cause": "unknown"},
+                    {"status": "false_positive", "reason": None, "cause": "unknown"},
+                    {"status": "confirmed", "reason": "expected_behaviour"},
+                    {"status": "benign", "reason": "rule_defect", "cause": "unknown"},
+                    {"status": "false_positive", "reason": "staged_test", "cause": "unknown"},
+                    {"status": "open", "reason": "artefact"}, {"status": "closed"},
+                    {"status": "benign", "reason": "accepted_risk", "cause": "unknown", "note": "x" * 1001}):
             with self.subTest(bad=bad), self.assertRaises(w.Invalid):
                 w.parse_status(bad)
+
+    def test_cause_required_for_benign_and_false_positive_only(self):
+        # RQ2 (schema 17): why a benign / false-positive event fired - one of
+        # the list, "unknown" when it is not known, "other" with a note
+        for bad in ({"status": "benign", "reason": "expected_behaviour"},
+                    {"status": "false_positive", "reason": "artefact", "cause": None},
+                    {"status": "false_positive", "reason": "artefact", "cause": "moon_phase"},
+                    {"status": "confirmed", "reason": "security_relevant", "cause": "kismet_rule"},
+                    {"status": "open", "cause": "unknown"}):
+            with self.subTest(bad=bad), self.assertRaises(w.Invalid):
+                w.parse_status(bad)
+        self.assertEqual(w.parse_status({"status": "benign", "reason": "accepted_risk", "cause": "unknown"})[2],
+                         "unknown")
+
+    def test_other_needs_a_note(self):
+        for note in (None, "", "   "):
+            with self.subTest(note=note), self.assertRaises(w.Invalid):
+                w.parse_status({"status": "false_positive", "reason": "artefact", "cause": "other", "note": note})
+        self.assertEqual(w.parse_status({"status": "false_positive", "reason": "artefact", "cause": "other",
+                                         "note": "Kismet restart"}),
+                         ("false_positive", "artefact", "other", "Kismet restart"))
+
+    def test_cause_list_equals_the_constraint(self):
+        schema = open(os.path.join(os.path.dirname(__file__), "..", "..", "schema.sql"), encoding="utf-8").read()
+        m = re.search(r"CONSTRAINT detections_status_cause CHECK \(.*?status_cause IN \(([^)]*)\)", schema, re.S)
+        self.assertIsNotNone(m)
+        self.assertEqual(tuple(re.findall(r"'(\w+)'", m.group(1))), tuple(k for k, _ in w.CAUSES))
 
     def test_ids(self):
         self.assertEqual(w.parse_ids({"ids": [3, 1, 3]}), [1, 3])

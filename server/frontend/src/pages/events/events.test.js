@@ -1,6 +1,7 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
-  actionText, actionsFor, apCell, bssidCell, groupText, historyLine, idsOf, labelBody, labelText, reasonText, headText, pagerText, parseStatus, rowOf, selected, severityBadge,
+  actionText, actionsFor, apCell, bssidCell, CAUSES, causeText, groupText, historyLine, idsOf, labelBody, labelText, reasonText, headText,
+  pagerText, parseStatus, rowOf, selected, severityBadge,
   statusBadge, statusChips, statusParam, timeTitle, typeText, whoRows, whyRows,
 } from "./events.js";
 
@@ -34,17 +35,33 @@ test("feed cells", () => {
 });
 
 test("labels: three outcomes, each with its own reason", () => {
-  eq(labelBody("benign", "expected_behaviour", " open guest network "),
-     { status: "benign", reason: "expected_behaviour", note: "open guest network" });
-  eq(labelBody("confirmed", "expected_behaviour", "").error, "pick why it is confirmed");
-  eq(labelBody("false_positive", null, "").error, "pick why it is false positive");
-  eq(labelBody("open", null, ""), { status: "open", reason: null, note: null });
+  eq(labelBody("benign", "expected_behaviour", "kismet_rule", " open guest network "),
+     { status: "benign", reason: "expected_behaviour", cause: "kismet_rule", note: "open guest network" });
+  eq(labelBody("confirmed", "expected_behaviour", null, "").error, "pick why it is confirmed");
+  eq(labelBody("false_positive", null, "unknown", "").error, "pick why it is false positive");
+  eq(labelBody("open", null, "unknown", ""), { status: "open", reason: null, cause: null, note: null });
   eq(labelText({ status: "benign", status_reason: "expected_behaviour", status_note: "open network" }),
      "Benign · Expected behaviour · open network");
+  eq(labelText({ status: "benign", status_reason: "expected_behaviour", status_cause: "kismet_rule", status_note: null }),
+     "Benign · Expected behaviour · cause: Kismet rule defect or no security event (e.g. NOCLIENTMFP)");
   eq(labelText({ status: "open" }), null);
   eq(reasonText("artefact"), "Sensor or environment artefact");
   // a group row labels all its events
   eq(idsOf([{ id: 9, group: { members: [{ id: 9 }, { id: 7 }] } }, { id: 3 }, { id: 7 }]), [3, 7, 9]);
+});
+
+test("labels: the cause of a benign / false-positive label (schema 17)", () => {
+  eq(labelBody("benign", "accepted_risk", null, "").error, "pick the cause (or No known cause)");
+  eq(labelBody("false_positive", "artefact", "moon_phase", "").error, "pick the cause (or No known cause)");
+  eq(labelBody("false_positive", "artefact", "other", "  ").error, "name the cause in the note");
+  eq(labelBody("false_positive", "artefact", "other", "Kismet restart"),
+     { status: "false_positive", reason: "artefact", cause: "other", note: "Kismet restart" });
+  eq(labelBody("benign", "accepted_risk", "unknown", ""), { status: "benign", reason: "accepted_risk", cause: "unknown", note: null });
+  // confirmed has no cause, whatever was picked before switching
+  eq(labelBody("confirmed", "security_relevant", "kismet_rule", ""),
+     { status: "confirmed", reason: "security_relevant", cause: null, note: null });
+  eq(CAUSES.length, 11);
+  eq(causeText("unknown"), "No known cause");
 });
 
 test("label history: every change keeps the old value", () => {

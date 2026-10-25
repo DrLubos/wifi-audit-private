@@ -36,11 +36,11 @@ other combination):
 | `benign` | `expected_behaviour`, `accepted_risk` | true as described, but not a security problem |
 | `false_positive` | `rule_defect`, `artefact` | not true as described: the rule is wrong, or the data is an artefact |
 
-**Cause tag (convention, needs your OK - see "Decisions" below):** write
-`cause:<slug>` anywhere in the label note, e.g. `open network, cause:kismet_rule`.
-The first tag counts; a slug outside the vocabulary counts as `other` and is
-listed in `summary.csv` (`note_unknown_slugs`). A bulk label with one note
-tags every event of the bulk.
+**Cause (schema 17):** a benign or false-positive label has a required
+**cause** from the list below (`detections.status_cause`; the label dialog's
+dropdown; the database refuses anything else). `unknown` = looked at, no
+known cause; `other` needs a note naming it. Confirmed and open events have
+no cause. A bulk label gives every event of the bulk the same cause.
 
 ## Causes
 
@@ -54,13 +54,15 @@ tags every event of the bulk.
 | `sensor_degraded` | the capture was down or delivered no frames at the time (not hopping) |
 | `ap_behaviour` | normal AP behaviour (dynamic channel selection, DFS, reboot, a change by its owner) |
 | `client_behaviour` | normal client behaviour (roaming, leaving, power save) |
-| `staged_test` | this project's own staged test |
-| `other` | another cause (name it in the note), or an unknown slug |
+| `staged_test` | this project's own staged test (spill-over onto other APs) |
+| `unknown` | no known cause (the operator looked) - **not** counted as traced |
+| `other` | another cause, named in the label note (required there) |
 
-An event's `cause` is the note's tag if there is one (`cause_source` =
-`note`), else the first matching rule below (`rule`), else empty (`none`).
-The rule's answer is kept in `rule_cause` even when a tag overrides it, so
-`agreement.csv` shows where the rules and the operator differ.
+An event's `cause` is its label's cause if it has one (`cause_source` =
+`label`), else the first matching rule below (`rule`), else empty (`none`).
+The rule's answer is kept in `rule_cause` even when the label overrides it,
+so `agreement.csv` shows where the rules and the operator differ. The rules
+are the suggestions to check while labelling (`events.csv`, `rule_cause`).
 
 ### Rule-based causes (first match wins)
 
@@ -129,7 +131,7 @@ type with several rules; `*security` (kinds detection, kismet, config),
 | `benign_rate` | benign / labelled - true, but not a security problem |
 | `fp_rate` | false_positive / labelled - **the false-positive rate** in the strict sense |
 | `not_security_rate` | (benign + false_positive) / labelled = 1 - precision: the alarm load that is not a security event |
-| `traced`, `traced_rule`, `traced_note` | events with a known cause; from a rule; from a note tag |
+| `traced`, `traced_rule`, `traced_label` | events with a known cause (the label's `unknown` excluded); from a rule; from the label |
 | `traced_share` | traced / n |
 | `not_security_traced_share` | of the benign + false-positive events, the share with a known cause - **how much of the noise is explained** |
 
@@ -148,7 +150,7 @@ not traced.
 
 ### `agreement.csv`
 
-For events with a cause tag: `rule_cause` x `note_cause` -> `n`, `agree`.
+For labels with a cause: `rule_cause` x `label_cause` -> `n`, `agree`.
 Shows whether the rules match the operator's reading (a rule that disagrees
 often should be fixed or dropped).
 
@@ -156,13 +158,13 @@ often should be fixed or dropped).
 
 Headline figures: events, security vs sensor events, labelled, label
 coverage, outcome counts, `fp_rate`, `events_traced` / `traced_share` (by
-note, by rule), `security_traced_share`, `not_security_traced_share`,
-`fp_traced_share`, unknown slugs, and the count per cause.
+label, by rule), `labels_unknown_cause`, `security_traced_share`,
+`not_security_traced_share`, `fp_traced_share`, and the count per cause.
 
 ### `events.csv`
 
 The export's columns plus `scope`, `cause`, `cause_source`, `rule_cause`,
-`rule_detail`, `note_cause`, `note_unknown_slug` - one row per event, for
+`rule_detail`, `label_cause` - one row per event, for
 checking any figure by hand.
 
 ## Reading the numbers (for the thesis)
@@ -178,10 +180,8 @@ checking any figure by hand.
   keep them out of the detection precision (`*security` rows), report them
   separately (`*sensor`).
 
-## Decisions (developer)
+## Decided
 
-- **Cause tag in the note** (`cause:<slug>`), or a structured cause field
-  (a column + a select in the label dialog - a schema and UI change, not
-  built). The tag works today with no change; the field would make typos
-  impossible.
-- **The vocabulary** above - add or merge causes before labelling starts.
+- 2026-10-25: a structured cause field (schema 17, the dialog's dropdown)
+  instead of note tags; the vocabulary above (11 causes incl. `unknown` and
+  `other`).

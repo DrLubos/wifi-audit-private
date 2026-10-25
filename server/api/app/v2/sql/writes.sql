@@ -102,10 +102,11 @@ RETURNING starts_at
 
 -- name: event_status
 -- The operator's label of events of the account (schema 12: open, or one of
--- the three outcomes with its reason - the constraint refuses a mismatch).
+-- the three outcomes with its reason - the constraint refuses a mismatch;
+-- schema 17: the cause of a benign / false-positive label, NULL otherwise).
 -- A NULL note keeps the stored one; detectors' columns (updated_at) stay.
 UPDATE detections d
-SET status = %(status)s, status_reason = %(reason)s, status_at = now(),
+SET status = %(status)s, status_reason = %(reason)s, status_cause = %(cause)s, status_at = now(),
     status_note = coalesce(%(note)s, d.status_note)
 FROM sensors se
 WHERE se.id = d.sensor_id AND se.account_id = %(account_id)s AND d.id = ANY (%(ids)s::bigint[])

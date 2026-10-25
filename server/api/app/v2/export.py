@@ -13,9 +13,9 @@ import io
 from datetime import datetime, timezone
 
 LABEL_COLUMNS = ("event_id", "ts_utc", "ts_end_utc", "sensor", "kind", "type", "type_label", "severity", "bssid",
-                 "ssid", "outcome", "reason", "note", "labelled_at_utc")
-HISTORY_COLUMNS = ("event_id", "at_utc", "kind", "type", "old_outcome", "old_reason", "old_note",
-                   "new_outcome", "new_reason", "new_note")
+                 "ssid", "outcome", "reason", "cause", "note", "labelled_at_utc")
+HISTORY_COLUMNS = ("event_id", "at_utc", "kind", "type", "old_outcome", "old_reason", "old_cause", "old_note",
+                   "new_outcome", "new_reason", "new_cause", "new_note")
 FORMULA = ("=", "+", "-", "@", "\t", "\r")
 
 
@@ -48,14 +48,15 @@ def labels_csv(rows):
     """rows: events.export_labels (one per event, oldest first)."""
     return to_csv(LABEL_COLUMNS, [
         (r["id"], ts(r["ts"]), ts(r["ts_end"]), r["sensor"], r["kind"], r["type"], r["type_label"], r["severity"],
-         r["bssid"], r["ssid"], r["status"], r["status_reason"], r["status_note"], ts(r["status_at"])) for r in rows])
+         r["bssid"], r["ssid"], r["status"], r["status_reason"], r.get("status_cause"), r["status_note"],
+         ts(r["status_at"])) for r in rows])
 
 
 def history_csv(rows):
     """rows: events.export_history (one per change of a label, oldest first)."""
     return to_csv(HISTORY_COLUMNS, [
-        (r["event_id"], ts(r["at"]), r["kind"], r["type"], r["old_status"], r["old_reason"], r["old_note"],
-         r["new_status"], r["new_reason"], r["new_note"]) for r in rows])
+        (r["event_id"], ts(r["at"]), r["kind"], r["type"], r["old_status"], r["old_reason"], r.get("old_cause"),
+         r["old_note"], r["new_status"], r["new_reason"], r.get("new_cause"), r["new_note"]) for r in rows])
 
 
 def filename(name, now):

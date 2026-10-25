@@ -28,6 +28,25 @@ REASONS = {
     "false_positive": ("rule_defect", "artefact"),
 }
 STATUSES = ("open",) + tuple(REASONS)
+# the label's cause (schema 17, RQ2): why a benign or false-positive event
+# fired - the same list as schema.sql detections_status_cause (tested) and
+# frontend events.js CAUSES (tests/test_schema_files.py). "unknown" says it
+# was looked at and no cause is known; "other" needs a note naming it.
+CAUSES = (
+    ("rssi_floor", "RSSI floor censoring (the -106/-120 dBm sentinel read as a level)"),
+    ("channel_hopping", "Channel hopping / reduced channel coverage"),
+    ("kismet_rule", "Kismet rule defect, or a rule that describes no security event (e.g. NOCLIENTMFP)"),
+    ("allow_list_incomplete", "Incomplete allow-list (BSSIDs / OUIs of the network)"),
+    ("pipeline_bug", "A bug in this project's own pipeline (e.g. event 866)"),
+    ("sensor_degraded", "Capture down or no frames at the time"),
+    ("ap_behaviour", "Normal AP behaviour (channel selection, DFS, reboot, owner's change)"),
+    ("client_behaviour", "Normal client behaviour (roaming, leaving, power save)"),
+    ("staged_test", "This project's own staged test (spill-over)"),
+    ("unknown", "No known cause"),
+    ("other", "Other (named in the note)"),
+)
+CAUSE_KEYS = tuple(k for k, _ in CAUSES)
+WITH_CAUSE = ("benign", "false_positive")
 NOTE_MAX = 1000
 BULK_MAX = 500
 
@@ -44,8 +63,10 @@ def _note(v, limit=NOTE_MAX):
 
 
 def parse_status(body):
-    """{status, reason?, note?} -> (status, reason, note). Open clears the
-    reason; each resolved outcome needs one of its reasons."""
+    """{status, reason?, cause?, note?} -> (status, reason, cause, note). Open
+    clears the reason; each resolved outcome needs one of its reasons; benign
+    and false_positive need a cause (schema 17), confirmed and open have none;
+    the cause "other" needs a note."""
     status = body.get("status")
     if status not in STATUSES:
         raise Invalid("status: " + ", ".join(STATUSES))
@@ -55,7 +76,16 @@ def parse_status(body):
             raise Invalid("reason: none for open")
     elif reason not in REASONS[status]:
         raise Invalid("reason for %s: %s" % (status, ", ".join(REASONS[status])))
-    return status, reason, _note(body.get("note"))
+    cause = body.get("cause")
+    note = _note(body.get("note"))
+    if status in WITH_CAUSE:
+        if cause not in CAUSE_KEYS:
+            raise Invalid("cause for %s: %s" % (status, ", ".join(CAUSE_KEYS)))
+        if cause == "other" and note is None:
+            raise Invalid("note: required for the cause other (name the cause)")
+    elif cause is not None:
+        raise Invalid("cause: only for benign and false_positive")
+    return status, reason, cause, note
 
 
 def parse_ids(body):

@@ -36,6 +36,8 @@ MIGRATION15 = open(os.path.join(HERE, "..", "ops", "migrate_schema15.sql"), enco
 ROLLBACK15 = open(os.path.join(HERE, "..", "ops", "rollback_schema15.sql"), encoding="utf-8").read()
 MIGRATION16 = open(os.path.join(HERE, "..", "ops", "migrate_schema16.sql"), encoding="utf-8").read()
 ROLLBACK16 = open(os.path.join(HERE, "..", "ops", "rollback_schema16.sql"), encoding="utf-8").read()
+MIGRATION17 = open(os.path.join(HERE, "..", "ops", "migrate_schema17.sql"), encoding="utf-8").read()
+ROLLBACK17 = open(os.path.join(HERE, "..", "ops", "rollback_schema17.sql"), encoding="utf-8").read()
 SCHEMA14_TABLES = ("sensor_tokens", "sensor_status", "sensor_heartbeats", "ingest_state",
                    "sensor_clock_boots", "sensor_seq_gaps")
 SCHEMA14_FUNCTIONS = ("ingest_stage_create", "ingest_merge", "refresh_contact_periods")
@@ -115,18 +117,19 @@ class SchemaFiles(unittest.TestCase):
     def test_version(self):
         def version(sql):
             return re.search(r"VALUES \('schema_version', '(\d+)'\)", sql).group(1)
-        self.assertEqual((version(SCHEMA), version(MIGRATION16), version(MIGRATION15), version(MIGRATION14),
-                          version(MIGRATION13), version(MIGRATION12), version(MIGRATION11), version(MIGRATION10),
-                          version(MIGRATION9), version(MIGRATION8), version(MIGRATION)),
-                         ("16", "16", "15", "14", "13", "12", "11", "10", "9", "8", "7"))
+        self.assertEqual((version(SCHEMA), version(MIGRATION17), version(MIGRATION16), version(MIGRATION15),
+                          version(MIGRATION14), version(MIGRATION13), version(MIGRATION12), version(MIGRATION11),
+                          version(MIGRATION10), version(MIGRATION9), version(MIGRATION8), version(MIGRATION)),
+                         ("17", "17", "16", "15", "14", "13", "12", "11", "10", "9", "8", "7"))
         self.assertEqual(version(ROLLBACK14), "13")
         self.assertEqual(version(ROLLBACK15), "14")
         self.assertEqual(version(ROLLBACK16), "15")
+        self.assertEqual(version(ROLLBACK17), "16")
 
     def test_schema11_reasons_and_hardware(self):
         body = re.sub(r"--[^\n]*", "", table_body(SCHEMA, "detections"))
         self.assertRegex(body, r"\n\s+status_reason\s+text,")
-        constraint = re.search(r"CONSTRAINT detections_status_reason CHECK \((CASE status.*?END)\)\);", SCHEMA, re.S)
+        constraint = re.search(r"CONSTRAINT detections_status_reason CHECK \((CASE status.*?END)\)(?:\);|,\n)", SCHEMA, re.S)
         self.assertIsNotNone(constraint)
         # schema 12: the migration adds the same constraint as the fresh definition
         norm = lambda t: re.sub(r"\s+", " ", t).strip()
@@ -312,6 +315,31 @@ class Schema16(unittest.TestCase):
         steps = re.search(r"CHECK \(step IN \(([^)]*)\)\)", table_body(SCHEMA, "refresh_runs")).group(1)
         for step in re.findall(r"'(\w+)'", steps):
             self.assertIn('"%s"' % step, refresher, step)
+
+
+class Schema17(unittest.TestCase):
+    @staticmethod
+    def check(sql):
+        return re.search(r"ADD CONSTRAINT detections_status_cause CHECK \((CASE.*?END)\);|"
+                         r"CONSTRAINT detections_status_cause CHECK \((CASE.*?END)\)\);", sql, re.S)
+
+    def test_cause_column_and_constraint_same_in_migration_and_schema(self):
+        self.assertRegex(re.sub(r"--[^\n]*", "", table_body(SCHEMA, "detections")), r"\n\s+status_cause\s+text,")
+        self.assertIn("ALTER TABLE detections ADD COLUMN status_cause text;", MIGRATION17)
+        m, s = self.check(MIGRATION17), self.check(SCHEMA)
+        self.assertIsNotNone(m)
+        self.assertIsNotNone(s)
+        self.assertEqual(" ".join((m.group(1) or m.group(2)).split()), " ".join((s.group(1) or s.group(2)).split()))
+        self.assertIn("DROP COLUMN status_cause;", ROLLBACK17)
+
+    def test_frontend_cause_list_equals_the_api(self):
+        api = open(os.path.join(HERE, "..", "api", "app", "v2", "writes.py"), encoding="utf-8").read()
+        js = open(os.path.join(HERE, "..", "frontend", "src", "pages", "events", "events.js"), encoding="utf-8").read()
+        api_keys = re.findall(r'^\s+\("(\w+)", "', api[api.index("CAUSES = ("):api.index("CAUSE_KEYS")], re.M)
+        block = js[js.index("export const CAUSES = ["):]
+        block = block[:block.index("];")]
+        self.assertEqual(re.findall(r'\["(\w+)", "', block), api_keys)
+        self.assertEqual(len(api_keys), 11)
 
 
 def stage_tables(fn):

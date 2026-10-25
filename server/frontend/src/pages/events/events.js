@@ -122,6 +122,29 @@ export const OUTCOMES = [
 ];
 const REASON_TEXT = Object.fromEntries(OUTCOMES.flatMap((o) => o.reasons));
 
+// The cause of a benign or false-positive label (schema 17, RQ2): the same
+// list as api/app/v2/writes.py CAUSES (tests/test_schema_files.py compares
+// them). "No known cause" is an answer too; "Other" needs a note.
+export const CAUSES = [
+  ["rssi_floor", "RSSI floor censoring (-106/-120 dBm read as a level)"],
+  ["channel_hopping", "Channel hopping / reduced channel coverage"],
+  ["kismet_rule", "Kismet rule defect or no security event (e.g. NOCLIENTMFP)"],
+  ["allow_list_incomplete", "Incomplete allow-list"],
+  ["pipeline_bug", "Bug in this project's pipeline"],
+  ["sensor_degraded", "Capture down or no frames"],
+  ["ap_behaviour", "Normal AP behaviour"],
+  ["client_behaviour", "Normal client behaviour"],
+  ["staged_test", "Own staged test (spill-over)"],
+  ["unknown", "No known cause"],
+  ["other", "Other (name it in the note)"],
+];
+export const WITH_CAUSE = ["benign", "false_positive"];
+const CAUSE_TEXT = Object.fromEntries(CAUSES);
+
+export function causeText(cause) {
+  return CAUSE_TEXT[cause] ?? cause ?? "";
+}
+
 export function reasonText(reason) {
   return REASON_TEXT[reason] ?? reason ?? "";
 }
@@ -130,14 +153,16 @@ export function reasonText(reason) {
 export function labelText(e) {
   if (!e.status || e.status === "open") return null;
   const o = OUTCOMES.find((x) => x.key === e.status);
-  return [o?.label ?? e.status, reasonText(e.status_reason), e.status_note].filter(Boolean).join(" · ");
+  return [o?.label ?? e.status, reasonText(e.status_reason), e.status_cause ? `cause: ${causeText(e.status_cause)}` : null,
+          e.status_note].filter(Boolean).join(" · ");
 }
 
 // "13 Oct 14:05 · Open → Benign · Expected behaviour · open guest network": a change of a
 // label (audit_log keeps the old value next to the new one); the note is the new one's
 export function historyLine(h, tz) {
   const name = (x) => (x.status === "open" ? "Open" : OUTCOMES.find((o) => o.key === x.status)?.label ?? x.status);
-  const side = (x, note) => (x ? [name(x), reasonText(x.reason), note ? x.note : null].filter(Boolean).join(" · ") : "–");
+  const side = (x, note) => (x ? [name(x), reasonText(x.reason), x.cause ? `cause: ${causeText(x.cause)}` : null,
+                                   note ? x.note : null].filter(Boolean).join(" · ") : "–");
   return `${fmtDateTime(h.at, tz)} · ${side(h.from, false)} → ${side(h.to, true)}`;
 }
 
@@ -154,13 +179,18 @@ export function actionText(key, group = false) {
   return group ? `${o.action} all` : o.action;
 }
 
-// the label body: {status, reason, note}, or {error}
-export function labelBody(outcome, reason, note) {
-  if (outcome === "open") return { status: "open", reason: null, note: note?.trim() || null };
+// the label body: {status, reason, cause, note}, or {error}; benign and
+// false positive need a cause, "other" a note (writes.py parse_status)
+export function labelBody(outcome, reason, cause, note) {
+  const n = note?.trim() || null;
+  if (outcome === "open") return { status: "open", reason: null, cause: null, note: n };
   const o = OUTCOMES.find((x) => x.key === outcome);
   if (!o) return { error: "pick an outcome" };
   if (!o.reasons.some(([k]) => k === reason)) return { error: `pick why it is ${o.label.toLowerCase()}` };
-  return { status: outcome, reason, note: note?.trim() || null };
+  if (!WITH_CAUSE.includes(outcome)) return { status: outcome, reason, cause: null, note: n };
+  if (!CAUSES.some(([k]) => k === cause)) return { error: "pick the cause (or No known cause)" };
+  if (cause === "other" && !n) return { error: "name the cause in the note" };
+  return { status: outcome, reason, cause, note: n };
 }
 
 // the events a selection or a group row labels

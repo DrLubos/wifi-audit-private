@@ -28,7 +28,7 @@ import { useAccount } from "../../hooks/useAccount.js";
 import { useFilters } from "../../hooks/useFilters.js";
 import { fmtDateTime, fmtInt } from "../../format.js";
 import {
-  actionText, actionsFor, apCell, bssidCell, groupText, headText, historyLine, idsOf, KINDS, labelBody, labelText, OUTCOMES,
+  actionText, actionsFor, apCell, bssidCell, groupText, headText, historyLine, idsOf, KINDS, labelBody, labelText, OUTCOMES, CAUSES, WITH_CAUSE,
   pagerText, parseStatus, rowOf, selected, SEVERITY_MIN, severityBadge, statusBadge, statusChips, statusParam,
   timeText, timeTitle, typeText, whoRows, whyRows,
 } from "./events.js";
@@ -274,7 +274,7 @@ function EventRow({ e, tz, open = false, group = false, expanded = false, member
       {form?.at === at && (
         <tr style={bg}>
           <td colSpan={COLS} className="ev-detail-cell">
-            <LabelForm ids={idsOf([e])} outcome={form.outcome} reason={e.status_reason} note={e.status_note}
+            <LabelForm ids={idsOf([e])} outcome={form.outcome} reason={e.status_reason} cause={e.status_cause} note={e.status_note}
                        relabel={e.status !== "open"} onDone={onDone} onCancel={onDone} />
           </td>
         </tr>
@@ -288,14 +288,17 @@ function EventRow({ e, tz, open = false, group = false, expanded = false, member
   );
 }
 
-// the label of one or more events: the outcome, its reason (required), a note
-function LabelForm({ ids, outcome: first, reason: firstReason = null, note: firstNote = "", relabel = false, onDone, onCancel }) {
+// the label of one or more events: the outcome, its reason (required), for
+// benign / false positive the cause (required, schema 17), a note
+function LabelForm({ ids, outcome: first, reason: firstReason = null, cause: firstCause = null, note: firstNote = "",
+                     relabel = false, onDone, onCancel }) {
   const w = useWrite();
   const [outcome, setOutcome] = useState(first);
   const [reason, setReason] = useState(firstReason);
+  const [cause, setCause] = useState(firstCause ?? "");
   const [note, setNote] = useState(firstNote ?? "");
   const [state, setState] = useState({ busy: false, error: null });
-  const body = labelBody(outcome, reason, note);
+  const body = labelBody(outcome, reason, cause, note);
   const save = async (ev) => {
     ev.preventDefault();
     if (body.error) return;
@@ -337,7 +340,15 @@ function LabelForm({ ids, outcome: first, reason: firstReason = null, note: firs
           ))}
         </fieldset>
       )}
-      <label className="fl label-note">Note (optional{ids.length > 1 ? ", the same for all" : ""})
+      {WITH_CAUSE.includes(outcome) && (
+        <label className="fl label-cause">Cause{ids.length > 1 ? " (the same for all)" : ""}
+          <select className="in" value={cause} onChange={(e) => setCause(e.target.value)}>
+            <option value="">– pick the cause –</option>
+            {CAUSES.map(([k, text]) => <option key={k} value={k}>{text}</option>)}
+          </select>
+        </label>
+      )}
+      <label className="fl label-note">Note ({cause === "other" && WITH_CAUSE.includes(outcome) ? "required: name the cause" : "optional"}{ids.length > 1 ? ", the same for all" : ""})
         <input className="in" value={note} maxLength={1000} onChange={(e) => setNote(e.target.value)} />
       </label>
       <div className="label-foot">
