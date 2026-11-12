@@ -146,10 +146,18 @@ ORDER BY 2 DESC
 -- name: excluded
 -- The excluded windows of discard mode (schema 20, sensor_excluded():
 -- disjoint, excl_to NULL = still on) of the given sensors in the given time
--- range - never an outage, nor "no data", in the coverage.
-SELECT se.id AS sensor_id, x.excl_from, x.excl_to
+-- range - never an outage, nor "no data", in the coverage. Each widened to
+-- the last poll before it and the first after it when that is at most 90 s
+-- away: a poll spacing below 90 s is no gap (sensor_periods' rule), but the
+-- hour's gap_s counts the whole stretch from poll to poll.
+SELECT se.id AS sensor_id,
+       CASE WHEN x.excl_from - pa.ts <= interval '90 seconds' THEN pa.ts ELSE x.excl_from END AS excl_from,
+       CASE WHEN x.excl_to IS NOT NULL AND pb.ts - x.excl_to <= interval '90 seconds' THEN pb.ts
+            ELSE x.excl_to END AS excl_to
 FROM sensors se
 CROSS JOIN LATERAL sensor_excluded(se.id) x
+LEFT JOIN LATERAL (SELECT max(p.ts) AS ts FROM polls p WHERE p.sensor_id = se.id AND p.ts < x.excl_from) pa ON true
+LEFT JOIN LATERAL (SELECT min(p.ts) AS ts FROM polls p WHERE p.sensor_id = se.id AND p.ts >= x.excl_to) pb ON true
 WHERE se.id = ANY (%(sensor_ids)s::int[])
   AND x.excl_from < %(to)s::timestamptz AND coalesce(x.excl_to, 'infinity') > %(from)s::timestamptz
 ORDER BY se.id, x.excl_from
