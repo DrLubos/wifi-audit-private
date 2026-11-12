@@ -1,5 +1,7 @@
 -- Dataset overview: the collection period, polls, coverage, volumes (README.md).
 -- Long format: metric, value, unit, note. psql variables: sensor, from, to (UTC). Read-only.
+-- Discard mode (schema 20): the excluded windows are left out of the span the
+-- coverage and the expected polls are measured on (excluded_days).
 COPY (
 WITH sen AS (SELECT id FROM sensors WHERE name = :'sensor'),
 pl AS (
@@ -7,6 +9,10 @@ pl AS (
   WHERE p.sensor_id = sen.id AND p.ts >= :'from'::timestamptz AND p.ts < :'to'::timestamptz
 ), span AS (
   SELECT min(ts) AS first_poll, max(ts) AS last_poll, extract(epoch FROM max(ts) - min(ts)) AS span_s FROM pl
+), exs AS (                  -- excluded seconds inside the polls' span
+  SELECT coalesce(sum(greatest(extract(epoch FROM least(coalesce(x.excl_to, now()), span.last_poll)
+                                                - greatest(x.excl_from, span.first_poll)), 0)), 0) AS s
+  FROM sen, span, sensor_excluded(sen.id) x
 ), per AS (                  -- sensor_periods clipped to the polls' span
   SELECT sp.kind, count(*) AS n,
          sum(extract(epoch FROM least(coalesce(sp.ends_at, span.last_poll), span.last_poll)
@@ -28,7 +34,10 @@ SELECT * FROM (VALUES
   ('last_poll', (SELECT to_char(last_poll AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') FROM span), 'UTC', ''),
   ('span_days', (SELECT round((span_s / 86400)::numeric, 2)::text FROM span), 'days', 'first to last poll'),
   ('polls', (SELECT count(*)::text FROM pl), 'polls', 'every 30 s'),
-  ('polls_expected', (SELECT floor(span_s / 30 + 1)::text FROM span), 'polls', 'span / 30 s'),
+  ('polls_expected', (SELECT floor((span_s - exs.s) / 30 + 1)::text FROM span, exs), 'polls',
+   'span / 30 s, excluded windows left out'),
+  ('excluded_days', (SELECT round((s / 86400)::numeric, 3)::text FROM exs), 'days',
+   'discard mode: excluded, never an outage (schema 20)'),
   ('polls_ok', (SELECT count(*) FILTER (WHERE ok)::text FROM pl), 'polls', 'the collector reached Kismet'),
   ('polls_collecting', (SELECT count(*) FILTER (WHERE ok AND ds_running AND devices_active > 0)::text FROM pl),
    'polls', 'ok, datasource running, devices > 0'),
@@ -43,8 +52,9 @@ SELECT * FROM (VALUES
   ('limited_periods', (SELECT coalesce((SELECT n FROM per WHERE kind = 'limited'), 0)::text), 'periods', 'sensor_periods limited'),
   ('limited_hours', (SELECT round((coalesce((SELECT s FROM per WHERE kind = 'limited'), 0) / 3600)::numeric, 2)::text),
    'hours', 'hop list degraded'),
-  ('coverage', (SELECT round((1 - coalesce((SELECT s FROM per WHERE kind = 'outage'), 0) / nullif(span_s, 0))::numeric, 4)::text FROM span),
-   'ratio', '1 - outage time / span'),
+  ('coverage', (SELECT round((1 - coalesce((SELECT s FROM per WHERE kind = 'outage'), 0) / nullif(span_s - exs.s, 0))::numeric, 4)::text
+                FROM span, exs),
+   'ratio', '1 - outage time / (span - excluded time)'),
   ('collecting_hours', (SELECT collecting::text FROM hrs), 'hours', 'UTC hours with a collecting poll'),
   ('seq_lost', (SELECT coalesce(sum(polls), 0)::text FROM sensor_seq_gaps g, sen WHERE g.sensor_id = sen.id AND g.reason = 'lost'),
    'polls', 'pruned on the sensor before upload'),

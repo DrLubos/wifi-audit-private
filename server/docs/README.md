@@ -5,6 +5,9 @@
 - `live-upload.md` - the live upload from the sensor (design, decisions, rollout record).
 - `config-delivery.md` - delivery of the desired capture configuration to the
   sensor: **design only** (2026-10-24), decisions C1-C13 open.
+- `discard-mode.md` - discard mode (schema 20): a per-sensor window whose
+  uploads are accepted and not stored, excluded from loss, outages and
+  coverage; how to turn it on and off, what is excluded where, the limits.
 
 Generated evaluation output and its inputs. This directory is the writable mount
 of the `evaluate` compose service (`../evaluation/`).

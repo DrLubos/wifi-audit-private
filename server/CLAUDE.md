@@ -219,6 +219,22 @@ Conventions for the stack:
     `sensor_config_attempts`, `confirmed_at` and a dated `change` boundary in
     `sensor_annotations`; refusals, rollbacks and failures are never
     re-delivered unless retried; `polls.config_version` per poll.
+  - **Discard mode (schema 20, 2026-11-12; `docs/discard-mode.md`):** a
+    per-sensor window (Settings -> Sensors, write token, required note, end
+    at most 24 h ahead, default 6 h; it switches itself off - `until` decides
+    in the ingest, the refresher's step 0 `discard_close_expired()` records
+    it) in which `/api/ingest/v1/batch` validates and answers 200 but stores
+    only the heartbeat and a `sensor_discarded_batches` record. The window is
+    an `excluded` entry of `sensor_annotations`; every reader of time leaves
+    it out: `refresh_sensor_periods()` (no outage, no sensor event),
+    `discarded_seqs()` (never loss - evaluation/pipeline gaps and summary),
+    the Sensors page's coverage, the pipeline's contact availability and the
+    dataset's coverage, and `ingest_merge()` step 0 drops any later row inside
+    it (replays, late backlog, snapshots). A new reader of `polls` time or of
+    the seq series must call `sensor_excluded()` / `discarded_seqs()` too.
+    Fixture tests that run `refresh_sensor_periods()` / `ingest_merge()`
+    copy the two tables (else they read the live windows). Turning it on or
+    off is the developer's: a write with the token (Claude never sends one).
   - **Backups:** `ops/backup_nightly.sh` runs `backup.sh` (KEEP 7) at 01:05 UTC
     from the box user's crontab (`ops/backup_cron.sh`) and writes
     `<dump>.sha256` + `backups/LATEST`; the developer copies dumps off the box

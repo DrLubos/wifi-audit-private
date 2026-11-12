@@ -24,6 +24,12 @@ parameters and the git commit.
 Which rows are in range: polls by their (corrected) `ts`, uploads and
 heartbeats by `received_at`, recorded gaps by `recorded_at`.
 
+**Discard mode (schema 20, `../../docs/discard-mode.md`).** A sensor's
+discard window - a test away from its place, uploads accepted and not
+stored - is excluded everywhere: its seq jumps are not loss, its time is
+neither observed nor without contact, its heartbeats are not in the clock
+figures. `excluded.csv` lists the windows of the range.
+
 ## Files and how each metric is computed
 
 ### `polls.csv` – one row per poll uploaded live
@@ -71,6 +77,20 @@ Two independent sources, so they can be cross-checked:
 
 **Loss rate** = `seq_missing / (seq_received + seq_missing)` (`summary.csv`).
 
+Discard mode: the seqs of a jump that the batches of a discard window cover
+(`discarded_seqs()`) are `excluded_polls`, not loss; `polls` is the rest and
+a jump covered entirely has reason `excluded`. `seq_missing` leaves them out,
+`seq_excluded` counts them.
+
+### `excluded.csv` – discard windows (schema 20)
+
+One row per window overlapping the range: when it was on (`started_at`,
+`until`, `ended_at`, `ended_by` operator | expiry), its excluded time
+(`excl_from`, `excl_to`, `excluded_s` - widened back by a discarded backlog
+older than the start), what it discarded (`batches`, `replays`, `polls`,
+`late_polls` - rows that arrived after it and were dropped, `unverified_polls`,
+`seq_from`/`seq_to`) and the operator's `note`.
+
 ### `heartbeats.csv` – one row per stored heartbeat (at most one a minute)
 
 **Clock offset** (`clock_offset_s`) depends on `clock_method`. The method
@@ -88,7 +108,8 @@ NTP offset is `chrony_offset_s`; a heartbeat with `chrony_synced` false
 belongs to a boot without NTP.
 
 The other columns are the sensor's state per minute: backlog, held and
-unverified polls, buffer size, free disk.
+unverified polls, buffer size, free disk. `excluded` marks a heartbeat inside
+a discard window (the sensor was elsewhere); summary.csv leaves those out.
 
 ### `contact_gaps.csv`, `contact_daily.csv` – contact availability
 
@@ -97,6 +118,8 @@ unverified polls, buffer size, free disk.
 - **Availability** (per UTC day, and over the range in `summary.csv`) =
   `1 - no_contact_s / observed_s`. Observed time starts at the sensor's
   first heartbeat and ends at the range end or now.
+- Discard mode: the excluded windows count neither as observed nor as no
+  contact (`excluded_s` per gap and per day).
 - "No contact" does not distinguish a sensor that is down from a network
   path that is down. The polls themselves arrive later (store-and-forward),
   so loss is measured separately, in `gaps.csv`.
@@ -130,7 +153,8 @@ Columns are `metric,value,unit,note`, covering everything above:
 - latency p50/p95/p99/max (steady) and max (backlog);
 - batches, retries and replays;
 - bytes and merge time;
-- seq received, missing and loss rate;
+- seq received, missing (without discarded seqs), excluded and loss rate;
+- discard mode: excluded seconds, windows, batches and polls discarded;
 - recorded gaps;
 - contact observed and availability;
 - clock offset p50/p95 (current method only) and the chrony offset;

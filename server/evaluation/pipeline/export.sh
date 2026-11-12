@@ -48,7 +48,7 @@ psql_ro() {   # $1 = SQL file; read-only role over the db container's socket
     -v sensor="$SENSOR" -v from="$FROM" -v to="$TO" -v gap_s="$GAP_S" -f - <"$1"
 }
 
-for m in polls uploads gaps heartbeats contact_daily contact_gaps summary; do
+for m in polls uploads gaps excluded heartbeats contact_daily contact_gaps summary; do
   psql_ro "$HERE/$m.sql" >"$OUT/$m.csv"
   echo "$m.csv: $(($(wc -l <"$OUT/$m.csv") - 1)) rows"
 done
