@@ -42,6 +42,11 @@ MIGRATION18 = open(os.path.join(HERE, "..", "ops", "migrate_schema18.sql"), enco
 ROLLBACK18 = open(os.path.join(HERE, "..", "ops", "rollback_schema18.sql"), encoding="utf-8").read()
 MIGRATION19 = open(os.path.join(HERE, "..", "ops", "migrate_schema19.sql"), encoding="utf-8").read()
 ROLLBACK19 = open(os.path.join(HERE, "..", "ops", "rollback_schema19.sql"), encoding="utf-8").read()
+MIGRATION20 = open(os.path.join(HERE, "..", "ops", "migrate_schema20.sql"), encoding="utf-8").read()
+ROLLBACK20 = open(os.path.join(HERE, "..", "ops", "rollback_schema20.sql"), encoding="utf-8").read()
+SCHEMA20_TABLES = ("sensor_discard_windows", "sensor_discarded_batches")
+SCHEMA20_FUNCTIONS = ("discard_active", "discard_intervals", "sensor_excluded", "discarded_seqs", "ingest_resume",
+                      "discard_close", "discard_close_expired", "discard_start", "discard_stop")
 SCHEMA14_TABLES = ("sensor_tokens", "sensor_status", "sensor_heartbeats", "ingest_state",
                    "sensor_clock_boots", "sensor_seq_gaps")
 SCHEMA14_FUNCTIONS = ("ingest_stage_create", "ingest_merge", "refresh_contact_periods")
@@ -121,11 +126,12 @@ class SchemaFiles(unittest.TestCase):
     def test_version(self):
         def version(sql):
             return re.search(r"VALUES \('schema_version', '(\d+)'\)", sql).group(1)
-        self.assertEqual((version(SCHEMA), version(MIGRATION19), version(MIGRATION18), version(MIGRATION17),
-                          version(MIGRATION16), version(MIGRATION15), version(MIGRATION14), version(MIGRATION13),
-                          version(MIGRATION12), version(MIGRATION11), version(MIGRATION10), version(MIGRATION9),
-                          version(MIGRATION8), version(MIGRATION)),
-                         ("19", "19", "18", "17", "16", "15", "14", "13", "12", "11", "10", "9", "8", "7"))
+        self.assertEqual((version(SCHEMA), version(MIGRATION20), version(MIGRATION19), version(MIGRATION18),
+                          version(MIGRATION17), version(MIGRATION16), version(MIGRATION15), version(MIGRATION14),
+                          version(MIGRATION13), version(MIGRATION12), version(MIGRATION11), version(MIGRATION10),
+                          version(MIGRATION9), version(MIGRATION8), version(MIGRATION)),
+                         ("20", "20", "19", "18", "17", "16", "15", "14", "13", "12", "11", "10", "9", "8", "7"))
+        self.assertEqual(version(ROLLBACK20), "19")
         self.assertEqual(version(ROLLBACK14), "13")
         self.assertEqual(version(ROLLBACK15), "14")
         self.assertEqual(version(ROLLBACK16), "15")
@@ -214,7 +220,7 @@ class SchemaFiles(unittest.TestCase):
         for name in SCHEMA14_FUNCTIONS:
             self.assertIsNotNone(function(SCHEMA, name), name)
             # the newest migration that (re)defines it carries schema.sql's text
-            newest = next(m for m in (MIGRATION18, MIGRATION14) if function(m, name))
+            newest = next(m for m in (MIGRATION20, MIGRATION18, MIGRATION14) if function(m, name))
             self.assertEqual(function(newest, name), function(SCHEMA, name), name)
             self.assertIn("DROP FUNCTION %s(" % name, ROLLBACK14, name)
 
@@ -385,3 +391,32 @@ def stage_tables(fn):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Schema20(unittest.TestCase):
+    """Discard mode (docs/discard-mode.md): the migration carries schema.sql's
+    tables and functions, the rollback drops them, the annotation kind."""
+
+    def test_tables_functions_and_rollback(self):
+        for name in SCHEMA20_TABLES:
+            self.assertIsNotNone(table_body(SCHEMA, name), name)
+            self.assertEqual(table_body(MIGRATION20, name), table_body(SCHEMA, name), name)
+            self.assertIn("DROP TABLE %s;" % name, ROLLBACK20, name)
+        for name in SCHEMA20_FUNCTIONS + ("refresh_sensor_periods", "ingest_merge"):
+            self.assertIsNotNone(function(SCHEMA, name), name)
+            self.assertEqual(function(MIGRATION20, name), function(SCHEMA, name), name)
+        for name in SCHEMA20_FUNCTIONS:
+            self.assertIn("DROP FUNCTION %s(" % name, ROLLBACK20, name)
+        self.assertIn("DROP VIEW discard_window_totals;", ROLLBACK20)
+        self.assertIn("'excluded'", table_body(SCHEMA, "sensor_annotations"))
+        self.assertIn("'excluded'", MIGRATION20)
+        self.assertNotIn("'excluded'", ROLLBACK20.split("ADD CONSTRAINT sensor_annotations_kind_check", 1)[1])
+
+    def test_every_reader_of_the_periods_and_the_merge_knows_the_windows(self):
+        self.assertIn("sensor_excluded(p_sensor_id)", function(SCHEMA, "refresh_sensor_periods"))
+        self.assertIn("discard_intervals(p_sensor_id)", function(SCHEMA, "ingest_merge"))
+        self.assertIn("'excluded', v_excluded", function(SCHEMA, "ingest_merge"))
+        # the fixture tests that run these functions copy the windows' tables (else they would read the live ones)
+        for t in ("events_test", "refresh_rollups_test", "ingest_merge_test", "discard_test"):
+            src = open(os.path.join(HERE, "sql", t + ".sql"), encoding="utf-8").read()
+            self.assertIn("'sensor_discard_windows', 'sensor_discarded_batches'", src, t)

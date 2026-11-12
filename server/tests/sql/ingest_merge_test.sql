@@ -40,7 +40,8 @@ BEGIN
   PERFORM set_config('search_path', 'ingest_merge_test, public', true);
   FOREACH t IN ARRAY ARRAY['sensors', 'devices', 'polls', 'device_config_history', 'observations',
                            'ap_load_hourly', 'device_freq_hist', 'associations', 'client_bssids',
-                           'probes', 'alerts', 'ingest_state'] LOOP
+                           'probes', 'alerts', 'ingest_state',
+                           'sensor_discard_windows', 'sensor_discarded_batches'] LOOP   -- schema 20: step 0
     EXECUTE format('CREATE TABLE %I (LIKE public.%I INCLUDING ALL)', t, t);
   END LOOP;
   -- LIKE copies no trigger: the deployed ever_ap rule on the copy (schema 10)

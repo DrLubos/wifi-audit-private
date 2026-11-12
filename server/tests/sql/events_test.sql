@@ -50,7 +50,9 @@ BEGIN
   FOREACH t IN ARRAY ARRAY['accounts', 'account_settings', 'networks', 'sensors', 'polls', 'devices',
                            'device_config_history', 'alerts', 'kismet_alert_rules', 'detections',
                            'ap_summary', 'aps', 'ap_sensors', 'ap_security_periods', 'sensor_periods',
-                           'sensor_annotations', 'audit_log'] LOOP
+                           'sensor_annotations', 'audit_log',
+                           -- schema 20: discard mode's windows (sensor_periods leaves them out)
+                           'sensor_discard_windows', 'sensor_discarded_batches'] LOOP
     EXECUTE format('CREATE TABLE %I (LIKE public.%I INCLUDING ALL)', t, t);
   END LOOP;
   CREATE SEQUENCE events_test.detections_id;

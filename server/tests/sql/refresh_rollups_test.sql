@@ -48,6 +48,7 @@ BEGIN
                            -- schema 9
                            'accounts', 'account_settings', 'networks', 'aps', 'ap_sensors',
                            'ap_security_periods', 'sensor_periods', 'sensor_annotations',
+                           'sensor_discard_windows', 'sensor_discarded_batches',   -- schema 20
                            'kismet_alert_rules', 'detections'] LOOP
     EXECUTE format('CREATE TABLE %I (LIKE public.%I INCLUDING ALL)', t, t);
   END LOOP;
