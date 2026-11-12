@@ -52,7 +52,8 @@ SELECT se.name AS sensor, a.starts_at AS ts, a.ends_at, a.boundary, a.label, a.r
          'late_polls', t.late_polls, 'seq_from', t.seq_from, 'seq_to', t.seq_to) END AS discard
 FROM sensor_annotations a
 JOIN sensors se ON se.id = a.sensor_id AND se.account_id = %(account_id)s
-LEFT JOIN discard_window_totals t ON a.kind = 'excluded' AND t.sensor_id = a.sensor_id AND t.started_at = a.starts_at
+LEFT JOIN discard_window_totals t ON a.kind = 'excluded' AND t.sensor_id = a.sensor_id
+                                   AND a.ref = 'sensor_discard_windows ' || t.id
 WHERE a.kind IN ('change', 'hardware_change', 'excluded')
    OR (a.kind = 'coverage' AND a.ref LIKE 'sensor_config v%%')   -- a delivered configuration rolled back (schema 18)
 ORDER BY a.starts_at DESC

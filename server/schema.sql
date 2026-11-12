@@ -1921,22 +1921,22 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- Ends a window at p_at (p_by 'operator' or 'expiry'): the window and its
--- 'excluded' history entry. Returns the window id, NULL when it was not open.
+-- 'excluded' history entry (ref 'sensor_discard_windows <id>'). Returns the
+-- window id, NULL when it was not open.
 CREATE OR REPLACE FUNCTION discard_close(p_window_id integer, p_at timestamptz, p_by text)
 RETURNS integer
 LANGUAGE plpgsql AS $$
 DECLARE
   v_sensor integer;
-  v_started timestamptz;
 BEGIN
   UPDATE sensor_discard_windows w SET ended_at = p_at, ended_by = p_by
   WHERE w.id = p_window_id AND w.ended_at IS NULL
-  RETURNING w.sensor_id, w.started_at INTO v_sensor, v_started;
+  RETURNING w.sensor_id INTO v_sensor;
   IF NOT FOUND THEN
     RETURN NULL;
   END IF;
   UPDATE sensor_annotations a SET ends_at = p_at
-  WHERE a.sensor_id = v_sensor AND a.starts_at = v_started AND a.kind = 'excluded';
+  WHERE a.sensor_id = v_sensor AND a.kind = 'excluded' AND a.ref = 'sensor_discard_windows ' || p_window_id;
   RETURN p_window_id;
 END
 $$;
