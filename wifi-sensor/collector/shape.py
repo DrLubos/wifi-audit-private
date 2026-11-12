@@ -101,8 +101,19 @@ def _text(v):
     return v if isinstance(v, str) else None
 
 
+_INT64_MAX = 2 ** 63 - 1
+
+
 def _num(v):
+    """A number the buffer can store, else None. SQLite INTEGER is signed 64-bit:
+    a larger value (e.g. a bogus 64-bit beacon timestamp, 2026-11-12) raised
+    OverflowError in the insert and crash-looped the collector for 56 min, and
+    inf/NaN would fail the same way in int(). One bad field must never stop a poll."""
     if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    if isinstance(v, float) and v != v:
+        return None
+    if abs(v) > _INT64_MAX:
         return None
     return v
 

@@ -176,6 +176,16 @@ class ShapeApTest(unittest.TestCase):
         raw = dict(AP_RAW, disconnects=0, disconnects_last=0)
         self.assertIsNone(shape_device(raw, TS)["ap"]["disconnects_last"])
 
+    def test_out_of_range_numbers_become_unknown_not_a_crash(self):
+        # 2026-11-12: a value above SQLite's signed 64-bit INTEGER raised
+        # OverflowError in the insert and crash-looped the collector for 56 min.
+        for bad in (2 ** 64 - 1, 2 ** 63, -2 ** 63 - 1, 1.8e19, float("inf"), float("nan")):
+            raw = dict(AP_RAW, bss_ts=bad, disconnects=bad, disconnects_last=bad, n_clients=bad)
+            ap = shape_device(raw, TS)["ap"]
+            for k in ("bss_ts", "disconnects", "disconnects_last", "n_clients"):
+                self.assertIsNone(ap[k], (k, bad))
+        self.assertEqual(shape_device(dict(AP_RAW, bss_ts=2 ** 63 - 1), TS)["ap"]["bss_ts"], 2 ** 63 - 1)
+
     def test_cloaked_ssid_kept_as_empty_string(self):
         raw = dict(AP_RAW, ssid="", cloaked=1)
         ap = shape_device(raw, TS)["ap"]
