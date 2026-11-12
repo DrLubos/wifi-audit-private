@@ -389,7 +389,7 @@ def emit_stream(out, db, args, log):
             continue
         emit_copy(out, db, spec, log, args.with_client_tables)
 
-    # 3. the merge shared with the live ingest; :merged = {staged, inserted, conflicts, min_ts}
+    # 3. the merge shared with the live ingest; :merged = {staged, inserted, conflicts, min_ts, excluded}
     out.write("\\echo -- ingest_merge\n")
     out.write("SELECT ingest_merge(:sid, 'snapshot') AS merged \\gset\n")
 
@@ -406,6 +406,16 @@ def emit_stream(out, db, args, log):
            "to_timestamp(%d)" % lo if lo is not None else "NULL",
            "to_timestamp(%d)" % hi if hi is not None else "NULL",
            int(src_bytes) if src_bytes and src_bytes.isdigit() else "NULL"))
+
+    # 4b. discard mode (schema 20, docs/discard-mode.md): rows of the snapshot
+    #     inside an excluded window - dropped by the merge, recorded with it
+    out.write("\\echo -- rows inside a discard window (not stored)\n")
+    out.write(
+        "INSERT INTO sensor_discarded_batches (sensor_id, window_id, kind, polls, seq_from, seq_to, ts_from, ts_to,\n"
+        "                                      rows)\n"
+        "SELECT :sid, (e ->> 'window_id')::int, 'late', (e ->> 'polls')::int, (e ->> 'seq_from')::bigint,\n"
+        "       (e ->> 'seq_to')::bigint, (e ->> 'ts_from')::timestamptz, (e ->> 'ts_to')::timestamptz, e -> 'rows'\n"
+        "FROM jsonb_array_elements(coalesce(:'merged'::jsonb -> 'excluded', '[]'::jsonb)) e;\n")
 
     # 5. baselines
     if not args.no_baselines:

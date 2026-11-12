@@ -91,14 +91,22 @@ def by_bucket(rows, n, key, default=0):
     return out
 
 
-def window_share(hours, sensor, start, end):
-    """Coverage of one sensor over [start, end): capture seconds / window seconds."""
-    total = (end - start).total_seconds()
+def window_share(hours, sensor, start, end, excluded=()):
+    """Coverage of one sensor over [start, end): capture seconds / window
+    seconds, the excluded windows of discard mode left out (schema 20:
+    [(start, end or None = still on)]); None when nothing is left."""
+    total = (end - start).total_seconds() - _excluded_s(excluded, start, end, end)
     if total <= 0:
         return None
     secs = sum(hour_capture_s(r, sensor["first_poll"], sensor["last_poll"])
                for r in hours if r["sensor_id"] == sensor["id"] and start <= r["hour"] < end)
     return round(min(1.0, secs / total), 3)
+
+
+def _excluded_s(excluded, a, b, now):
+    """Seconds of [a, b) inside the excluded windows (disjoint, as
+    sensor_excluded() returns them; an open one runs to now)."""
+    return sum(_overlap(a, b, ws, we or now) for ws, we in excluded)
 
 
 def captured_hours(hours):
@@ -454,15 +462,17 @@ def _overlap(a, b, c, d):
     return max(0.0, (hi - lo).total_seconds())
 
 
-def day_coverage(days, hours, sensor, now, limited_windows=(), poll_s=POLL_S):
+def day_coverage(days, hours, sensor, now, limited_windows=(), poll_s=POLL_S, excluded=()):
     """Coverage per local day of one sensor (Sensors board): the shares of
     the day (up to now) that were ok (collecting, full hop list), limited
     (collecting, hop list degraded - by the polls' hop flag or inside a
     documented coverage window), outage (between the first and the last poll
-    but not collecting), not installed (before the first poll) and no data
+    but not collecting), excluded (discard mode, schema 20: never an outage,
+    nor "no data"), not installed (before the first poll) and no data
     (after the last imported poll). days: [(date, start, end)] in UTC
     (periods.local_days); hours: its sensor_hourly rows; limited_windows:
-    [(start, end)] of its coverage annotations."""
+    [(start, end)] of its coverage annotations; excluded: its excluded
+    windows [(start, end or None = still on)], disjoint."""
     first, last = sensor["first_poll"], sensor["last_poll"]
     data_end = last + timedelta(seconds=poll_s) if last else None
     by_hour = {r["hour"]: r for r in hours if r["sensor_id"] == sensor["id"]}
@@ -471,7 +481,7 @@ def day_coverage(days, hours, sensor, now, limited_windows=(), poll_s=POLL_S):
         b = min(b, now)
         total = (b - a).total_seconds()
         row = {"date": d.isoformat(), "ok": 0.0, "limited": 0.0, "outage": 0.0, "not_installed": 0.0,
-               "no_data": 0.0}
+               "no_data": 0.0, "excluded": 0.0}
         if total <= 0:
             out.append(row)
             continue
@@ -490,11 +500,15 @@ def day_coverage(days, hours, sensor, now, limited_windows=(), poll_s=POLL_S):
                 lim += c * max(r["limited_polls"] / r["capture_polls"], noted)
             h += HOUR
         window = _overlap(a, b, first, data_end)
+        lo = max(a, first)
+        ex_data = _excluded_s(excluded, lo, min(b, data_end), now) if data_end > lo else 0.0
+        ex_after = _excluded_s(excluded, max(lo, data_end), b, now) if b > max(lo, data_end) else 0.0
         row.update({
             "ok": round((cap - lim) / total, 3), "limited": round(lim / total, 3),
-            "outage": round(max(0.0, window - cap) / total, 3),
+            "outage": round(max(0.0, window - cap - ex_data) / total, 3),
             "not_installed": round(_overlap(a, b, a, first) / total, 3),
-            "no_data": round(_overlap(a, b, data_end, b) / total, 3),
+            "no_data": round(max(0.0, _overlap(a, b, data_end, b) - ex_after) / total, 3),
+            "excluded": round((ex_data + ex_after) / total, 3),
         })
         out.append(row)
     return out
@@ -503,7 +517,7 @@ def day_coverage(days, hours, sensor, now, limited_windows=(), poll_s=POLL_S):
 BACKLOG_CATCHING_UP = 10     # polls waiting on the sensor before it reads "catching up"
 
 
-def sensor_status(last_capture_at, last_poll, now, offline_min, contact=None):
+def sensor_status(last_capture_at, last_poll, now, offline_min, contact=None, discarding=False):
     """(status, seconds) of a sensor (docs/live-upload.md 8.2).
 
     With live contact (sensor_status: last_contact_at, backlog_polls,
@@ -515,7 +529,10 @@ def sensor_status(last_capture_at, last_poll, now, offline_min, contact=None):
     collecting), online; the seconds are those since the last collecting
     poll. Without contact (snapshot imports only): online | offline | no_data
     from the last collecting poll - every such sensor reads offline between
-    imports (SPEC Q7: the page shows "data until").
+    imports (SPEC Q7: the page shows "data until"). discarding (schema 20, the
+    sensor's discard window is on): in contact, nothing it sends is stored -
+    discarding instead of online / not capturing (an unreachable, catching-up
+    or clock-unverified sensor keeps that state).
     """
     limit = offline_min * 60
     since_capture = (None if last_capture_at is None
@@ -528,6 +545,8 @@ def sensor_status(last_capture_at, last_poll, now, offline_min, contact=None):
             return "clock_unverified", since_capture
         if (contact.get("backlog_polls") or 0) > BACKLOG_CATCHING_UP:
             return "catching_up", since_capture
+        if discarding:
+            return "discarding", since_capture
         if since_capture is None or since_capture > limit:
             return "not_capturing", since_capture
         return "online", since_capture

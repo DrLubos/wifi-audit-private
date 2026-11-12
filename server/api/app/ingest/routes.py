@@ -10,6 +10,12 @@ heartbeat it carries. A standalone heartbeat comes when no batch was sent for
 a minute. The dashboard's rollups are not refreshed here: ingest_merge()
 marks the sensor dirty and the refresher (app/refresher.py) does it.
 
+Discard mode (schema 20, docs/discard-mode.md): while the sensor's window is
+on, a valid batch is answered 200 like a merged one (the uploader moves its
+cursor on) but only its heartbeat and a record of what it carried are stored
+(discard.py); rows that arrive later for the window's time are dropped by
+ingest_merge() and recorded with it.
+
 Status codes: 200; 400 body not gzip/JSON; 401 no or wrong token; 403 token
 revoked; 409 a batch of this sensor (or a snapshot import) is running; 413 too
 large; 422 content invalid (the first problem named); 429 rate limit
@@ -34,6 +40,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import db
 from ..v2 import queries
 from . import config as cfgmod
+from . import discard
 from . import heartbeat as hbmod
 from . import ratelimit, stalls, tokens, validate
 
@@ -336,6 +343,9 @@ def _merge(conn, tok, b, nbytes, now, t0):
         if not _run(conn, "try_lock", sensor_id=sid).fetchone()["locked"]:
             return _err(409, "a batch of this sensor is being merged", 2)
         st = _run(conn, "status_get", sensor_id=sid).fetchone()
+        win = _run(conn, "discard_active", sensor_id=sid).fetchone()
+        if win is not None:
+            return _discard(conn, tok, b, nbytes, now, t0, st, win)
         _run(conn, "stage_create")
         with conn.cursor() as cur:
             for name in validate.ORDER:
@@ -346,6 +356,8 @@ def _merge(conn, tok, b, nbytes, now, t0):
                     for row in rows:
                         cp.write_row(row)
         merged = _run(conn, "merge", sensor_id=sid).fetchone()["merged"]
+        for e in merged.get("excluded") or []:
+            _late(conn, tok, b, e)
         ms = int((time.monotonic() - t0) * 1000)
         replay = _run(conn, "upload", sensor_id=sid, buffer_version=b["buffer_version"],
                       polls_from=b["polls_from"], polls_to=b["polls_to"],
@@ -368,6 +380,40 @@ def _merge(conn, tok, b, nbytes, now, t0):
     return JSONResponse({"batch_seq": b["batch_seq"], "replay": bool(replay), "staged": merged.get("staged"),
                          "inserted": merged.get("inserted"), "conflicts": merged.get("conflicts"), "ms": ms,
                          "server_ts": datetime.now(timezone.utc).timestamp(), "config": delivered})
+
+
+def _discard(conn, tok, b, nbytes, now, t0, st, win):
+    """A valid batch while the sensor's discard window is on: nothing of it is
+    merged - no upload row, no clock corrections, no unverified gaps (they
+    describe the window's polls) - but the record of what it carried, its lost
+    gaps (older than the window), its heartbeat and the sensor's status."""
+    s = discard.summary(b)
+    replay = _run(conn, "discard_batch", sensor_id=tok["sensor_id"], window_id=win["id"], buffer_id=b["buffer_id"],
+                  batch_seq=b["batch_seq"], polls=s["polls"], seq_from=s["seq_from"], seq_to=s["seq_to"],
+                  ts_from=_dt(s["ts_from"]) or now, ts_to=_dt(s["ts_to"]) or now,
+                  unverified_polls=s["unverified_polls"], rows=Jsonb(s["rows"]), bytes=nbytes).fetchone()["replay"]
+    _gaps(conn, tok, dict(b, gaps=discard.stored_gaps(b)))
+    new = stalls.after_accept(st)
+    _close_events(conn, tok, stalls.CLOSE_ON_ACCEPT)
+    _heartbeat(conn, tok, b["heartbeat"], now)
+    _status(conn, tok, new, now, hb=b["heartbeat"], batch=b)
+    delivered = _config_out(conn, tok, b["heartbeat"])
+    ms = int((time.monotonic() - t0) * 1000)
+    log.info("ingest: sensor %s batch %d%s discarded (discard mode until %s): %d polls, %d rows, %d ms",
+             tok["sensor"], b["batch_seq"], " (replay)" if replay else "", win["until"].isoformat(), s["polls"],
+             b["rows"], ms)
+    return JSONResponse(discard.response(b, replay, ms, delivered, win["until"]))
+
+
+def _late(conn, tok, b, e):
+    """Rows of a merged batch inside an excluded window, dropped by
+    ingest_merge() (a replay or a late upload of a discarded window): recorded
+    with the window, never stored."""
+    _run(conn, "discard_late", sensor_id=tok["sensor_id"], window_id=e["window_id"], buffer_id=b["buffer_id"],
+         batch_seq=b["batch_seq"], polls=e["polls"], seq_from=e["seq_from"], seq_to=e["seq_to"],
+         ts_from=e["ts_from"], ts_to=e["ts_to"], rows=Jsonb(e["rows"]))
+    log.warning("ingest: sensor %s batch %d - rows inside discard window %s dropped: %s",
+                tok["sensor"], b["batch_seq"], e["window_id"], e["rows"])
 
 
 def _gaps(conn, tok, b):

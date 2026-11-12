@@ -161,9 +161,34 @@ UPDATE accounts SET write_version = write_version + 1 WHERE id = %(account_id)s
 
 -- name: resume
 -- Where a new uploader starts (D5): the server's newest poll of the sensor
--- (seq NULL for polls stored before schema 14 - the uploader then finds it by ts).
-SELECT seq, extract(epoch FROM ts)::bigint AS ts FROM polls
-WHERE sensor_id = %(sensor_id)s ORDER BY ts DESC LIMIT 1
+-- (seq NULL for polls stored before schema 14 - the uploader then finds it by
+-- ts), or the newest discarded one (schema 20: a discarded window is never sent again).
+SELECT seq, ts FROM ingest_resume(%(sensor_id)s)
+
+-- --- discard mode (schema 20, docs/discard-mode.md) --------------------------------------------------
+
+-- name: discard_active
+-- The sensor's window that is on now (until in the future), or no row.
+SELECT w.id, w.until FROM sensor_discard_windows w WHERE w.id = discard_active(%(sensor_id)s)
+
+-- name: discard_batch
+-- A batch answered without storing it: what it carried. The same batch again
+-- (its acknowledgement was lost) is the same row, replays + 1.
+INSERT INTO sensor_discarded_batches (sensor_id, window_id, kind, buffer_id, batch_seq, polls, seq_from, seq_to,
+                                      ts_from, ts_to, unverified_polls, rows, bytes)
+VALUES (%(sensor_id)s, %(window_id)s, 'batch', %(buffer_id)s::uuid, %(batch_seq)s, %(polls)s, %(seq_from)s,
+        %(seq_to)s, %(ts_from)s, %(ts_to)s, %(unverified_polls)s, %(rows)s, %(bytes)s)
+ON CONFLICT (sensor_id, buffer_id, batch_seq, kind, window_id) DO UPDATE SET replays = sensor_discarded_batches.replays + 1
+RETURNING (xmax::text <> '0') AS replay
+
+-- name: discard_late
+-- Rows of a stored batch that lay inside an excluded window (ingest_merge()
+-- dropped them: a replay or a late upload of a discarded window).
+INSERT INTO sensor_discarded_batches (sensor_id, window_id, kind, buffer_id, batch_seq, polls, seq_from, seq_to,
+                                      ts_from, ts_to, rows)
+VALUES (%(sensor_id)s, %(window_id)s, 'late', %(buffer_id)s::uuid, %(batch_seq)s, %(polls)s, %(seq_from)s,
+        %(seq_to)s, %(ts_from)s::timestamptz, %(ts_to)s::timestamptz, %(rows)s)
+ON CONFLICT (sensor_id, buffer_id, batch_seq, kind, window_id) DO UPDATE SET replays = sensor_discarded_batches.replays + 1
 
 -- --- configuration delivery (schema 18, docs/config-delivery.md) -----------------------------------
 

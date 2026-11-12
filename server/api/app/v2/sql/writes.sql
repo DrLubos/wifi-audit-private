@@ -124,3 +124,24 @@ RETURNING id
 UPDATE aps SET note = %(note)s, note_at = CASE WHEN %(note)s::text IS NULL THEN NULL ELSE now() END
 WHERE account_id = %(account_id)s AND bssid = %(bssid)s::macaddr
 RETURNING id
+
+-- --- discard mode (schema 20, docs/discard-mode.md) ------------------------------------------------
+
+-- name: discard_start
+-- On for the given seconds (> 0, at most 24 h - the table's constraint) with
+-- the note: the window and its 'excluded' history entry; a second window while
+-- one is on is a unique_violation (409).
+WITH w AS (SELECT discard_start(%(sensor_id)s, %(seconds)s, %(note)s) AS id)
+SELECT id FROM w
+
+-- name: discard_stop
+-- Off now; id NULL when none was on.
+WITH w AS (SELECT discard_stop(%(sensor_id)s) AS id)
+SELECT id FROM w
+
+-- name: discard_window
+-- One window with its totals (the response of the two writes, in their transaction).
+WITH t AS (SELECT id, started_at, until, ended_at, ended_by, note, active, polls, batches, late_polls, seq_from,
+                  seq_to
+           FROM discard_window_totals WHERE id = %(id)s)
+SELECT * FROM t

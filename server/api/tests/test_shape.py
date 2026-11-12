@@ -256,7 +256,7 @@ class SensorDays(unittest.TestCase):
         self.assertEqual(d2["no_data"], 0.5)                              # after 12:00:00 (last poll + 30 s)
         self.assertAlmostEqual(d2["ok"] + d2["limited"] + d2["outage"] + d2["no_data"], 1.0, places=2)
         self.assertEqual(d3, {"date": "2026-10-03", "ok": 0.0, "limited": 0.0, "outage": 0.0,
-                              "not_installed": 0.0, "no_data": 1.0})
+                              "not_installed": 0.0, "no_data": 1.0, "excluded": 0.0})
 
 
 class Spectrum(unittest.TestCase):

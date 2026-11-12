@@ -5,6 +5,11 @@ refresh never holds one of the api's pool connections).
 Live ingest marks a sensor dirty (ingest_state.dirty_from = the earliest ts
 it inserted; ingest_merge()) instead of refreshing per request. Each round:
 
+0. discard mode's auto-expiry (schema 20, docs/discard-mode.md):
+   discard_close_expired() records the end of every window past its `until`
+   (the ingest stops discarding at `until` by itself; this writes the history
+   entry's end, the audit_log row and write_version + 1, so the dashboard's
+   banner goes);
 1. per dirty sensor: take the mark and clear it in one statement, then
    refresh_rollups(sensor, dirty_from); an ingest during the refresh sets a new
    mark for the next round (only its own new rows), and a failed refresh puts
@@ -51,6 +56,7 @@ RETRY_S = 30
 _stop = False
 _carry = {}     # sensor_id -> (dirty_from, dirty_since) taken by a refresh that failed
 _recording = True
+_expiry = True  # discard_close_expired() exists (schema 20)
 
 _RUN_COLS = ("refresh_from", "waited_s", "ap_hours", "sensor_hours", "gaps", "baselines", "next_in_s", "error")
 
@@ -84,6 +90,23 @@ def _restore_marks(conn):
         del _carry[sid]
 
 
+def close_expired(conn):
+    """Step 0: discard windows past their end are recorded as ended. Turns
+    itself off on a database before schema 20 (no such function)."""
+    global _expiry
+    if not _expiry:
+        return
+    try:
+        rows = conn.execute("SELECT * FROM discard_close_expired()", prepare=False).fetchall()
+    except psycopg.errors.UndefinedFunction:
+        _expiry = False
+        log.warning("discard_close_expired() missing (schema < 20): no auto-expiry step")
+        return
+    for r in rows:
+        log.info("discard mode ended (expiry) sensor=%s window=%s until=%s", r["sensor"], r["window_id"],
+                 r["until"].isoformat())
+
+
 def _on_signal(signum, frame):
     global _stop
     _stop = True
@@ -100,6 +123,7 @@ def round_once(conn, baseline_dates):
     """One round; returns the duration of steps 1-2 in seconds (the nightly
     baselines are not paced by the duty cycle)."""
     t0 = time.monotonic()
+    close_expired(conn)
     if _carry:
         log.info("restoring %d dirty mark(s) of a failed refresh", len(_carry))
         _restore_marks(conn)

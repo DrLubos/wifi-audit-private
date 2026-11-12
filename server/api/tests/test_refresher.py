@@ -19,6 +19,7 @@ if "psycopg" not in sys.modules:
         stub.Error = type("Error", (Exception,), {})
         stub.errors = types.ModuleType("psycopg.errors")
         stub.errors.UndefinedTable = type("UndefinedTable", (stub.Error,), {})
+        stub.errors.UndefinedFunction = type("UndefinedFunction", (stub.Error,), {})
         stub.connect = None
         rows = types.ModuleType("psycopg.rows")
         rows.dict_row = None
@@ -76,6 +77,8 @@ class FakeConn:
             return Result([])
         if "refresh_contact_periods" in sql:
             return Result([{"sensor_id": 1, "gaps": 0}])
+        if "discard_close_expired" in sql:          # discard mode's auto-expiry (schema 20)
+            return Result([])
         if sql.startswith("INSERT INTO refresh_runs"):
             if self.no_table:
                 raise psycopg.errors.UndefinedTable("relation refresh_runs does not exist")

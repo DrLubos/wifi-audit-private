@@ -57,6 +57,7 @@ WRITES = (("POST", "/auth/check"), ("PUT", "/settings/networks"), ("POST", "/set
           ("POST", "/settings/sensors/pi-fri/hardware-change"), ("POST", "/events/1/status"), ("POST", "/events/status"),
           ("PUT", "/aps/EC:58:EA:55:88:FC/classification"), ("PUT", "/aps/EC:58:EA:55:88:FC/note"),
           ("POST", "/settings/sensors/new"), ("DELETE", "/settings/sensors/pi-fri?confirm=pi-fri"),
+          ("POST", "/settings/sensors/pi-fri/discard"), ("DELETE", "/settings/sensors/pi-fri/discard"),   # schema 20
           ("GET", "/events/export/labels.csv"), ("GET", "/events/export/label-history.csv"))   # reads, but token-gated
 
 
@@ -164,6 +165,9 @@ def main(argv):
     check("/aps/not-a-mac", 422)
     sensors = check("/sensors")
     for s in (sensors or {}).get("sensors", []):
+        if "discard" not in s:                       # discard mode (schema 20): null or the window that is on
+            failures.append("sensors: %s has no discard key" % s["name"])
+            print("FAIL /sensors without discard for %s" % s["name"])
         check("/sensors/%s/coverage?days=14" % urllib.parse.quote(s["name"]))
         check("/sensors/%s/outages" % urllib.parse.quote(s["name"]))
     check("/sensors/no-such-sensor/outages", 404)

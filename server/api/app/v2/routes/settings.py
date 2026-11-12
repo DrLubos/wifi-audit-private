@@ -10,9 +10,12 @@ Writes: the networks (the whole list from the Networks tab; one new network;
 "Add to allowed"), the classification rules and the detector parameters -
 each followed by refresh_events() for every sensor of the account -, a
 sensor's capture configuration (a new version, not delivered: Q10), its
-name / location / description (add, edit, rename, guarded delete), and a
+name / location / description (add, edit, rename, guarded delete), a
 hardware change of a sensor (a dated history entry that is a data boundary:
-RSSI baselines are learned inside one hardware period, schema 11 / 13).
+RSSI baselines are learned inside one hardware period, schema 11 / 13), and
+discard mode on / off (schema 20, docs/discard-mode.md: a window in which
+the sensor's uploads are accepted and not stored, excluded from loss,
+outages and coverage; it switches itself off at its end).
 """
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
@@ -200,6 +203,7 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
         meta = {m["name"]: m for m in deps.run(conn, _Q, "sensor_meta", account_id=acc["id"])}
         adapters = {a["sensor"]: a for a in deps.run(conn, _Q, "sensor_adapters", account_id=acc["id"])}
         delivery = {d["sensor"]: d for d in deps.run(conn, _Q, "sensor_delivery", account_id=acc["id"])}
+        discards = {d["sensor"]: d for d in deps.run(conn, _Q, "sensor_discard", account_id=acc["id"])}
         out = []
         for s in acc["sensors"]:
             mine = [dict(v, created_at=iso(v["created_at"]), confirmed_at=iso(v["confirmed_at"]),
@@ -215,6 +219,7 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
                         "delivery": {"accepting": dl.get("accepting"), "capabilities_at": iso(dl.get("capabilities_at")),
                                      "attempt": None if attempt is None else dict(
                                          attempt, reported_at=iso(shape.parse_ts(attempt["reported_at"])))},
+                        "discard": _window(discards.get(s["name"])),
                         "meta": {"location": m["location"], "description": m["description"],
                                  "hardware": m["hardware"], "has_polls": s["first_poll"] is not None},
                         "adapter": None if ad is None else dict(
@@ -223,10 +228,33 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
                             # BSSID in a response (the privacy scan), the page only needs to know it
                             mac_known=ad["mac"] is not None)})
         plans = {s["current"]["channel_plan"] for s in out if s["current"]}
-        changes = [dict(h, ts=iso(h["ts"])) for h in history]
+        changes = [dict(h, ts=iso(h["ts"]), ends_at=iso(h["ends_at"]), discard=_history_discard(h["discard"]))
+                   for h in history]
         return {"sensors": out, "mixed_plans": len(plans) > 1, "history": changes,
                 "plans": {"all_89": writes.ALL_89, "ht20_37": list(writes.HT20_37), "lock": list(writes.HT20_ALL)}}
     return _read(request, acc, build)
+
+
+def _window(w):
+    """A discard window (settings.sql sensor_discard, writes.sql discard_window) for a response."""
+    if w is None:
+        return None
+    out = {k: w[k] for k in ("id", "note", "polls", "batches") if k in w}
+    out["polls"], out["batches"] = int(out.get("polls") or 0), int(out.get("batches") or 0)
+    for k in ("started_at", "until", "ended_at", "last_at"):
+        if k in w:
+            out[k] = iso(shape.parse_ts(w[k]))
+    for k in ("ended_by", "active", "late_polls", "seq_from", "seq_to"):
+        if k in w:
+            out[k] = w[k]
+    return out
+
+
+def _history_discard(d):
+    """What an excluded window of the history discarded (json from sensor_history)."""
+    if d is None:
+        return None
+    return dict(d, until=iso(shape.parse_ts(d["until"])))
 
 
 def _sensor_of(acc, name):
@@ -356,3 +384,40 @@ def post_hardware_change(name: str = Path(max_length=64), body: dict = Body(...)
     except errors.UniqueViolation:
         raise HTTPException(status_code=409, detail="%s has a hardware change at that very time already" % name) from None
     return deps.written({"sensor": name, "valid_from": iso(a["valid_from"]), "label": label}, 201)
+
+
+@router.post("/sensors/{name}/discard", status_code=201, dependencies=[Depends(deps.require_write)])
+def post_discard(name: str = Path(max_length=64), body: dict = Body(...), acc=Depends(deps.get_account)):
+    """Discard mode on for a sensor ({note, duration_h? (default 6) | until?},
+    at most 24 h ahead; docs/discard-mode.md): from now until the end the
+    sensor's uploads are accepted (200, the uploader moves on) and nothing but
+    the heartbeat is stored; the window is an 'excluded' entry of the
+    configuration history, never an outage or lost polls, and it switches
+    itself off at the end. 409 while one is on."""
+    s = _sensor_of(acc, name)
+    d = deps.invalid(writes.parse_discard, body, shape.utc_now())
+    try:
+        with deps.write_tx(acc) as (conn, audit):
+            wid = deps.run(conn, _QW, "discard_start", sensor_id=s["id"], seconds=d["seconds"], note=d["note"])[0]["id"]
+            w = deps.run(conn, _QW, "discard_window", id=wid)[0]
+            audit("sensor.discard.start", "sensor:%s" % name, None,
+                  {"window": wid, "started_at": iso(w["started_at"]), "until": iso(w["until"]), "note": d["note"]})
+    except errors.UniqueViolation:
+        raise HTTPException(status_code=409, detail="discard mode is on for %s already - turn it off first"
+                            % name) from None
+    return deps.written({"sensor": name, "discard": _window(w)}, 201)
+
+
+@router.delete("/sensors/{name}/discard", dependencies=[Depends(deps.require_write)])
+def delete_discard(name: str = Path(max_length=64), acc=Depends(deps.get_account)):
+    """Discard mode off for a sensor, now: from the next upload on its data is
+    stored again. 409 when it is not on."""
+    s = _sensor_of(acc, name)
+    with deps.write_tx(acc) as (conn, audit):
+        wid = deps.run(conn, _QW, "discard_stop", sensor_id=s["id"])[0]["id"]
+        if wid is None:
+            raise HTTPException(status_code=409, detail="discard mode is not on for %s" % name)
+        w = deps.run(conn, _QW, "discard_window", id=wid)[0]
+        audit("sensor.discard.stop", "sensor:%s" % name, {"window": wid, "until": iso(w["until"])},
+              {"window": wid, "ended_at": iso(w["ended_at"]), "ended_by": "operator", "polls": int(w["polls"])})
+    return deps.written({"sensor": name, "discard": _window(w)})

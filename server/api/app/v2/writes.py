@@ -469,3 +469,47 @@ def parse_hardware_change(body, now):
 def hardware_change_label(note):
     """The history label of a hardware change."""
     return "Hardware change" + (": " + note if note else "")
+
+
+# --- discard mode (schema 20, docs/discard-mode.md) ------------------------------------------------
+
+DISCARD_DEFAULT_H = 6
+DISCARD_MAX_S = 24 * 3600
+DISCARD_MIN_S = 60
+
+
+def parse_discard(body, now):
+    """{note, duration_h? | until?} -> {seconds, until, note}: discard mode on
+    for a sensor - a test away from its place, the uploads accepted and not
+    stored. The note is required (what the test is); the end is a duration in
+    hours (default 6) or an ISO time with a zone, at least a minute and at most
+    24 hours ahead - the window switches itself off then."""
+    unknown = sorted(set(body) - {"note", "duration_h", "until"})
+    if unknown:
+        raise Invalid("unknown field(s): %s" % ", ".join(unknown))
+    note = _note(body.get("note"), 500)
+    if not note:
+        raise Invalid("note: required - what the test is (e.g. PoE power measurement elsewhere)")
+    until, hours = body.get("until"), body.get("duration_h")
+    if until is not None and hours is not None:
+        raise Invalid("give duration_h or until, not both")
+    if until is not None:
+        try:
+            t = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
+        except ValueError:
+            raise Invalid("until: an ISO time") from None
+        if t.tzinfo is None:
+            raise Invalid("until: with a time zone (e.g. 2026-11-12T18:00:00Z)")
+        seconds = (t - now).total_seconds()
+    else:
+        if hours is None:
+            hours = DISCARD_DEFAULT_H
+        if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not math.isfinite(hours):
+            raise Invalid("duration_h: a number of hours")
+        seconds = hours * 3600
+    seconds = int(round(seconds))
+    if seconds < DISCARD_MIN_S:
+        raise Invalid("the end must lie at least a minute ahead")
+    if seconds > DISCARD_MAX_S:
+        raise Invalid("at most 24 hours")
+    return {"seconds": seconds, "until": now + timedelta(seconds=seconds), "note": note}

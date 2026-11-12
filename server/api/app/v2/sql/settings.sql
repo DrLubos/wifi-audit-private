@@ -44,13 +44,26 @@ WHERE se.account_id = %(account_id)s
 -- name: sensor_history
 -- The documented changes of the account's sensors, newest first; boundary =
 -- a data boundary (a channel-plan change splits measurements for analysis,
--- a hardware_change - entered by hand - splits the RSSI baselines).
-SELECT se.name AS sensor, a.starts_at AS ts, a.boundary, a.label, a.ref, a.kind
+-- a hardware_change - entered by hand - splits the RSSI baselines). Schema
+-- 20: the excluded windows of discard mode, with what each discarded.
+SELECT se.name AS sensor, a.starts_at AS ts, a.ends_at, a.boundary, a.label, a.ref, a.kind,
+       CASE WHEN t.id IS NOT NULL THEN json_build_object(
+         'until', t.until, 'ended_by', t.ended_by, 'active', t.active, 'polls', t.polls, 'batches', t.batches,
+         'late_polls', t.late_polls, 'seq_from', t.seq_from, 'seq_to', t.seq_to) END AS discard
 FROM sensor_annotations a
 JOIN sensors se ON se.id = a.sensor_id AND se.account_id = %(account_id)s
-WHERE a.kind IN ('change', 'hardware_change')
+LEFT JOIN discard_window_totals t ON a.kind = 'excluded' AND t.sensor_id = a.sensor_id AND t.started_at = a.starts_at
+WHERE a.kind IN ('change', 'hardware_change', 'excluded')
    OR (a.kind = 'coverage' AND a.ref LIKE 'sensor_config v%%')   -- a delivered configuration rolled back (schema 18)
 ORDER BY a.starts_at DESC
+
+-- name: sensor_discard
+-- Per sensor of the account its discard window that is on now (schema 20,
+-- docs/discard-mode.md) and what it discarded so far.
+SELECT se.name AS sensor, t.id, t.started_at, t.until, t.note, t.polls, t.batches, t.last_at
+FROM sensors se
+JOIN discard_window_totals t ON t.sensor_id = se.id AND t.active
+WHERE se.account_id = %(account_id)s
 
 -- name: sensor_meta
 -- The editable details of the account's sensors (Settings > Sensors).

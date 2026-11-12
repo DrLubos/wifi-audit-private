@@ -3,7 +3,8 @@
 Feeds the sidebar, the top bar ("Latest data") and the sensor cards of
 Overview and Sensors. A sensor that uploads live (schema 14) has a status
 from its contact (shape.sensor_status: online, catching_up,
-clock_unverified, not_capturing, unreachable - docs/live-upload.md 8.2),
+clock_unverified, not_capturing, unreachable - docs/live-upload.md 8.2;
+discarding while its discard window is on, schema 20, docs/discard-mode.md),
 read from sensor_status directly; a sensor seen only through snapshot
 imports reads online / offline against the account's sensor_offline_min from
 the last collecting poll (offline between imports, so the cards show
@@ -29,6 +30,18 @@ def _ts(v):
     return iso(shape.parse_ts(v))
 
 
+def _discard(d):
+    """The window that is on now (sensors.sql: discard), its times as UTC with a Z."""
+    if d is None:
+        return None
+    return dict(d, started_at=_ts(d["started_at"]), until=_ts(d["until"]), last_at=_ts(d["last_at"]))
+
+
+def _excluded(rows, sensor_id):
+    """[(start, end or None)] of one sensor from the excluded query."""
+    return [(r["excl_from"], r["excl_to"]) for r in rows if r["sensor_id"] == sensor_id]
+
+
 def _config(c):
     if c is None:
         return None
@@ -48,11 +61,12 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
     polled = [s for s in acc["sensors"] if s["last_poll"]]
     with deps.connection() as conn:
         rows = deps.run(conn, _Q, "sensors", account_id=acc["id"])
-        hours = []
+        hours, excluded = [], []
         if polled:
-            hours = deps.run(conn, _QC, "sensor_hours", sensor_ids=[s["id"] for s in polled],
-                             **{"from": min(s["last_poll"] for s in polled) - timedelta(hours=170),
-                                "to": max(s["last_poll"] for s in polled) + timedelta(hours=1)})
+            span = {"from": min(s["last_poll"] for s in polled) - timedelta(hours=170),
+                    "to": max(s["last_poll"] for s in polled) + timedelta(hours=1)}
+            hours = deps.run(conn, _QC, "sensor_hours", sensor_ids=[s["id"] for s in polled], **span)
+            excluded = deps.run(conn, _Q, "excluded", sensor_ids=[s["id"] for s in polled], **span)
     by_id = {s["id"]: s for s in acc["sensors"]}
     out = []
     for r in rows:
@@ -60,12 +74,12 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
             "last_contact_at": r["last_contact_at"], "backlog_polls": r["backlog_polls"],
             "held_polls": r["held_polls"]}
         status, offline_s = shape.sensor_status(r["last_capture_at"], r["last_poll"], now, acc["offline_min"],
-                                                contact)
+                                                contact, discarding=r["discard"] is not None)
         coverage, window = None, None
         if r["last_poll"] is not None:
             start = r["last_poll"].replace(minute=0, second=0, microsecond=0) - timedelta(hours=167)
             end = r["last_poll"] + timedelta(seconds=shape.POLL_S)
-            coverage = shape.window_share(hours, by_id[r["id"]], start, end)
+            coverage = shape.window_share(hours, by_id[r["id"]], start, end, _excluded(excluded, r["id"]))
             window = {"from": iso(start), "to": iso(r["last_poll"])}
         out.append({
             "name": r["name"], "location": r["location"], "hardware": r["hardware"],
@@ -88,6 +102,8 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
             "config": _config(r["config"]), "pending": _config(r["pending"]),
             # configuration delivery (schema 18): the uploader accepts configurations, its newest attempt
             "config_delivery": {"accepting": r["config_accepting"], "attempt": r["config_attempt"]},
+            # discard mode (schema 20): the window that is on now - the dashboard's banner
+            "discard": _discard(r["discard"]),
             # the adapter (read-only, schema 13) and the last hand-entered hardware change
             "adapter": r["adapter"], "last_hardware_change": iso(r["last_hardware_change"]),
             # live upload (schema 14; null for a sensor without it)
@@ -128,7 +144,8 @@ def _sensor(conn, acc, name):
 def coverage(request: Request, name: str = Path(max_length=64), days: int = Query(14, ge=1, le=60),
              acc=Depends(deps.get_account)):
     """Shares of each of the last `days` local days (today partial): ok,
-    limited, outage, not installed, no data (after the last import)."""
+    limited, outage, excluded (discard mode), not installed, no data (after
+    the last import)."""
     tag, cached = deps.etag(request, acc, deps.minute_epoch())
     if cached:
         return cached
@@ -139,17 +156,20 @@ def coverage(request: Request, name: str = Path(max_length=64), days: int = Quer
         span = {"from": window[0][1], "to": window[-1][2]}
         hours = deps.run(conn, _QC, "sensor_hours", sensor_ids=[s["id"]], **span)
         notes = deps.run(conn, _Q, "coverage_notes", sensor_id=s["id"], **span)
+        excluded = deps.run(conn, _Q, "excluded", sensor_ids=[s["id"]], **span)
     limited = [(n["starts_at"], n["ends_at"]) for n in notes]
     body = {"sensor": s["name"], "tz": acc["tz"], "first_poll": iso(s["first_poll"]),
-            "data_until": iso(s["last_poll"]), "days": shape.day_coverage(window, hours, s, now, limited)}
+            "data_until": iso(s["last_poll"]),
+            "days": shape.day_coverage(window, hours, s, now, limited, excluded=_excluded(excluded, s["id"]))}
     return deps.respond(body, tag)
 
 
 @router.get("/sensors/{name}/outages")
 def outages(request: Request, name: str = Path(max_length=64), acc=Depends(deps.get_account)):
     """Outages and limited periods, newest first: derived from the polls
-    (with the documented cause) and documented windows no poll shows."""
-    tag, cached = deps.etag(request, acc, None)
+    (with the documented cause), documented windows no poll shows and the
+    excluded windows of discard mode (type excluded, source discard)."""
+    tag, cached = deps.etag(request, acc, deps.minute_epoch())
     if cached:
         return cached
     with deps.connection() as conn:

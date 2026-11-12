@@ -55,6 +55,10 @@ SELECT se.id, se.name, se.location, se.hardware,
                                     WHERE k.sensor_id = se.id AND k.confirmed_at IS NOT NULL), 0)
         ORDER BY c.version DESC LIMIT 1) AS pending,
        (st.heartbeat #>> '{config_state,accepting}')::boolean AS config_accepting,
+       -- discard mode (schema 20): the window that is on now and what it discarded so far
+       (SELECT json_build_object('started_at', t.started_at, 'until', t.until, 'note', t.note, 'polls', t.polls,
+                                 'batches', t.batches, 'last_at', t.last_at)
+        FROM discard_window_totals t WHERE t.sensor_id = se.id AND t.active) AS discard,
        (SELECT a.result FROM sensor_config_attempts a WHERE a.sensor_id = se.id
         ORDER BY a.reported_at DESC, a.version DESC LIMIT 1) AS config_attempt
 FROM sensors se
@@ -106,7 +110,8 @@ WHERE se.account_id = %(account_id)s AND se.name = %(name)s
 -- derived from its polls (sensor_periods) with the documented cause of the
 -- overlapping annotations (gap / no frames for an outage, coverage for a
 -- limited period), plus the documented windows no derived period covers
--- (limited capture before buffer v4 had no hop flag) and restarts.
+-- (limited capture before buffer v4 had no hop flag) and restarts; schema
+-- 20: the windows of discard mode (excluded - never an outage).
 SELECT p.kind AS type, p.starts_at, p.ends_at, p.ends_at IS NULL AS ongoing,
        extract(epoch FROM coalesce(p.ends_at, ss.last_poll) - p.starts_at)::int AS duration_s, p.polls,
        'polls' AS source,
@@ -130,7 +135,24 @@ WHERE a.sensor_id = %(sensor_id)s AND a.kind IN ('restart', 'gap', 'no_frames', 
         WHERE p.sensor_id = a.sensor_id
           AND CASE p.kind WHEN 'outage' THEN a.kind IN ('gap', 'no_frames') ELSE a.kind = 'coverage' END
           AND p.starts_at < coalesce(a.ends_at, a.starts_at) AND coalesce(p.ends_at, 'infinity') > a.starts_at))
+UNION ALL
+SELECT 'excluded', t.started_at, CASE WHEN NOT t.active THEN coalesce(t.ended_at, t.until) END, t.active,
+       extract(epoch FROM coalesce(t.ended_at, least(t.until, now())) - t.started_at)::int, t.polls::int,
+       'discard', 'Discard mode: ' || t.note
+FROM discard_window_totals t
+WHERE t.sensor_id = %(sensor_id)s
 ORDER BY 2 DESC
+
+-- name: excluded
+-- The excluded windows of discard mode (schema 20, sensor_excluded():
+-- disjoint, excl_to NULL = still on) of the given sensors in the given time
+-- range - never an outage, nor "no data", in the coverage.
+SELECT se.id AS sensor_id, x.excl_from, x.excl_to
+FROM sensors se
+CROSS JOIN LATERAL sensor_excluded(se.id) x
+WHERE se.id = ANY (%(sensor_ids)s::int[])
+  AND x.excl_from < %(to)s::timestamptz AND coalesce(x.excl_to, 'infinity') > %(from)s::timestamptz
+ORDER BY se.id, x.excl_from
 
 -- name: coverage_notes
 -- Documented windows of limited capture (sensor_annotations, coverage) in
