@@ -151,7 +151,7 @@ export function stateNote(s, st, tz) {
 }
 
 // the note of a live sensor (docs/live-upload.md 8.1, 8.2): no contact, not
-// capturing, catching up, polls waiting for the clock
+// capturing, catching up, polls waiting for the clock, discard mode (schema 20)
 function liveNote(s, st, tz) {
   const c = s.contact;
   switch (s.status) {
@@ -169,6 +169,12 @@ function liveNote(s, st, tz) {
     case "clock_unverified":
       return { bad: false, text: `${fmtInt(c.held_polls ?? 0)} polls wait for the sensor's clock: it booted without NTP; `
         + "they are uploaded on their true time once the clock is anchored." };
+    case "discarding": {
+      const d = s.discard ?? {};
+      return { bad: false, text: `Discard mode until ${fmtDateTime(d.until, tz)}: in contact, its uploads are accepted `
+        + `and not stored (${fmtInt(d.polls ?? 0)} polls discarded). The window is excluded from loss, outages and `
+        + "coverage; it switches itself off at the end." };
+    }
     default:
       return null;
   }
@@ -202,6 +208,7 @@ export function sinceText(s, tz) {
 // state "no data yet" after the last import, PLAN 3.7).
 export const COVERAGE = [
   { key: "no_data", label: "no data yet (after the last import)", color: "var(--wash)" },
+  { key: "excluded", label: "excluded (discard mode - not stored)", color: "var(--lvl-unknown)" },
   { key: "outage", label: "outage", color: "var(--dot-bad)" },
   { key: "limited", label: "limited channels", color: "var(--lvl-psk)" },
   { key: "ok", label: "successful polls, full channel list", color: "var(--dot-ok)" },
@@ -209,7 +216,7 @@ export const COVERAGE = [
 ];
 
 // the legend in the board's order, the states that occur in the days (successful always)
-const LEGEND = ["ok", "limited", "outage", "not_installed", "no_data"];
+const LEGEND = ["ok", "limited", "outage", "excluded", "not_installed", "no_data"];
 export function legendItems(days) {
   return LEGEND.map((k) => COVERAGE.find((c) => c.key === k))
     .filter((c) => c.key === "ok" || (days ?? []).some((d) => d[c.key] > 0));
@@ -261,6 +268,7 @@ export const OUTAGE_TYPES = {
   outage: { cls: "bad", text: "Outage" },
   limited: { cls: "warn", text: "Limited channels" },
   restart: { cls: "neu", text: "Restart" },
+  excluded: { cls: "info", text: "Excluded (discard mode)" },
 };
 
 // the table rows: from, duration (ongoing), type badge, cause
@@ -272,6 +280,6 @@ export function outageRows(items, tz) {
     duration: `${o.duration_s == null ? "–" : durText(o.duration_s)}${o.ongoing ? " (ongoing)" : ""}`,
     type: OUTAGE_TYPES[o.type] ?? { cls: "neu", text: o.type },
     cause: o.cause ?? "not documented",
-    documented: o.source === "annotation",
+    documented: o.source === "annotation" || o.source === "discard",
   }));
 }

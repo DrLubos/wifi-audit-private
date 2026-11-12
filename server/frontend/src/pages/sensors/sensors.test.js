@@ -135,4 +135,25 @@ test("coverage columns and the outage table", () => {
   eq(outageRows([{ ...OUTAGES[0], to: null, ongoing: true }], TZ)[0].duration, "4 d 2 h (ongoing)");
 });
 
+test("discard mode: the note of a sensor in discard mode", () => {
+  const s = { ...FRI, status: "discarding", last_capture_at: "2026-10-11T18:00:00Z",
+              contact: { last_contact_at: "2026-10-11T20:46:30Z", backlog_polls: 0, held_polls: 0 },
+              discard: { until: "2026-10-12T00:00:00Z", polls: 240, note: "PoE" } };
+  eq(stateNote(s, sensorState(s, 15, "2026-10-11T20:47:00Z", TZ), TZ),
+     { bad: false, text: "Discard mode until 12 Oct 02:00: in contact, its uploads are accepted and not stored (240 polls discarded). The window is excluded from loss, outages and coverage; it switches itself off at the end." });
+});
+
+test("discard mode: the excluded share and the excluded rows", () => {
+  const days = [{ date: "2026-11-02", ok: 0.75, limited: 0, outage: 0, not_installed: 0, no_data: 0, excluded: 0.25 }];
+  const cols = coverageColumns(days, "pi-fri", [], "UTC", "2026-11-03");
+  eq(cols[0].segs.map((s) => [s.key, s.share]), [["excluded", 0.25], ["ok", 0.75]]);
+  eq(cols[0].rows.map((r) => `${r.v} ${r.l}`), ["25.0 % excluded (discard mode - not stored)",
+                                                "75.0 % successful polls, full channel list"]);
+  eq(legendItems(days).map((c) => c.key), ["ok", "excluded"]);
+  const rows = outageRows([{ type: "excluded", from: "2026-11-02T10:00:00Z", to: "2026-11-02T16:00:00Z", ongoing: false,
+                             duration_s: 21600, polls: 720, source: "discard", cause: "Discard mode: PoE power test" }], "UTC");
+  eq(rows[0].type, { cls: "info", text: "Excluded (discard mode)" });
+  eq([rows[0].duration, rows[0].cause, rows[0].documented], ["6 h", "Discard mode: PoE power test", true]);
+});
+
 done();

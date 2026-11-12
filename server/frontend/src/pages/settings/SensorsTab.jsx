@@ -3,13 +3,15 @@
 // until the sensor upload exists, Q10), each sensor's location and
 // description, its capture hardware (adapter and antenna from the catalog;
 // a change is a data boundary - RSSI baselines start again from it, schema
-// 11) with the catalog itself, and the configuration history with its data
+// 11) with the catalog itself, discard mode (schema 20: a window whose uploads
+// are accepted and not stored) and the configuration history with its data
 // boundaries. ?sensor=<name> preselects a sensor (the Sensors page link).
 
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { sensorState } from "../../app/status.js";
 import ErrorBox from "../../components/ErrorBox.jsx";
+import DiscardCard from "./DiscardCard.jsx";
 import Skeleton from "../../components/Skeleton.jsx";
 import { ep } from "../../data/keys.js";
 import { useQuery } from "../../data/query.js";
@@ -30,6 +32,7 @@ export default function SensorsTab() {
   return (
     <>
       <ConfigCard d={d} account={account} />
+      <DiscardCard d={d} tz={account.tz} />
       <SensorList d={d} />
       <HardwareCard d={d} tz={account.tz} />
       <HistoryCard d={d} tz={account.tz} />
@@ -203,6 +206,7 @@ function HistoryCard({ d, tz }) {
         <h2 id="hist-h">Configuration history</h2>
         <span className="muted small">
           Every channel-plan or hardware change is a boundary in the data; measurements before and after are evaluated separately.
+          A discard-mode window is excluded: nothing of it is stored, and it never counts as loss or an outage.
         </span>
       </div>
       <div className="scroll-x">

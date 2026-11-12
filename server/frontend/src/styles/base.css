@@ -219,3 +219,16 @@ dialog.modal .check input { width: 18px; height: 18px; margin: 0; }
 dialog.modal table { width: 100%; border-collapse: collapse; }
 dialog.modal th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 dialog.modal td { padding: 8px 10px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
+
+/* discard mode (schema 20): the banner under the top bar while a sensor's window is on */
+.discard-banners {
+  display: flex; flex-direction: column; gap: 8px; padding: 12px var(--gutter) 0; max-width: var(--page-max);
+  box-sizing: border-box; width: 100%; margin-inline: auto;
+}
+.discard-banner {
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border-radius: 10px; background: var(--warn-bg); color: var(--warn-fg);
+  border: 1px solid #f0d9b5;
+}
+.discard-banner .stack { display: flex; flex-direction: column; gap: 2px; flex: 1 1 320px; min-width: 0; }
+.discard-banner .em { color: inherit; font-weight: 600; }

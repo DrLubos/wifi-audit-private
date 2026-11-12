@@ -5,8 +5,8 @@ import { fmtDateTime, fmtDuration, toDate } from "../format.js";
 
 // A sensor's state against now. A sensor that uploads live (s.contact, schema
 // 14) has the api's status (docs/live-upload.md 8.2): online, catching_up,
-// clock_unverified, not_capturing, unreachable - "last seen" counts from the
-// last contact. One seen only through snapshot imports has data up to its
+// clock_unverified, not_capturing, unreachable, discarding (discard mode on,
+// schema 20) - "last seen" counts from the last contact. One seen only through snapshot imports has data up to its
 // last import (SPEC Q7): it reads "data until <time>" once that poll is older
 // than the offline threshold, not "offline"; it is offline when its data
 // itself ends in an outage.
@@ -49,6 +49,9 @@ function liveState(s, now) {
                short: since ? `not capturing ${since}` : "not capturing",
                badge: since ? `Not capturing ${since}` : "Not capturing" };
     }
+    case "discarding":
+      return { tone: "warn", dot: "d-warn", live: true, discarding: true, short: "discard mode",
+               badge: "Discard mode · not stored" };
     case "clock_unverified":
       return { tone: "warn", dot: "d-warn", live: true, short: "clock unverified", badge: "Clock unverified" };
     case "catching_up": {
@@ -59,6 +62,33 @@ function liveState(s, now) {
     default:
       return { tone: "ok", dot: "d-ok", live: true, short: "online", badge: "Online" };
   }
+}
+
+// "3 h 15 min left", "45 min left", "ends now" (under a minute)
+export function leftText(until, now) {
+  const s = Math.floor((toDate(until).getTime() - toDate(now).getTime()) / 1000);
+  if (!(s >= 60)) return "ends now";
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${[h ? `${h} h` : null, m ? `${m} min` : null].filter(Boolean).join(" ")} left`;
+}
+
+// The banner of discard mode (schema 20, docs/discard-mode.md) on every page
+// of the shell: one per sensor whose window is on (/api/v2/sensors: discard)
+// - what it means for the data, its end, what it discarded, the note.
+export function discardBanners(sensors, now, tz) {
+  return (sensors ?? []).filter((s) => s.discard).map((s) => {
+    const d = s.discard;
+    const left = leftText(d.until, now);
+    return {
+      sensor: s.name,
+      href: `/settings/sensors?sensor=${encodeURIComponent(s.name)}`,
+      head: `Discard mode on for ${s.name} until ${fmtDateTime(d.until, tz)} (${left})`,
+      text: `Uploads are accepted but not stored - ${d.polls ?? 0} polls discarded so far. `
+        + "The window is excluded from loss, outages and coverage."
+        + (d.note ? ` Note: ${d.note}` : ""),
+    };
+  });
 }
 
 export const SEVERITY = {

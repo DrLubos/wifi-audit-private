@@ -4,6 +4,7 @@
 // the channel plans with Kismet's hop-stride rule, the hardware texts and the
 // configuration history with its data boundaries.
 
+import { leftText } from "../../app/status.js";
 import { fmtDateTime, fmtInt, partsOf } from "../../format.js";
 
 export const TABS = [
@@ -313,12 +314,57 @@ export function deleteGuard(meta, name, typed) {
 
 // --- the history --------------------------------------------------------------------------------
 
+// what an excluded window (discard mode) of the history discarded
+function excludedLabel(h, tz) {
+  const d = h.discard ?? {};
+  const until = h.ends_at ? `until ${fmtDateTime(h.ends_at, tz)}` : "still on";
+  const what = d.polls ? `${fmtInt(d.polls)} polls discarded${d.seq_from != null ? `, seq ${d.seq_from}-${d.seq_to}` : ""}`
+    : "nothing discarded yet";
+  return `${h.label} (${until}; ${what})`;
+}
+
 // rows of the configuration history: valid from, sensor, change, effect on the data
 export function historyRows(history, tz) {
   return (history ?? []).map((h, i) => ({
-    key: `${h.ts}|${h.sensor}|${i}`, ts: fmtDateTime(h.ts, tz), sensor: h.sensor, label: h.label,
+    key: `${h.ts}|${h.sensor}|${i}`, ts: fmtDateTime(h.ts, tz), sensor: h.sensor,
+    label: h.kind === "excluded" ? excludedLabel(h, tz) : h.label,
     boundary: h.boundary,
     effect: h.kind === "hardware_change" ? "RSSI baselines start again"
-      : h.kind === "coverage" ? "tried and rolled back - no boundary" : h.boundary ? "evaluated apart" : "no boundary",
+      : h.kind === "coverage" ? "tried and rolled back - no boundary"
+        : h.kind === "excluded" ? "excluded - not stored, never counted as loss or outage"
+          : h.boundary ? "evaluated apart" : "no boundary",
   }));
+}
+
+// --- discard mode (schema 20, docs/discard-mode.md) ----------------------------------------------
+
+export const DISCARD_HOURS = [1, 2, 3, 4, 6, 8, 12, 24];
+const DISCARD_MAX_S = 24 * 3600;
+
+// why the form cannot be sent, or null (api writes.py parse_discard: a note,
+// an end at least a minute and at most 24 h ahead)
+export function discardProblem(f, now = Date.now()) {
+  if (!(f.note ?? "").trim()) return "a note is required - what the test is";
+  let s;
+  if (f.mode === "until") {
+    if (!f.untilUtc) return "give the end time";
+    s = (Date.parse(f.untilUtc) - now) / 1000;
+    if (!(s >= 60)) return "the end must lie at least a minute ahead";
+  } else {
+    s = Number(f.hours) * 3600;
+    if (!(s >= 60)) return "at least a minute";
+  }
+  if (s > DISCARD_MAX_S) return "at most 24 hours";
+  return null;
+}
+
+export function discardBody(f) {
+  const note = f.note.trim();
+  return f.mode === "until" ? { until: f.untilUtc, note } : { duration_h: Number(f.hours), note };
+}
+
+// the card's line of one sensor: off, or on until ... with what it discarded
+export function discardLine(d, tz, now = Date.now()) {
+  if (!d) return "off - every upload is stored";
+  return `on until ${fmtDateTime(d.until, tz)} (${leftText(d.until, now)}) · ${fmtInt(d.polls ?? 0)} polls discarded`;
 }

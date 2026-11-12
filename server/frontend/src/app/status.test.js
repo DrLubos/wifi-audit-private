@@ -1,5 +1,5 @@
 import { test, eq, done } from "../testing/tiny.js";
-import { sensorState, severitySummary } from "./status.js";
+import { discardBanners, sensorState, severitySummary } from "./status.js";
 
 const TZ = "Europe/Bratislava";
 const NOW = "2026-10-11T20:00:00Z";
@@ -54,6 +54,32 @@ test("live: not capturing", () => {
 test("severity summary", () => {
   eq(severitySummary({ critical: 0, high: 7, medium: 30, low: 221, info: 3 }), "7 high · 30 medium · 221 low · 3 info");
   eq(severitySummary({}), "");
+});
+
+// discard mode (schema 20, docs/discard-mode.md): uploads accepted, nothing stored
+test("live: discarding", () => {
+  const s = { ...LIVE, status: "discarding", last_capture_at: "2026-10-11T18:00:00Z",
+              discard: { until: "2026-10-11T23:00:00Z", polls: 240, note: "PoE test" } };
+  const st = sensorState(s, 15, NOW, TZ);
+  eq([st.tone, st.dot, st.short, st.badge, st.offline], ["warn", "d-warn", "discard mode", "Discard mode · not stored", undefined]);
+});
+
+test("the discard banner: one per sensor in discard mode, with the end and what was discarded", () => {
+  const sensors = [
+    { name: "pi-fri", discard: { started_at: "2026-10-11T18:00:00Z", until: "2026-10-11T23:15:00Z", polls: 240,
+                                 note: "PoE power test" } },
+    { name: "pi-lab", discard: null },
+    { name: "pi-old" },
+  ];
+  const b = discardBanners(sensors, NOW, TZ);
+  eq(b.length, 1);
+  eq(b[0].sensor, "pi-fri");
+  eq(b[0].href, "/settings/sensors?sensor=pi-fri");
+  eq(b[0].head, "Discard mode on for pi-fri until 12 Oct 01:15 (3 h 15 min left)");
+  eq(b[0].text, "Uploads are accepted but not stored - 240 polls discarded so far. The window is excluded from loss, outages and coverage. Note: PoE power test");
+  eq(discardBanners([{ name: "x", discard: { until: "2026-10-11T20:00:30Z", polls: 1, note: "n" } }], NOW, TZ)[0].head,
+     "Discard mode on for x until 11 Oct 22:00 (ends now)");
+  eq(discardBanners(null, NOW, TZ), []);
 });
 
 done();

@@ -2,7 +2,7 @@ import { test, eq, done } from "../../testing/tiny.js";
 import {
   adapterLine, adapterSource, deleteGuard, hardwareChangeBody, hardwareChangeProblem, renameNote, sensorBody,
   sensorNameProblem,
-  addAllowed, classificationBody, classificationDraft, classificationProblem, configState, cycleText,
+  addAllowed, classificationBody, discardBody, discardLine, discardProblem, classificationDraft, classificationProblem, configState, cycleText,
   detectorsBody, detectorsDraft, detectorsProblem, historyRows, hopStride, networkDraft,
   networksBody, ouiText, parseAllowed, planList, planText, removeAllowed, sameBody, ssidProblem, utcToZoned, utf8Length,
   zonedToUtc,
@@ -149,6 +149,31 @@ test("sensors: names, the body, rename and the guarded delete", () => {
   eq(deleteGuard({ has_polls: false }, "pi-new", "").why, "type pi-new to confirm");
   eq(deleteGuard({ has_polls: false }, "pi-new", "pi-ne").allowed, false);
   eq(deleteGuard({ has_polls: false }, "pi-new", " pi-new ").allowed, true);
+});
+
+test("discard mode: the body, its problems, the card line and the history row", () => {
+  const now = Date.parse("2026-11-12T12:00:00Z");
+  eq(discardProblem({ mode: "duration", hours: 6, note: "PoE test" }, now), null);
+  eq(discardProblem({ mode: "duration", hours: 25, note: "PoE test" }, now), "at most 24 hours");
+  eq(discardProblem({ mode: "duration", hours: 0, note: "PoE test" }, now), "at least a minute");
+  eq(discardProblem({ mode: "duration", hours: 6, note: "  " }, now), "a note is required - what the test is");
+  eq(discardProblem({ mode: "until", untilUtc: "2026-11-12T20:00:00Z", note: "x" }, now), null);
+  eq(discardProblem({ mode: "until", untilUtc: "2026-11-12T11:00:00Z", note: "x" }, now), "the end must lie at least a minute ahead");
+  eq(discardProblem({ mode: "until", untilUtc: "2026-11-13T12:00:01Z", note: "x" }, now), "at most 24 hours");
+  eq(discardProblem({ mode: "until", untilUtc: null, note: "x" }, now), "give the end time");
+  eq(discardBody({ mode: "duration", hours: 6, note: " PoE test " }), { duration_h: 6, note: "PoE test" });
+  eq(discardBody({ mode: "until", untilUtc: "2026-11-12T20:00:00Z", note: "x" }), { until: "2026-11-12T20:00:00Z", note: "x" });
+  eq(discardLine(null, TZ, now), "off - every upload is stored");
+  eq(discardLine({ until: "2026-11-12T18:00:00Z", polls: 12, batches: 12, note: "PoE" }, TZ, now),
+     "on until 12 Nov 19:00 (6 h left) · 12 polls discarded");
+  const rows = historyRows([{ sensor: "pi-fri", ts: "2026-11-12T10:00:00Z", boundary: false, kind: "excluded",
+                              label: "Discard mode: PoE test", ends_at: "2026-11-12T16:00:00Z",
+                              discard: { polls: 720, seq_from: 26661, seq_to: 27380 } }], TZ);
+  eq(rows[0].label, "Discard mode: PoE test (until 12 Nov 17:00; 720 polls discarded, seq 26661-27380)");
+  eq(rows[0].effect, "excluded - not stored, never counted as loss or outage");
+  const on = historyRows([{ sensor: "pi-fri", ts: "2026-11-12T10:00:00Z", boundary: false, kind: "excluded",
+                            label: "Discard mode: PoE test", ends_at: null, discard: { polls: 0, seq_from: null, seq_to: null } }], TZ);
+  eq(on[0].label, "Discard mode: PoE test (still on; nothing discarded yet)");
 });
 
 done();
