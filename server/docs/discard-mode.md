@@ -144,4 +144,32 @@ start/stop, expiry, windows, periods, loss, resume, late rows),
 
 ## Rollout record
 
-(filled in at the rollout)
+2026-11-12, by Claude Code (the sensor was off from 07:05 UTC, so no upload
+was in flight):
+
+- Tests on the Mac: api 177, server 39 (schema files: the migration carries
+  schema.sql's tables and functions), evaluation 71, frontend logic files
+  under jsc; the frontend image build ran `node --test` (14 files) on the box.
+- Rehearsal on `wifi_audit_scratch` (restore of `wifi_audit-20261112T074057Z.dump`):
+  `MIGRATE_DB=wifi_audit_scratch sh ops/migrate_schema20.sh` - every fixture
+  test PASS, `discard_test.sql` included; then an end-to-end run of the real
+  ingest and Settings routes in a one-off api container against scratch (35
+  checks: a normal batch stored; on via the route; a batch while on 200 with
+  nothing stored, its record, a replay counted, a 422 still a 422; off via the
+  route; a late batch's poll inside the window dropped and recorded, the new
+  one stored; resume, the loss rule, no outage across the window, the
+  outages row, coverage without an outage; the expiry by the refresher's step
+  0 with its audit row and write_version). Two findings fixed before the live
+  run: the history entry is linked by its ref, and the coverage widens a
+  window to the adjacent polls (a poll spacing of 90 s or less is no outage).
+  The pipeline and dataset export SQL ran on scratch (an e2e sensor: jump
+  fully `excluded`, `seq_missing` 0; pi-fri: the same figures as before).
+- Backup `wifi_audit-20261112T080953Z.dump` (sha256 a25012a9...b78c, equal on
+  the box and in `~/wifi-audit-backups/`), then `sh ops/migrate_schema20.sh`
+  08:13:45 - 08:14:14 UTC (log `~/migrate20-20261112T0813Z.log`): every fixture
+  test PASS, the 23 stored sensor_periods equal to a recompute by the new
+  function.
+- `docker compose build api frontend`, `up -d api refresher frontend`
+  08:18 UTC; `v2_smoke.py` 0 failures (130 checks, the new writes refuse
+  without the token); `/api/health` schema 20; the changed read queries
+  under 1 ms (`ep_v2.py`).
