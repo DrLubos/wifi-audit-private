@@ -19,6 +19,14 @@ services:
   db:
     image: postgres:17
     restart: unless-stopped
+    # tini as PID 1, so the postmaster is never the container's init: an
+    # orphaned process (a health probe whose shell was killed at its timeout,
+    # a `docker compose exec db sh -c ...` that lost its parent) is reaped by
+    # tini. As PID 1 the postmaster adopted such orphans, and PostgreSQL 17
+    # takes any unknown child that exits with a status >= 2 for a crashed
+    # server process - pg_isready's "no response" is exit status 2: the
+    # crash-restarts of docs/postgres-crashes.md.
+    init: true
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -39,10 +47,13 @@ services:
       # Runs once, when the data volume is first initialised. To re-apply the
       # (idempotent) file later: see README.md.
       - ./schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
+    # `exec`: the shell becomes pg_isready instead of forking it (dash forks
+    # for `sh -c`), so a probe killed at its timeout leaves no orphan behind.
+    # pg_isready gives up by itself after 3 s (-t), well inside the timeout.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test: ["CMD-SHELL", "exec pg_isready -q -t 3 -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 30s               # each probe is a docker exec: CPU the e2-micro's budget pays for
-      timeout: 5s
+      timeout: 10s
       retries: 12
     # Time for the shutdown checkpoint before SIGKILL (default 10 s): a killed
     # postgres recovers from WAL on the next start and loses its statistics

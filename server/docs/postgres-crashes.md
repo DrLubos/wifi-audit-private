@@ -1,8 +1,12 @@
 # Postgres crash-restarts (investigation)
 
-Status: **open** - diagnostic logging enabled 2026-10-18 (developer's approval
-of 2026-10-18; logging only, any other configuration change needs the
-developer's OK).
+Status: **cause found 2026-11-14** (very likely; traced on the crash of
+that day, not reproduced in isolation) - the db healthcheck's `pg_isready`,
+orphaned when its probe is killed at the timeout, is adopted by the postmaster
+(PID 1) and its exit status 2 is taken for a crashed server process. The fix
+is in `docker-compose.yml` (`init: true`, `exec pg_isready -t 3`, timeout
+10 s) and is **not deployed**: it recreates the db container (a short
+database stop, and the container's log is deleted) - the developer's OK.
 
 ## Symptom
 
@@ -25,6 +29,7 @@ idle, or still starting up).
 | 2026-10-16 05:05:30 | snapd refresh check 05:04:56 |
 | 2026-10-17 21:04:34 | frontend image build (step 5) |
 | 2026-10-17 21:23:53 | api image build + api/refresher recreated 21:23:16-19 |
+| 2026-11-14 12:41:45 | snapd refresh check 12:40:30; swap-out 135 pages/s, direct reclaim 100 pages/s in the 12:40-12:50 sample |
 
 ## What it is not
 
@@ -34,8 +39,9 @@ idle, or still starting up).
 - **Not /dev/shm:** 64 MB, 2 % used (a DSM failure is an ERROR with a message).
 - **Not a signal-terminated crash** (segfault, abort): those are logged as
   "terminated by signal n".
-- Not the healthcheck itself: `pg_isready` is a client; a killed probe cannot
-  take a backend down.
+- ~~Not the healthcheck itself~~ - this was wrong, see "The cause" below: a
+  killed probe cannot take a backend down, but its orphaned `pg_isready` can
+  look like one to the postmaster.
 
 **Memory pressure in every case** (sysstat, 10-min samples of the interval
 holding the crash vs the one before):
@@ -56,6 +62,84 @@ which the postmaster sends to all children only *after* a crash - here the
 first child exits with 2 by itself, so either something else delivered a
 SIGQUIT or the process exited with status 2 on another path. The common
 factor of all four is memory pressure on the 1 GB box (builds, apt).
+
+## The cause (traced 2026-11-14)
+
+The crash of 2026-11-14 12:41:45 UTC is the first with the diagnostic
+logging on. The crashed PID 699556 has **no "connection received" line** -
+it was never a backend - and no autovacuum or other server line either.
+What the log, the PID sequence and dockerd's journal show:
+
+| Time (UTC) | Event |
+|---|---|
+| 12:40:30 | snapd refresh check; the box starts swapping |
+| 12:40:49.6 - 51.9 | health probe: its connection takes 2.5 s (normally 3 ms) |
+| 12:40:58 | dockerd: "Could not send KILL signal to container process ... process already finished" for the db container - that probe hit the 5 s timeout |
+| ~12:41:28 | the next probe starts (PIDs 699548 ...); its `pg_isready` is PID 699556 |
+| ~12:41:33 | the probe's 5 s timeout: dockerd kills the probe's shell |
+| 12:41:40.153 | an api connection gets PID 699557 |
+| 12:41:42.256 | `pg_isready`'s connection is received by backend 699558 (authorized 42.466) |
+| 12:41:45.710 | `server process (PID 699556) exited with exit code 2` - 3 s after it connected: pg_isready's own timeout, exit status 2 = "no response" |
+| 12:41:46.163 | backend 699558: "could not send data to client: Broken pipe" |
+
+The mechanism (steps 1 and 2 checked on the box; 3 and 4 are PostgreSQL 17's
+behaviour as read from its source - `sendAuthRequest()` in auth.c,
+`CleanupBackend()` in postmaster.c - and are what the reproduction below
+confirms or refutes):
+
+1. The healthcheck is `CMD-SHELL pg_isready ...`, i.e. `/bin/sh -c`. dash
+   (0.5.12 in the postgres:17 image) **forks** for it: `docker compose exec
+   -T db sh -c "cat /proc/self/stat"` shows the command with the shell as
+   its parent. So `pg_isready` is a child of the probe's `sh`.
+2. When a probe exceeds its timeout, dockerd kills the exec's main process -
+   the `sh`. `pg_isready` is orphaned, and an orphan in a container goes to
+   the PID namespace's init: **postgres itself is PID 1** (`HostConfig.Init`
+   unset), so the postmaster adopts it.
+3. `pg_isready` waits 3 s for an answer. A backend answers only after its
+   start-up (the AuthenticationOk is not flushed before ReadyForQuery), which
+   took longer than that while the box was swapping: exit status 2.
+4. PostgreSQL 17's postmaster reaps the unknown child and `CleanupBackend()`
+   calls `HandleChildCrash()` for any exit status other than 0 or 1 *before*
+   it looks the PID up in its backend list: "server process (PID n) exited
+   with exit code 2", every backend is terminated, crash recovery.
+
+That is why nothing is logged by the dying process, why there is never a
+"Failed process was running" detail, why it needs memory pressure (a probe
+must both time out and then get no answer for 3 s - dockerd logged 86 killed
+probes in 30 days against 5 crashes) and why it is not reproducible with a
+build alone. dockerd's journal shows killed health probes around the earlier
+crashes too (10-14 06:06:19, 10-16 05:06:16, 10-17 21:02:41; the line is
+logged only when the probe had already ended by the time of the KILL, so it
+is not a one-to-one record).
+
+**Check without the live database** (any machine with Docker; a throw-away
+container):
+
+    docker run -d --name pgtest -e POSTGRES_PASSWORD=x postgres:17
+    docker exec -d pgtest sh -c '(sleep 5; exit 2) &'      # an orphan that exits with status 2
+    sleep 8; docker logs pgtest 2>&1 | grep -A3 "exit code 2"; docker rm -f pgtest
+
+With `docker run --init` in the first line the orphan goes to tini and
+nothing is logged.
+
+## The fix (in `docker-compose.yml`, not deployed)
+
+- `init: true` on the db service: tini is PID 1 and reaps every orphan - also
+  those of `docker compose exec db sh -c ...` sessions (psql scripts, the
+  backup) that lose their parent.
+- The healthcheck is `exec pg_isready -q -t 3 ...` with `timeout: 10s`: the
+  shell becomes pg_isready (no child to orphan), and pg_isready gives up by
+  itself well inside the timeout.
+
+Deploying it is `docker compose up -d db`: the container is **recreated**
+(the database stops for a few seconds - the uploader retries, the refresher
+keeps its dirty mark - and the container's log, including the trace above,
+is deleted). Note: once this file is on the box, a plain `docker compose up
+-d` (all services) recreates db too; `docker compose up -d api` and the like
+do not. Afterwards `docker inspect --format '{{.HostConfig.Init}}'
+wifi-audit-db-1` is `true` and `docker compose exec -T db cat
+/proc/1/comm` is `docker-init`; the diagnostic log flags can stay until a
+few memory-pressure episodes have passed without a reset.
 
 ## Diagnostic logging (enabled 2026-10-18)
 
@@ -111,15 +195,10 @@ runs), snapd refreshes.
 
 None of these is applied; each is the developer's call (system settings).
 
-## Candidate fixes (for the developer's OK once the cause is known)
+## Still worth doing
 
-- If the crashed PID turns out to be a healthcheck connection under memory
-  pressure: a longer healthcheck `timeout` / `interval` (compose).
-- If it is a client backend (api, refresher, uploads): less memory pressure
-  on the box - image builds are the one heavy thing we start ourselves
-  (build less often, or with the api/refresher stopped), and the box's own
-  snapd / unattended-upgrades runs (the developer's call).
-- Either way the pipeline already rides through a reset: the uploader
-  retries (0 lost polls in all four), the refresher keeps its dirty mark
-  across a dead connection (since 2026-10-17).
-
+Less memory pressure on the box makes every request faster, whatever the
+healthcheck does: the items of "What could be trimmed safely" stay the
+developer's call. The pipeline rides through a reset either way: the uploader
+retries (0 lost polls in all five), the refresher keeps its dirty mark across
+a dead connection (since 2026-10-17).
