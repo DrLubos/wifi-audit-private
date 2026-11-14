@@ -70,6 +70,23 @@ class Boot:
                 "offset_max_s": max(offsets) if offsets else None}
 
 
+class Window:
+    """The stale window of a boot that is not in the batch (its polls may be
+    pruned by now): what placeable() reads of a Boot. delta None = the boot
+    never got an anchor - a value in its window cannot be placed."""
+
+    def __init__(self, start, end, delta):
+        self._window = (start, end)
+        self.delta = delta
+
+    @property
+    def anchored(self):
+        return self.delta is not None
+
+    def stale_window(self):
+        return self._window
+
+
 HOLD, UNVERIFIED, SEND = "hold", "unverified", "send"
 
 

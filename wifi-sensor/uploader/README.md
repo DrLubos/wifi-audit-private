@@ -20,16 +20,37 @@ design in `../../server/docs/live-upload.md` (sections 4, 5 and 8.3).
 - **The true time line** (`timeline.py`): polls of a boot without NTP are
   placed from the boot's clock anchor and CLOCK_MONOTONIC (buffer v8); polls
   of the current boot without an anchor are held back (after 2 min of
-  contact the server's time becomes the anchor); a boot that ended without
-  one is time-unverified - counted, never uploaded.
+  contact the server's time becomes the anchor - after 30 min,
+  `SERVER_ANCHOR_SYNCED_S`, while chrony is synchronised: the collector's
+  own anchor is then on its way); a boot that ended without one is
+  time-unverified - counted, never uploaded. A device first seen on a stale
+  clock keeps the stale `first_seen` on the sensor for good, so the stale
+  window of every such boot stays in the state file (`stale_windows`) and
+  the value is corrected in every later batch, also after the retention has
+  removed the boot's polls.
+- **AP load after a late NTP anchor**: the collector folds a stretch's
+  pending AP load into `ap_load_hourly` when its NTP anchor commits. If the
+  uploader had sent that stretch on a server anchor before, it moves its
+  load cursor back once (`load_resent` in the state) and sends those hours
+  again, at most 5,000 load rows a batch; the server keeps the row with
+  more polls, so a second copy changes nothing. (A boot that never gets an
+  NTP anchor keeps its pending load on the sensor: it is not uploaded.)
 - **Only what the server keeps**: polls, AP devices, configuration history,
   AP observations, AP load, AP frequency histograms, alerts - never a client
   device, associations, client BSSIDs or probes.
 - **TLS always verified** (stdlib default context), https only; the token
   (`/etc/wifi-sensor/ingest.token`, root:<sensor user> 0640) is never logged.
-- **Failures**: 413 halves the batch; 401/403 back off to 10 min (the server
-  opens an `upload_unauthorized` event); 409 retries on the next tick;
-  network errors, 5xx, 422 and 429 back off exponentially from 5 s to 10 min.
+- **Limits**: a batch is cut to fewer polls until it has at most
+  `MAX_BATCH_BYTES` (1 MiB gzip) and `MAX_BATCH_ROWS` (25,000; the server
+  takes 30,000).
+- **Failures**: 413 halves the batch, and so does a 422 for more than one
+  poll - down to the single poll the server refuses, which then backs off
+  like the rest (the server opens an `upload_rejected` event naming it);
+  401/403 back off to 10 min (the server opens an `upload_unauthorized`
+  event); 409 retries on the next tick; network errors, 5xx, 422 and 429
+  back off exponentially from 5 s to 10 min. An unreadable state file is
+  moved to `state.json.corrupt` and treated as lost: the uploader restarts
+  from the server's last poll.
 
 Files: `uploader.py` (loop, `--check`, `--once`), `batch.py` (one batch
 from the buffer), `timeline.py` (time placement), `client.py` (HTTPS),

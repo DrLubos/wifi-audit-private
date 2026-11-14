@@ -12,9 +12,12 @@ anchor; a gap of the batch). Rows are taken by their poll: observations,
 configuration history and alerts after their cursors, by poll_id (rows of
 buffers <= v7 by their ts); AP rows only (the AP evidence of the importer -
 a test keeps it equal); the AP load and frequency rows updated up to the
-batch's last true ts; the devices the batch references, with their time
-fields placed (timeline.py). Polls pruned on the sensor before the upload
-(the cursor is older than the oldest poll) are a 'lost' gap.
+batch's last true ts (at most LOAD_ROWS_PER_BATCH load rows a batch - the
+rest goes with the next ones); the devices the batch references, with their
+time fields placed (timeline.py) against the stale window of every boot the
+buffer or the uploader's state still knows, not only the batch's own. Polls
+pruned on the sensor before the upload (the cursor is older than the oldest
+poll) are a 'lost' gap.
 
 Column lists equal the server's (server/api/app/ingest/validate.py - a test
 compares them). Standard library only (tests/test_batch.py).
@@ -48,6 +51,9 @@ COLUMNS = {
 }
 ORDER = ("devices", "polls", "device_config_history", "observations", "ap_load_hourly", "device_freq_hist",
          "alerts")
+# AP load rows a batch carries at most: after load_rewind() days of hours are
+# due at once, and the server takes 30000 rows a batch (validate.MAX_ROWS)
+LOAD_ROWS_PER_BATCH = 5000
 
 
 def open_buffer(path):
@@ -138,6 +144,55 @@ def held_polls(db, current_boot):
                       (current_boot,)).fetchone()[0]
 
 
+def stale_windows(db, server_anchors, known=None):
+    """{boot_id: [from, to, delta]} - the stale window (on the stale clock)
+    and the shift to true time (None: no anchor) of every boot that ran on a
+    wrong clock: those with unsynchronised polls in the buffer, and `known`
+    (the uploader's state) for boots whose polls the retention has removed
+    since. A device row keeps a stale first_seen for good on the sensor
+    (MIN over all boots), so the window must outlive the polls: sent raw, the
+    server's LEAST() would move a correct first_seen back by the clock's
+    error (three APs, 8 h 25 min, after the offline boot of 2026-10-20)."""
+    out = {b: list(w) for b, w in (known or {}).items()}
+    if "clock_synced" not in _cols(db, "polls"):
+        return out
+    ids = {r[0] for r in db.execute("SELECT DISTINCT boot_id FROM polls WHERE clock_synced = 0") if r[0]}
+    for b, boot in boots(db, ids, server_anchors).items():
+        w = boot.stale_window()
+        if w is not None:
+            delta = boot.delta if boot.anchored else None
+            if delta is None and out.get(b, [None, None, None])[2] is not None:
+                continue                      # an anchor known before (a server anchor of a lost state) stays
+            out[b] = [w[0], w[1], delta]
+    return out
+
+
+def load_rewind(db, boot_id):
+    """Where the AP load cursor must go back to for a boot the uploader
+    anchored on the server's time: (done, ts).
+
+    The collector folds the boot's pending AP load into ap_load_hourly, on
+    the true hours, in the transaction of its first synchronised poll. An
+    uploader that had a server anchor by then has sent those polls already,
+    its load cursor is past their time, and the folded rows (last_ts in the
+    past) would never go (17 hours of 2026-11-02/03 did not). Once the
+    buffer shows the boot's NTP anchor: ts = just before the true time of
+    its first unsynchronised poll - the rows from there are sent again (the
+    server keeps the row with more polls, so a second copy changes nothing).
+    done without a ts: nothing to send again (the polls are pruned, or the
+    boot ended without an NTP anchor - its pending load is never folded)."""
+    tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "clock_anchors" not in tables or not boot_id:
+        return True, None
+    a = db.execute("SELECT wall, mono FROM clock_anchors WHERE boot_id = ?", (boot_id,)).fetchone()
+    if a is None:
+        return False, None
+    first = db.execute("SELECT min(mono) FROM polls WHERE boot_id = ? AND clock_synced = 0", (boot_id,)).fetchone()[0]
+    if first is None:
+        return True, None
+    return True, int(a["wall"] - a["mono"] + first) - 1
+
+
 # --- the batch -----------------------------------------------------------------------------------
 
 def _ranges(ids):
@@ -150,16 +205,17 @@ def _ranges(ids):
     return out
 
 
-def build(db, cursor, current_boot, server_anchors, max_polls):
+def build(db, cursor, current_boot, server_anchors, max_polls, windows=None):
     """(batch, new cursor, info) or (None, cursor, info) when nothing is due.
 
     batch: {"tables": {name: {"cols", "rows"}}, "gaps": [...], "boots": [...],
     "polls": n}; the envelope (v, batch_seq, buffer_id, ...) is added by the
-    caller. info: {"held": n, "unverified": {boot: polls}, "corrected":
-    {boot: (n, [offsets])}}.
+    caller. windows: stale windows the uploader's state remembers
+    (stale_windows()). info: {"held": n, "unverified": {boot: polls},
+    "corrected": {boot: (n, [offsets])}, "windows": {boot: [from, to, delta]}}.
     """
     has_v8 = "clock_synced" in _cols(db, "polls")
-    info = {"held": 0, "unverified": {}, "corrected": {}}
+    info = {"held": 0, "unverified": {}, "corrected": {}, "windows": dict(windows or {})}
     gaps = []
     oldest = db.execute("SELECT min(id) FROM polls").fetchone()[0]
     if oldest is not None and cursor["polls_id"] < oldest - 1 and cursor["polls_id"] > 0:
@@ -197,8 +253,18 @@ def build(db, cursor, current_boot, server_anchors, max_polls):
     skipped_set = set(skipped)
     true_to = max([p["true_ts"] for p in sent] + [cursor["load_ts"]])
     raw_to = max([p["ts"] for p in sent], default=0)
-    ap_keys = {r[0] for r in db.execute("SELECT key FROM devices WHERE " + AP_EVIDENCE)}
     new = dict(cursor, polls_id=last_id)
+    ap_known = {}
+
+    def is_ap(key):
+        """The AP evidence of one device, looked up once a batch. (All AP keys
+        at once was a scan of the whole devices table for every batch: 0.6 s
+        each 30 s with 480,000 devices in the buffer, growing with it.)"""
+        known = ap_known.get(key)
+        if known is None:
+            known = ap_known[key] = db.execute(
+                "SELECT 1 FROM devices WHERE key = ? AND (" + AP_EVIDENCE + ")", (key,)).fetchone() is not None
+        return known
 
     def owner(row):
         """(poll, stop): the sent poll a row belongs to; stop = it is beyond the batch."""
@@ -218,7 +284,7 @@ def build(db, cursor, current_boot, server_anchors, max_polls):
         if stop:
             break
         new["obs_id"] = r["id"]
-        if p is None or r["key"] not in ap_keys:
+        if p is None or not is_ap(r["key"]):
             continue
         lt = timeline.place_kismet(r["last_time"], p["boot"], p["offset"])
         last_time.setdefault(r["key"], []).append(lt)
@@ -232,7 +298,7 @@ def build(db, cursor, current_boot, server_anchors, max_polls):
         if stop:
             break
         new["dch_id"] = r["id"]
-        if p is None or r["key"] not in ap_keys:
+        if p is None or not is_ap(r["key"]):
             continue
         hist_rows.append([r["key"], p["true_ts"]] + [r[c] for c in CONFIG])
     # alerts (Kismet's own time, placed by the boot of the poll that fetched it)
@@ -249,16 +315,25 @@ def build(db, cursor, current_boot, server_anchors, max_polls):
         alert_rows.append([r["hash"], ts, r["header"], r["class"], r["severity"], r["source_mac"], r["dest_mac"],
                            r["transmitter_mac"], r["other_mac"], r["channel"], r["freq_khz"], r["device_key"],
                            r["text"], r["raw"]])
-    # AP load per hour, updated after the cursor up to the batch's true end
-    load_rows = []
+    # AP load per hour, updated after the cursor up to the batch's true end;
+    # oldest first and at most LOAD_ROWS_PER_BATCH, cut between two last_ts
+    # values so that the cursor never passes a row that was not sent
+    load_rows, load_to = [], true_to
     if "ap_load_hourly" in {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}:
-        for r in db.execute("SELECT * FROM ap_load_hourly WHERE last_ts > ? AND last_ts <= ?",
-                            (cursor["load_ts"], true_to)):
-            if r["key"] in ap_keys:
+        due = db.execute("SELECT * FROM ap_load_hourly WHERE last_ts > ? AND last_ts <= ? ORDER BY last_ts LIMIT ?",
+                         (cursor["load_ts"], true_to, LOAD_ROWS_PER_BATCH + 1)).fetchall()
+        if len(due) > LOAD_ROWS_PER_BATCH:
+            cut = due[LOAD_ROWS_PER_BATCH]["last_ts"]
+            if due[0]["last_ts"] < cut:
+                due, load_to = [r for r in due if r["last_ts"] < cut], cut - 1
+            else:                             # more rows on one second than a batch takes: that second whole
+                due, load_to = db.execute("SELECT * FROM ap_load_hourly WHERE last_ts = ?", (cut,)).fetchall(), cut
+        for r in due:
+            if is_ap(r["key"]):
                 load_rows.append([r["key"], r["hour"], r["channel"], r["polls"], r["clients_polls"],
                                   r["clients_max"], r["clients_sum"], r["qbss_polls"], r["qbss_max"],
                                   r["qbss_sum"], r["util_max"], r["util_sum"]])
-    new["load_ts"] = true_to
+    new["load_ts"] = load_to
     # frequency histograms (cumulative counters; only the band fallback reads
     # them): every poll updates every AP's ~16 rows, so they go at most once per
     # UTC hour - with the first batch of an hour, the APs of that batch, every
@@ -272,8 +347,11 @@ def build(db, cursor, current_boot, server_anchors, max_polls):
                                 (k, cursor["freq_ts"], true_to)):
                 freq_rows.append([r["key"], r["freq_khz"], r["packets"], r["updated_ts"]])
         new["freq_ts"] = true_to
-    # the devices every row refers to, their time fields placed
-    all_boots = list(bmap.values())
+    # the devices every row refers to, their time fields placed: against the
+    # stale window of every boot known to have run on a wrong clock
+    info["windows"] = stale_windows(db, server_anchors, windows) if has_v8 else dict(windows or {})
+    all_boots = list(bmap.values()) + [timeline.Window(*w) for b, w in sorted(info["windows"].items())
+                                       if b not in bmap]
     dev_rows = []
     for k in sorted(set(keys) | {h[0] for h in hist_rows} | {lr[0] for lr in load_rows}):
         d = db.execute("SELECT * FROM devices WHERE key = ?", (k,)).fetchone()

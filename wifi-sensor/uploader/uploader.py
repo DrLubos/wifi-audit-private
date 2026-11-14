@@ -26,7 +26,8 @@ the collector's COLLECTOR_CONF:
   STATE_PATH         the cursor file                  Default: /var/lib/wifi-sensor-uploader/state.json
   CAPTURE_IFACE      the capture interface (adapter identity)  Default: wlan1
   WATCH_S 2, HEARTBEAT_S 60, CATCHUP_POLLS 120, CATCHUP_PAUSE_S 2,
-  MAX_BATCH_BYTES 1048576, BACKOFF_MAX_S 600, SERVER_ANCHOR_AFTER_S 120,
+  MAX_BATCH_BYTES 1048576, MAX_BATCH_ROWS 25000, BACKOFF_MAX_S 600,
+  SERVER_ANCHOR_AFTER_S 120, SERVER_ANCHOR_SYNCED_S 1800,
   RETENTION_DAYS (14), HTTP_TIMEOUT 30, LOG_LEVEL INFO
   CONFIG_APPLY       0 (default) / 1: accept the capture configuration the
                      server delivers (server/docs/config-delivery.md) - written
@@ -61,7 +62,7 @@ import sensorinfo  # noqa: E402
 import state as statemod  # noqa: E402
 from client import Client, Refused, describe_token  # noqa: E402
 
-VERSION = "1.2"
+VERSION = "1.3"
 log = logging.getLogger("uploader")
 
 DEFAULTS = {
@@ -74,14 +75,15 @@ DEFAULTS = {
     "STATE_PATH": "/var/lib/wifi-sensor-uploader/state.json",
     "CAPTURE_IFACE": "wlan1",
     "WATCH_S": "2", "HEARTBEAT_S": "60", "CATCHUP_POLLS": "120", "CATCHUP_PAUSE_S": "2",
-    "MAX_BATCH_BYTES": "1048576", "BACKOFF_MAX_S": "600", "SERVER_ANCHOR_AFTER_S": "120",
+    "MAX_BATCH_BYTES": "1048576", "MAX_BATCH_ROWS": "25000", "BACKOFF_MAX_S": "600",
+    "SERVER_ANCHOR_AFTER_S": "120", "SERVER_ANCHOR_SYNCED_S": "1800",
     "RETENTION_DAYS": "14", "HTTP_TIMEOUT": "30", "LOG_LEVEL": "INFO",
     "CONFIG_APPLY": "0", "CONFIG_DIR": "/var/lib/wifi-sensor-uploader/config",
     "CONFIG_STATE_DIR": "/var/lib/wifi-sensor-config",
 }
 CAPABILITIES_EVERY_S = 3600       # capabilities ride in a heartbeat hourly, and when the applier's file changes
-NUMERIC = ("WATCH_S", "HEARTBEAT_S", "CATCHUP_POLLS", "CATCHUP_PAUSE_S", "MAX_BATCH_BYTES", "BACKOFF_MAX_S",
-           "SERVER_ANCHOR_AFTER_S", "RETENTION_DAYS", "HTTP_TIMEOUT")
+NUMERIC = ("WATCH_S", "HEARTBEAT_S", "CATCHUP_POLLS", "CATCHUP_PAUSE_S", "MAX_BATCH_BYTES", "MAX_BATCH_ROWS",
+           "BACKOFF_MAX_S", "SERVER_ANCHOR_AFTER_S", "SERVER_ANCHOR_SYNCED_S", "RETENTION_DAYS", "HTTP_TIMEOUT")
 
 
 def read_kv(path):
@@ -147,7 +149,11 @@ class Uploader:
         self.client = client
         self.boot = current_boot if current_boot is not None else clock.boot_id()
         self.state = statemod.load(cfg["STATE_PATH"])
+        if statemod.last_load_corrupt:
+            log.warning("state file %s was unreadable (kept as %s): starting from the server's last poll",
+                        cfg["STATE_PATH"], statemod.last_load_corrupt)
         self.db = None
+        self.chrony_synced = False       # chrony's state at the last heartbeat built
         self.data_version = None
         self.backoff = Backoff(cfg["BACKOFF_MAX_S"])
         # a refused heartbeat is retried after 5, 10, 20, 40 s, then about every
@@ -164,6 +170,7 @@ class Uploader:
         self.config_state_dir = cfg.get("CONFIG_STATE_DIR", DEFAULTS["CONFIG_STATE_DIR"])
         self.caps_sent = (None, 0.0)      # (capabilities file mtime, monotonic) of the last heartbeat with them
         self.offers_logged = set()
+        self.rewinds_logged = set()
 
     # --- buffer ---------------------------------------------------------------------------------
 
@@ -191,6 +198,7 @@ class Uploader:
         db = self.open()
         cur = (self.state or {}).get("cursor") or {}
         synced, offset = clock.chrony_state()
+        self.chrony_synced = bool(synced)
         last = db.execute("SELECT id, ts, ok FROM polls ORDER BY id DESC LIMIT 1").fetchone()
         nxt = db.execute("SELECT count(*), min(ts) FROM polls WHERE id > ?", (cur.get("polls_id", 0),)).fetchone()
         oldest = db.execute("SELECT min(ts) FROM polls WHERE coalesce(clock_synced, 1) = 1").fetchone()[0]
@@ -249,11 +257,20 @@ class Uploader:
         if offered is not None:
             self.take_delivery(offered)
         # server anchor (8.3): only when this boot's polls are held for one and
-        # contact has lasted SERVER_ANCHOR_AFTER_S (NTP gets the first chance)
+        # contact has lasted SERVER_ANCHOR_AFTER_S (NTP gets the first chance).
+        # While chrony IS synchronised the collector's own anchor is on its
+        # way - it becomes visible when its first synchronised poll commits,
+        # together with the boot's pending AP load - so the wait is
+        # SERVER_ANCHOR_SYNCED_S then: the server anchor of 2026-11-11 was
+        # taken two minutes into a five-minute commit, and the AP load of
+        # every poll sent before that commit never went.
         if body and body.get("server_ts") and self.state is not None:
             anchors = self.state.setdefault("server_anchors", {})
+            wait = self.cfg["SERVER_ANCHOR_AFTER_S"]
+            if self.chrony_synced:
+                wait = max(wait, self.cfg.get("SERVER_ANCHOR_SYNCED_S", wait))
             if (self.boot and self.boot not in anchors
-                    and now - self.contact_since >= self.cfg["SERVER_ANCHOR_AFTER_S"]
+                    and now - self.contact_since >= wait
                     and batchmod.held_polls(self.open(), self.boot) > 0):
                 anchors[self.boot] = {"wall": float(body["server_ts"]), "mono": mono_mid}
                 statemod.save(self.cfg["STATE_PATH"], self.state)
@@ -285,7 +302,9 @@ class Uploader:
             return False
         resume = body.get("resume")
         cur = batchmod.cursor_after(db, bid, resume)
-        self.state = {"cursor": cur, "server_anchors": (self.state or {}).get("server_anchors", {}),
+        old = self.state or {}
+        self.state = {"cursor": cur, "server_anchors": old.get("server_anchors", {}),
+                      "stale_windows": old.get("stale_windows", {}), "load_resent": old.get("load_resent", []),
                       "unverified": {}, "corrected": {}}
         statemod.save(self.cfg["STATE_PATH"], self.state)
         log.info("new cursor for buffer %s: after poll %s (server's newest %s)", bid, cur["polls_id"], resume)
@@ -298,9 +317,12 @@ class Uploader:
         cur = self.state["cursor"]
         db.execute("BEGIN")             # one read snapshot for the whole batch
         try:
-            b, new, info = batchmod.build(db, cur, self.boot, self.state.get("server_anchors"), self.max_polls)
+            cur, resent = self.rewound(db, cur)
+            b, new, info = batchmod.build(db, cur, self.boot, self.state.get("server_anchors"), self.max_polls,
+                                          self.state.get("stale_windows"))
         finally:
             db.execute("COMMIT")
+        info["load_resent"] = resent
         if b is None:
             return None, new, info
         corrected = self.state.setdefault("corrected", {})
@@ -316,12 +338,41 @@ class Uploader:
                        tables=b["tables"], gaps=b["gaps"], boots=b["boots"])
         return payload, new, info
 
+    def rewound(self, db, cur):
+        """(cursor, boots): the cursor with its AP load part moved back for
+        every boot this uploader anchored on the server's time whose NTP
+        anchor - and with it the boot's folded AP load - has appeared since
+        (batch.load_rewind()); boots = those now settled. Nothing is saved
+        here: the state keeps both with the batch the server accepts."""
+        done = set(self.state.get("load_resent") or [])
+        settled, to = [], None
+        for boot in sorted(set(self.state.get("server_anchors") or {}) - done):
+            ready, ts = batchmod.load_rewind(db, boot)
+            if not ready and boot == self.boot:
+                continue                  # this boot may still get its NTP anchor
+            settled.append(boot)
+            if ts is not None:
+                to = ts if to is None else min(to, ts)
+        if to is not None and to < cur["load_ts"]:
+            if to not in self.rewinds_logged:        # once, not for every attempt at the same batch
+                self.rewinds_logged.add(to)
+                log.info("AP load of boot(s) %s folded after their polls were sent: sending the hours from %d again",
+                         ", ".join(b[:8] for b in settled), to)
+            cur = dict(cur, load_ts=to)
+        return cur, settled
+
+    @staticmethod
+    def rows(payload):
+        return sum(len(t["rows"]) for t in payload["tables"].values())
+
     def send_batch(self):
         """True when a batch went through and more may be waiting."""
         payload, new, info = self.build()
         if payload is None:
             return False
-        while Client.size(payload) > self.cfg["MAX_BATCH_BYTES"] and self.max_polls > 1:
+        # the server's limits are bytes and rows (validate.MAX_ROWS 30000): fewer polls until both fit
+        while self.max_polls > 1 and (self.rows(payload) > self.cfg.get("MAX_BATCH_ROWS", 25000)
+                                      or Client.size(payload) > self.cfg["MAX_BATCH_BYTES"]):
             self.max_polls = max(1, self.max_polls // 2)
             payload, new, info = self.build()
         seq = payload["batch_seq"]
@@ -343,6 +394,9 @@ class Uploader:
             for boot, (n, offs) in info["corrected"].items():
                 c = self.state.setdefault("corrected", {}).setdefault(boot, {"polls": 0})
                 c["polls"] += n
+            self.state["stale_windows"] = info.get("windows") or {}
+            if info.get("load_resent"):
+                self.state["load_resent"] = sorted(set(self.state.get("load_resent") or []) | set(info["load_resent"]))
             statemod.save(self.cfg["STATE_PATH"], self.state)
             self.backoff.ok()
             self.attempts.pop(seq, None)
@@ -353,9 +407,13 @@ class Uploader:
             return True
         detail = (body or {}).get("detail")
         self.last_result = "batch %s: %s" % (status, detail)
-        if status == 413:
-            self.max_polls = max(1, self.max_polls // 2)
-            log.warning("batch %d too large (%d polls): halving", seq, polls)
+        if status == 413 or (status == 422 and polls > 1):
+            # 422 with several polls: a limit of the server (rows a batch) or
+            # one row it refuses - halving either gets under the limit or
+            # narrows the refusal down to the one poll that carries it (then
+            # the backoff below, and the server's upload_rejected event names it)
+            self.max_polls = max(1, min(self.max_polls, polls) // 2)
+            log.warning("batch %d refused (%s %s, %d polls): halving", seq, status, detail, polls)
             return True
         if status in (401, 403):
             delay = self.backoff.fail(now, at_least=self.cfg["BACKOFF_MAX_S"])

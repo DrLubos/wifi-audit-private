@@ -16,7 +16,13 @@ CAPTURE_IFACE=wlan1
 #CATCHUP_POLLS=120
 #CATCHUP_PAUSE_S=2
 #MAX_BATCH_BYTES=1048576
+#MAX_BATCH_ROWS=25000
 #BACKOFF_MAX_S=600
+# Seconds of contact before the server's time anchors a boot without NTP;
+# the second one applies while chrony is synchronised (the collector's own
+# anchor is then on its way).
+#SERVER_ANCHOR_AFTER_S=120
+#SERVER_ANCHOR_SYNCED_S=1800
 #LOG_LEVEL=INFO
 
 # Configuration delivery (server/docs/config-delivery.md): 1 = accept the
