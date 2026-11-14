@@ -193,6 +193,67 @@ def load_rewind(db, boot_id):
     return True, int(a["wall"] - a["mono"] + first) - 1
 
 
+def poll_identity(db, poll_id):
+    """What tells one poll from another that got the same row id: its raw ts
+    and its boot. None when the buffer has no such poll."""
+    row = db.execute("SELECT * FROM polls WHERE id = ?", (poll_id,)).fetchone()
+    if row is None:
+        return None
+    return {"id": row["id"], "ts": row["ts"], "boot_id": row["boot_id"] if "boot_id" in row.keys() else None}
+
+
+def repair_cursor(db, cursor, last):
+    """(cursor, polls stepped back) - the cursor moved back when the buffer
+    is no longer the one it was written against.
+
+    The buffer can lose its newest transactions in a power cut (they were in
+    the WAL, not yet synced), after the uploader has sent them and saved its
+    cursor. The next boot's collector then reuses those row ids: for the
+    uploader the new polls, observations, history rows and alerts lie
+    *before* its cursor and would never be sent. `last` is poll_identity()
+    of the newest poll the server acknowledged; when the buffer's poll with
+    that id is another one (or gone), the poll cursor goes back to the
+    newest poll that is still the acknowledged boot's, and the row cursors
+    to just before the first row of a later poll. Rows sent twice by this
+    are merged away by the server; nothing is skipped."""
+    if not last or last.get("id") != cursor["polls_id"]:
+        return cursor, 0
+    c, boot = cursor["polls_id"], last.get("boot_id")
+    now = poll_identity(db, c)
+    if now is not None and now["ts"] == last.get("ts") and now["boot_id"] == boot:
+        return cursor, 0
+    newest = db.execute("SELECT max(id) FROM polls").fetchone()[0]
+    if newest is None:
+        keep = 0                              # an emptied buffer numbers its polls from 1 again
+    elif now is None and c <= newest:
+        return cursor, 0                      # pruned by the retention: the 'lost' gap's business, not a reuse
+    else:
+        top = min(c, newest)
+        keep = db.execute("SELECT max(id) FROM polls WHERE id <= ? AND boot_id IS ?", (top, boot)).fetchone()[0]
+        if keep is None:                      # nothing of the acknowledged boot is left: everything of the
+            b = poll_identity(db, top)["boot_id"]             # boot that owns the ids now goes (again)
+            keep = db.execute("SELECT min(id) FROM polls WHERE id <= ? AND boot_id IS ?", (top, b)).fetchone()[0] - 1
+    if keep >= c:
+        return cursor, 0
+    new = dict(cursor, polls_id=keep)
+    # the first row a later poll wrote: observations by their poll's ts (indexed), the small tables by poll_id
+    first_obs = None
+    for p in db.execute("SELECT id, ts FROM polls WHERE id > ? ORDER BY id LIMIT 2000", (keep,)).fetchall():
+        first_obs = db.execute("SELECT min(id) FROM observations WHERE ts = ? AND poll_id = ?",
+                               (p["ts"], p["id"])).fetchone()[0]
+        if first_obs is not None:
+            break
+    for key, table, first in (("obs_id", "observations", first_obs),
+                              ("dch_id", "device_config_history", None), ("alerts_id", "alerts", None)):
+        if table != "observations":
+            first = db.execute("SELECT min(id) FROM %s WHERE poll_id > ?" % table, (keep,)).fetchone()[0]
+        if first is not None:
+            new[key] = min(cursor[key], first - 1)
+        else:
+            new[key] = min(cursor[key], db.execute("SELECT coalesce(max(id), 0) FROM %s" % table).fetchone()[0])
+    return new, c - keep
+
+
 # --- the batch -----------------------------------------------------------------------------------
 
 def _ranges(ids):

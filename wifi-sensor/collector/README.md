@@ -229,6 +229,11 @@ Schema v2 (associations deduplicated) replaced v1, where `associations` held one
 row per poll and made up ~85 % of the buffer (~290 MB/day). A v1 buffer is
 migrated automatically at start: the old table is dropped (not condensed - a
 GROUP BY over millions of rows would stall the collector on the Pi) and recreated.
+Every poll's commit is synced to the card (`synchronous=FULL`, one fsync per
+poll): with `NORMAL` a power cut dropped the newest committed polls, the
+uploader had sent them already, and the next boot reused their row ids
+(2026-11-02 and 11-12, `docs/findings.md` section 6).
+
 The write-ahead log (`buffer.db-wal`) is limited to 64 MB
 (`journal_size_limit`): SQLite truncates it whenever a checkpoint has emptied
 it - never delete the file by hand.

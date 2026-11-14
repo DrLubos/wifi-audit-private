@@ -40,6 +40,16 @@ design in `../../server/docs/live-upload.md` (sections 4, 5 and 8.3).
   device, associations, client BSSIDs or probes.
 - **TLS always verified** (stdlib default context), https only; the token
   (`/etc/wifi-sensor/ingest.token`, root:<sensor user> 0640) is never logged.
+- **A buffer that lost its tail**: a power cut can drop the buffer's newest
+  transactions after they were uploaded, and the next boot's collector then
+  reuses their row ids - new rows *before* the cursor. The state remembers
+  the newest acknowledged poll (`last_poll`: id, raw ts, boot); when the
+  buffer's poll with that id is another one, the cursor goes back to the
+  last poll of the acknowledged boot and the rows after it are sent
+  (`repair_cursor()`; found 2026-11-14: the first one or two polls after
+  the power cuts of 2026-11-02 and 11-12 reached the server without their
+  observations). The collector commits with `synchronous=FULL` since then,
+  so the tail is no longer lost in the first place.
 - **Limits**: a batch is cut to fewer polls until it has at most
   `MAX_BATCH_BYTES` (1 MiB gzip) and `MAX_BATCH_ROWS` (25,000; the server
   takes 30,000).

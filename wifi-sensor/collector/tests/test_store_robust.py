@@ -176,6 +176,26 @@ class Housekeeping(Base):
         self.assertEqual(removed["polls"], 1300)
         self.assertEqual(self.q("SELECT count(*) FROM polls"), [(0,)])
 
+    def test_stale_observations_go_with_their_polls(self):
+        last = AP_RAW["kismet.device.base.last_time"]
+        stale0 = TS - 60 * DAY
+        for i in range(3):
+            raw = dict(AP_RAW)
+            raw["kismet.device.base.last_time"] = last - 60 * DAY + 30 * i
+            self.store.write_poll(stale0 + 30 * i, HEALTH, [shape_device(raw, stale0 + 30 * i)], [], 5,
+                                  clock=clock(10.0 + 30 * i, False))
+        raw = dict(AP_RAW)
+        raw["kismet.device.base.last_time"] = last
+        self.store.write_poll(TS - 30 * DAY, HEALTH, [shape_device(raw, TS - 30 * DAY)], [], 5,
+                              clock=clock(100.0, True, wall=float(TS - 30 * DAY)))
+        self.assertEqual(self.q("SELECT count(*) FROM observations"), [(4,)])
+        removed = self.store.prune(TS - 14 * DAY)
+        self.assertEqual((removed["polls"], removed["observations"]), (4, 4))
+        self.assertEqual(self.q("SELECT count(*) FROM observations"), [(0,)])
+
+    def test_commits_are_synced_to_the_card(self):
+        self.assertEqual(self.q("PRAGMA synchronous"), [(2,)])          # FULL: a power cut loses no committed poll
+
     def test_the_wal_file_is_limited(self):
         self.assertEqual(self.q("PRAGMA journal_size_limit"), [(WAL_LIMIT_BYTES,)])
         self.assertLessEqual(WAL_LIMIT_BYTES, 128 * 1024 * 1024)

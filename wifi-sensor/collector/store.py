@@ -436,7 +436,13 @@ class Store:
         # Explicit transactions (isolation_level=None = autocommit outside them).
         self.db = sqlite3.connect(path, isolation_level=None, timeout=30)
         self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA synchronous=NORMAL")
+        # FULL: a commit is on the card before the next reader sees it. With
+        # NORMAL the WAL is synced only at checkpoints, so a power cut dropped
+        # the newest committed polls - after the uploader had sent them - and
+        # the next boot gave their row ids to new rows, which the uploader's
+        # cursor then stepped over (2026-11-02: poll 123577 twice, the first
+        # observations of the offline run never uploaded). One fsync per poll.
+        self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute("PRAGMA journal_size_limit=%d" % WAL_LIMIT_BYTES)
         # meta first: the version decides whether a migration must run before
         # the CREATE TABLE IF NOT EXISTS statements are allowed to see old tables.
@@ -972,11 +978,14 @@ class Store:
             cur = self.db.execute(
                 "DELETE FROM polls WHERE ts < ? AND coalesce(clock_synced, 1) = 1", (before_ts,))
             counts["polls"] = cur.rowcount
-            for i in range(0, len(stale), 500):       # in parts: SQLite limits the bound parameters
-                part = stale[i:i + 500]
+            for i in range(0, len(stale), 5000):      # in parts: SQLite limits the bound parameters
+                part = stale[i:i + 5000]
                 marks = ",".join("?" * len(part))
+                # an observation carries its poll's ts: found through the ts
+                # index, not by scanning the table for poll_id (no index on it)
                 counts["observations"] += self.db.execute(
-                    "DELETE FROM observations WHERE poll_id IN (%s)" % marks, part).rowcount
+                    "DELETE FROM observations WHERE ts IN (SELECT ts FROM polls WHERE id IN (%s)) "
+                    "AND poll_id IN (%s)" % (marks, marks), part + part).rowcount
                 self.db.execute("DELETE FROM ap_load_pending WHERE poll_id IN (%s)" % marks, part)
                 counts["polls"] += self.db.execute(
                     "DELETE FROM polls WHERE id IN (%s)" % marks, part).rowcount

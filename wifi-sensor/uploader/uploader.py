@@ -171,6 +171,7 @@ class Uploader:
         self.caps_sent = (None, 0.0)      # (capabilities file mtime, monotonic) of the last heartbeat with them
         self.offers_logged = set()
         self.rewinds_logged = set()
+        self.repairs_logged = set()
 
     # --- buffer ---------------------------------------------------------------------------------
 
@@ -305,7 +306,7 @@ class Uploader:
         old = self.state or {}
         self.state = {"cursor": cur, "server_anchors": old.get("server_anchors", {}),
                       "stale_windows": old.get("stale_windows", {}), "load_resent": old.get("load_resent", []),
-                      "unverified": {}, "corrected": {}}
+                      "last_poll": None, "unverified": {}, "corrected": {}}
         statemod.save(self.cfg["STATE_PATH"], self.state)
         log.info("new cursor for buffer %s: after poll %s (server's newest %s)", bid, cur["polls_id"], resume)
         return True
@@ -317,9 +318,15 @@ class Uploader:
         cur = self.state["cursor"]
         db.execute("BEGIN")             # one read snapshot for the whole batch
         try:
+            cur, back = batchmod.repair_cursor(db, cur, self.state.get("last_poll"))
+            if back and cur["polls_id"] not in self.repairs_logged:
+                self.repairs_logged.add(cur["polls_id"])
+                log.warning("the buffer lost its newest polls (a power cut?) and reused their row ids: cursor back "
+                            "by %d poll(s) to %d - rows after it are sent (again)", back, cur["polls_id"])
             cur, resent = self.rewound(db, cur)
             b, new, info = batchmod.build(db, cur, self.boot, self.state.get("server_anchors"), self.max_polls,
                                           self.state.get("stale_windows"))
+            info["last_poll"] = batchmod.poll_identity(db, new["polls_id"])
         finally:
             db.execute("COMMIT")
         info["load_resent"] = resent
@@ -395,6 +402,7 @@ class Uploader:
                 c = self.state.setdefault("corrected", {}).setdefault(boot, {"polls": 0})
                 c["polls"] += n
             self.state["stale_windows"] = info.get("windows") or {}
+            self.state["last_poll"] = info.get("last_poll")
             if info.get("load_resent"):
                 self.state["load_resent"] = sorted(set(self.state.get("load_resent") or []) | set(info["load_resent"]))
             statemod.save(self.cfg["STATE_PATH"], self.state)

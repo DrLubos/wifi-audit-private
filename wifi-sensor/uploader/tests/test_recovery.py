@@ -338,6 +338,93 @@ class FirstSeen(Base):
         self.assertIsNone(up.state["stale_windows"][A][2])
 
 
+class LostTail(Base):
+    """A power cut drops the buffer's newest transactions after the uploader
+    has sent them; the next boot's collector reuses their row ids (2026-11-02:
+    poll 123577 twice)."""
+
+    def synced(self, n, start=0, boot=A, mono0=100.0):
+        for i in range(start, start + n):
+            ts = HOUR0 + 30 * i
+            self.poll(ts, [ap(1, ts), ap(2, ts)], boot, mono0 + 30 * i, True, wall=float(ts))
+
+    def lose_tail(self, polls):
+        """What the power cut does to the file: the last `polls` polls and their rows are gone."""
+        db = sqlite3.connect(self.db_path)
+        keep = db.execute("SELECT max(id) FROM polls").fetchone()[0] - polls
+        for table in ("observations", "device_config_history", "alerts", "ap_load_pending"):
+            db.execute("DELETE FROM %s WHERE poll_id > ?" % table, (keep,))
+        db.execute("DELETE FROM polls WHERE id > ?", (keep,))
+        db.commit()
+        db.close()
+
+    def test_rows_that_got_the_lost_polls_ids_are_sent(self):
+        self.synced(6)
+        up = self.uploader()
+        self.assertTrue(self.catch_up(up))
+        self.assertEqual(up.state["last_poll"]["id"], 6)
+        self.lose_tail(2)                                  # polls 5 and 6 never reached the card
+        self.store.close()
+        self.store = Store(self.db_path, boot_id=B)        # the next boot: ids 5, 6, 7 again, on a stale clock
+        for i in range(3):
+            t = HOUR0 + 7200 + 30 * i
+            self.poll(t - STALE, [ap(1, t - STALE), ap(3, t - STALE)], B, 50.0 + 30 * i, False)
+        t = HOUR0 + 7200 + 90
+        self.chrony = (True, 0.0)
+        self.poll(t, [ap(1, t)], B, 140.0, True, wall=float(t))
+        up2 = self.uploader(boot=B)
+        with self.assertLogs("uploader", level="WARNING") as logs:
+            self.assertTrue(self.catch_up(up2))
+        self.assertIn("reused their row ids", "\n".join(logs.output))
+        got = sorted((p["seq"], p["ts"]) for b in self.server.batches for p in
+                     (dict(zip(VALIDATE.columns("polls"), r)) for r in b["tables"].get("polls", [])))
+        new_boot = [(s, ts) for s, ts in got if ts >= HOUR0 + 7200]
+        self.assertEqual(new_boot, [(5, HOUR0 + 7200), (6, HOUR0 + 7230), (7, HOUR0 + 7260), (8, HOUR0 + 7290)])
+        obs = {(r[1], r[0]) for b in self.server.batches for r in b["tables"].get("observations", [])}
+        key3 = "4202770D00000000_%012X" % 3
+        self.assertEqual(sorted(ts for k, ts in obs if k == key3), [HOUR0 + 7200, HOUR0 + 7230, HOUR0 + 7260])
+        self.assertEqual(up2.state["last_poll"]["id"], 8)
+        with self.assertNoLogs("uploader", level="WARNING"):         # settled
+            self.poll(t + 30, [ap(1, t + 30)], B, 170.0, True, wall=float(t + 30))
+            self.assertTrue(self.catch_up(up2))
+
+    def test_a_lost_tail_whose_ids_are_not_taken_yet(self):
+        self.synced(4)
+        up = self.uploader()
+        self.assertTrue(self.catch_up(up))
+        self.lose_tail(2)
+        db = batch.open_buffer(self.db_path)
+        cur, back = batch.repair_cursor(db, up.state["cursor"], up.state["last_poll"])
+        db.close()
+        self.assertEqual((cur["polls_id"], back), (2, 2))
+        self.assertLessEqual(cur["obs_id"], up.state["cursor"]["obs_id"])
+
+    def test_the_cursor_of_a_healthy_buffer_is_left_alone(self):
+        self.synced(4)
+        up = self.uploader()
+        self.assertTrue(self.catch_up(up))
+        db = batch.open_buffer(self.db_path)
+        self.assertEqual(batch.repair_cursor(db, up.state["cursor"], up.state["last_poll"]), (up.state["cursor"], 0))
+        self.assertEqual(batch.repair_cursor(db, up.state["cursor"], None), (up.state["cursor"], 0))
+        db.close()
+
+    def test_polls_pruned_by_the_retention_are_not_a_lost_tail(self):
+        self.synced(6)
+        up = self.uploader(CATCHUP_POLLS="2")
+        self.assertTrue(up.ensure_cursor())
+        self.assertTrue(up.send_batch())                    # polls 1-2 sent, 3-6 wait (an outage)
+        db = sqlite3.connect(self.db_path)
+        db.execute("DELETE FROM polls WHERE id <= 4")       # the retention takes 1-4 meanwhile
+        db.commit()
+        db.close()
+        db = batch.open_buffer(self.db_path)
+        self.assertEqual(batch.repair_cursor(db, up.state["cursor"], up.state["last_poll"]), (up.state["cursor"], 0))
+        db.close()
+        self.assertTrue(self.catch_up(up))
+        gaps = [g for b in self.server.batches for g in b["gaps"]]
+        self.assertEqual([(g["seq_from"], g["seq_to"], g["reason"]) for g in gaps], [(3, 4, "lost")])
+
+
 class State(Base):
     def test_an_unreadable_state_file_is_a_lost_state(self):
         with open(self.state_path, "w") as f:
