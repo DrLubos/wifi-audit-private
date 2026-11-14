@@ -6,7 +6,7 @@ long-term history that the sensors' 14-day buffers discard, and host the
 analysis and the dashboard. Everything runs on one small box as a
 docker-compose stack.
 
-## Status: Milestone 3, step 1 - storage, seed, dashboard on real data
+## Status: live - the sensor uploads every poll, the dashboard reads it (since 2026-10-17)
 
 | Part | State |
 |---|---|
@@ -17,7 +17,7 @@ docker-compose stack.
 | dashboard v2 frontend | done - `docs/dashboard-v2/PLAN.md` section 10: the shell (sidebar, top bar, filters in the URL) and the pages Overview `/`, Events `/events`, Networks `/networks`, Spectrum `/spectrum`, Access points `/aps` and `/aps/<bssid>`, Sensors `/sensors`, Settings `/settings`; writes behind the write token (unlocked once per tab). The first dashboard's pages were removed in phase 5c; `/detections` redirects to `/events`, `/legacy` to `/`, and `/aps/<Kismet device key>` links to the BSSID page. Logic tests (`frontend/src/**/*.test.js`) run with `node --test` in the image's build stage |
 | dashboard v2 API (read) | done, phase 3 of `docs/dashboard-v2/PLAN.md` - `/api/v2/...` (sensors, overview status and period, events feed with keyset cursors and event detail, networks + timeseries + clients heatmap, access points list / page / RSSI / load, spectrum + utilization, sensor coverage and outages, settings reads); period buckets in the account's time zone, weak ETag with the bucket epoch, no client MAC in any response (redacted, checked by `tests/perf/v2_smoke.py`). Code in `api/app/v2/`, its SQL in `api/app/v2/sql/*.sql` (run as is by `tests/perf/ep_v2.py`). The `/api/...` endpoints above stay until the frontend switch |
 | `detection/` | prototype - batch detectors run on demand over a time window, writing only `detections`; one detector so far, `deauth-flood` (Kismet DEAUTHFLOOD alerts + burst events of the polled `client_disconnects` counter, per-AP baseline, idempotent re-runs). See `detection/README.md` |
-| live ingest | being built (`docs/live-upload.md`, steps 1-6): schema 14 and `ingest_merge()` - the one merge of the snapshot import and the live ingest - (step 1); `/api/ingest/v1/batch` and `/heartbeat` with per-sensor tokens (`ops/sensor_token.sh`), stall events, the `refresher` service (step 2); the Pi's collector v8 and uploader (steps 3-4) |
+| live ingest | done, live since 2026-10-17 20:46:38 UTC (`docs/live-upload.md`, rollout record in its section 17): `/api/ingest/v1/batch` and `/heartbeat` with per-sensor tokens (`ops/sensor_token.sh`), `ingest_merge()` - the one merge of the live ingest and the snapshot import -, stall events, the `refresher` service; configuration delivery to the sensor (`docs/config-delivery.md`, schema 18) and discard mode (`docs/discard-mode.md`, schema 20) on top of it |
 
 ## Stack
 

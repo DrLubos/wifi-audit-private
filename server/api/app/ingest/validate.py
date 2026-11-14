@@ -190,11 +190,29 @@ def _value(where, col, kind, required, x, now):
             raise Invalid("%s: %s longer than %d characters" % (where, col, TEXT_MAX.get(col, TEXT_DEFAULT_MAX)))
         if kind == "json":
             try:
-                json.loads(x)
+                obj = json.loads(x)
             except ValueError:
                 raise Invalid("%s: %s is not JSON" % (where, col)) from None
+            if "\\u0000" in x:
+                # jsonb refuses the escape \u0000 ("cannot be converted to text"):
+                # the merge would fail for this batch on every attempt - a 500,
+                # which opens no upload_rejected event. Replaced as the snapshot
+                # importer does; parsed first, so an escaped backslash before
+                # "u0000" is left alone.
+                x = json.dumps(_no_nul(obj), separators=(",", ":"), sort_keys=True)
         return x
     raise AssertionError(kind)
+
+
+def _no_nul(obj):
+    """obj with every NUL character in its strings and keys replaced by U+FFFD."""
+    if isinstance(obj, str):
+        return obj.replace("\x00", "\ufffd")
+    if isinstance(obj, list):
+        return [_no_nul(v) for v in obj]
+    if isinstance(obj, dict):
+        return {_no_nul(k): _no_nul(v) for k, v in obj.items()}
+    return obj
 
 
 def _ap_evidence(row):

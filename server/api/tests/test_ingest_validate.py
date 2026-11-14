@@ -197,6 +197,25 @@ class Batch(unittest.TestCase):
         v.batch(batch(alerts=[alert]), NOW)
         self.invalid(batch(alerts=[dict(alert, raw="{nope")]), "raw")
 
+    def test_alert_raw_never_carries_the_nul_escape(self):
+        """jsonb refuses \\u0000: the merge would fail for the batch on every attempt."""
+        alert = dict(hash="h1", ts=T + 0.5, header="DEAUTHFLOOD", **{"class": "DOT11"}, severity=10,
+                     source_mac=None, dest_mac=None, transmitter_mac="A1:B2:C3:D4:E5:F6", other_mac=None,
+                     channel="6", freq_khz=2437000, device_key=AP, text="x", raw=None)
+        raw = json.dumps({"kismet.alert.text": "ssid a\x00b", "k\x00": [1, {"n": "\x00"}], "path": "C:\\u0000"})
+        self.assertIn("\\u0000", raw)
+        b = v.batch(batch(alerts=[dict(alert, raw=raw)]), NOW)
+        stored = b["tables"]["alerts"][0][v.columns("alerts").index("raw")]
+        back = json.loads(stored)
+        self.assertNotIn("\x00", json.dumps(back, ensure_ascii=False))
+        self.assertEqual(back["kismet.alert.text"], "ssid a\ufffdb")
+        self.assertEqual(back["k\ufffd"], [1, {"n": "\ufffd"}])
+        self.assertEqual(back["path"], "C:\\u0000")            # an escaped backslash + "u0000" is text, not a NUL
+        # a raw without the escape goes through byte for byte
+        plain = '{"b": 2,  "a": 1}'
+        b = v.batch(batch(alerts=[dict(alert, raw=plain)]), NOW)
+        self.assertEqual(b["tables"]["alerts"][0][v.columns("alerts").index("raw")], plain)
+
     def test_gaps_and_boots(self):
         body = batch()
         body["gaps"] = [{"seq_from": 10, "seq_to": 20, "reason": "lost"},

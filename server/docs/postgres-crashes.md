@@ -106,7 +106,7 @@ confirms or refutes):
 That is why nothing is logged by the dying process, why there is never a
 "Failed process was running" detail, why it needs memory pressure (a probe
 must both time out and then get no answer for 3 s - dockerd logged 86 killed
-probes in 30 days against 5 crashes) and why it is not reproducible with a
+probes in 30 days across the box's containers, against 5 crashes) and why it is not reproducible with a
 build alone. dockerd's journal shows killed health probes around the earlier
 crashes too (10-14 06:06:19, 10-16 05:06:16, 10-17 21:02:41; the line is
 logged only when the probe had already ended by the time of the KILL, so it

@@ -33,6 +33,18 @@ class Scanner(unittest.TestCase):
     def test_no_partial_matches_inside_longer_tokens(self):
         self.assertEqual(privacy.macs_in("AA:BB:CC:DD:EE:FF:00"), set())
         self.assertEqual(privacy.macs_in("x1AA:BB:CC:DD:EE:FF"), set())
+        self.assertEqual(privacy.macs_in("id 00:AA:BB:CC:DD:EE:FF:11 seen"), set())
+        self.assertEqual(privacy.macs_in("(ad:AA:BB:CC:DD:EE:FF)"), set())
+
+    def test_a_mac_next_to_a_colon_is_still_a_mac(self):
+        mac = "3C:22:FB:01:02:03"
+        for text in ("deauth from %s: 20 frames", "src:%s", "mac:%s,", "source_mac:%s: x", "%s:", ":%s",
+                     "face:%s", "clients=[%s:5]", "a (%s): b", "%s: %s"):
+            self.assertEqual(privacy.macs_in(text % ((mac,) * text.count("%s"))), {mac}, text)
+            out = privacy.redact(text % ((mac,) * text.count("%s")), BSSIDS)
+            self.assertNotIn(mac, out, text)
+        # an AP's BSSID stays, also next to a colon
+        self.assertEqual(privacy.redact("bssid:e4:8d:8c:41:7b:a2: ok", BSSIDS), "bssid:e4:8d:8c:41:7b:a2: ok")
 
 
 class Redact(unittest.TestCase):

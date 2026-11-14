@@ -15,7 +15,17 @@ Standard library only.
 
 import re
 
-_MAC = re.compile(r"(?<![0-9A-Fa-f:])([0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5})(?![0-9A-Fa-f:])")
+# Six octets that are not part of a longer run of octets. A neighbouring
+# colon alone does not make a run: "from 3C:22:FB:01:02:03: 20 frames" and
+# "src:3C:22:FB:01:02:03" hold a MAC (the first version of this pattern
+# refused any MAC next to a colon and let both through). A run is another
+# whole octet on either side - "AA:BB:CC:DD:EE:FF:00", or "ab:" before the
+# six when "ab" stands alone (after a non-alphanumeric character or at the
+# start; the "ac:" of "mac:" is the end of a word, not an octet).
+_HEX = "[0-9A-Fa-f]"
+_MAC = re.compile(r"(?<!%(h)s)(?<![^0-9A-Za-z]%(h)s{2}[:-])(?<!^%(h)s{2}[:-])"
+                  r"(%(h)s{2}(?:[:-]%(h)s{2}){5})"
+                  r"(?!%(h)s)(?![:-]%(h)s{2}(?!%(h)s))" % {"h": _HEX})
 _KEY = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{16}_([0-9A-Fa-f]{12})(?![0-9A-Fa-f])")
 
 
