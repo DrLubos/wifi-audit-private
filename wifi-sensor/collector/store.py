@@ -118,6 +118,16 @@ import uuid
 log = logging.getLogger("collector.store")
 
 SCHEMA_VERSION = 9
+# The WAL file keeps its largest size for good unless it is limited: the fold
+# of nine days of pending AP load (2026-11-11) left 408 MB behind. SQLite
+# truncates it to this size whenever a checkpoint has emptied it.
+WAL_LIMIT_BYTES = 64 * 1024 * 1024
+# What one device or alert record can raise in its inserts when a value has a
+# shape or size SQLite cannot bind (the OverflowError of 2026-11-12). Such a
+# record is skipped, the poll is stored. Disk and lock errors
+# (sqlite3.OperationalError) are not in the list: they fail the whole poll.
+_BAD_ROW = (OverflowError, ValueError, TypeError, KeyError, IndexError, sqlite3.IntegrityError,
+            sqlite3.DataError, sqlite3.InterfaceError, sqlite3.ProgrammingError)
 
 
 def applied_config_version(path):
@@ -367,6 +377,42 @@ _LOAD_UPSERT = (
     "last_ts = max(last_ts, excluded.last_ts), "
     "sent = 0")
 
+# The pending AP load of one true hour (ap_load_pending rows of the polls in
+# the VALUES list, each with its true ts) added to ap_load_hourly in one
+# statement - the same sums, counts and maxima as one _LOAD_UPSERT per row.
+# {polls} = "(?, ?), (?, ?), ..." (poll_id, true ts); the first parameter
+# after them is the hour.
+_LOAD_FOLD = (
+    "WITH t(poll_id, ts) AS (VALUES {polls}) "
+    "INSERT INTO ap_load_hourly(key, hour, channel, polls, clients_polls, clients_max, "
+    "clients_sum, qbss_polls, qbss_max, qbss_sum, util_max, util_sum, first_ts, last_ts) "
+    "SELECT key, ?, channel, count(*), sum(c), max(n_clients), sum(n_clients), sum(q), "
+    "max(CASE WHEN q THEN qbss_stations END), sum(CASE WHEN q THEN qbss_stations END), "
+    "max(CASE WHEN q THEN util_pct END), sum(CASE WHEN q THEN util_pct END), min(ts), max(ts) "
+    "FROM (SELECT p.key AS key, p.channel AS channel, t.ts AS ts, p.n_clients AS n_clients, "
+    "             p.n_clients IS NOT NULL AS c, "
+    "             (coalesce(p.qbss, 0) <> 0 AND (p.qbss_stations IS NOT NULL OR p.util_pct IS NOT NULL)) AS q, "
+    "             p.qbss_stations AS qbss_stations, p.util_pct AS util_pct "
+    "      FROM ap_load_pending p JOIN t ON t.poll_id = p.poll_id) "
+    "WHERE true GROUP BY key, channel "
+    "ON CONFLICT(key, hour, channel) DO UPDATE SET "
+    "polls = polls + excluded.polls, "
+    "clients_polls = clients_polls + excluded.clients_polls, "
+    "clients_max = max(coalesce(clients_max, excluded.clients_max), "
+    "coalesce(excluded.clients_max, clients_max)), "
+    "clients_sum = CASE WHEN excluded.clients_sum IS NULL THEN clients_sum "
+    "ELSE coalesce(clients_sum, 0) + excluded.clients_sum END, "
+    "qbss_polls = qbss_polls + excluded.qbss_polls, "
+    "qbss_max = max(coalesce(qbss_max, excluded.qbss_max), coalesce(excluded.qbss_max, qbss_max)), "
+    "qbss_sum = CASE WHEN excluded.qbss_sum IS NULL THEN qbss_sum "
+    "ELSE coalesce(qbss_sum, 0) + excluded.qbss_sum END, "
+    "util_max = max(coalesce(util_max, excluded.util_max), coalesce(excluded.util_max, util_max)), "
+    "util_sum = CASE WHEN excluded.util_sum IS NULL THEN util_sum "
+    "ELSE coalesce(util_sum, 0) + excluded.util_sum END, "
+    "first_ts = min(first_ts, excluded.first_ts), "
+    "last_ts = max(last_ts, excluded.last_ts), "
+    "sent = 0")
+
 _CONFIG_COLS = ("ssid", "cloaked", "crypt", "crypt_bits", "mfp_sup", "mfp_req",
                 "adv_channel", "ht_mode", "beacon_rate", "country")
 # Latest AP load on devices (v6): overwritten every poll, never merged or historised.
@@ -391,6 +437,7 @@ class Store:
         self.db = sqlite3.connect(path, isolation_level=None, timeout=30)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
+        self.db.execute("PRAGMA journal_size_limit=%d" % WAL_LIMIT_BYTES)
         # meta first: the version decides whether a migration must run before
         # the CREATE TABLE IF NOT EXISTS statements are allowed to see old tables.
         self.db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -630,10 +677,10 @@ class Store:
                  health.get("ds_hop_ok"), duration_ms) + self._clock_cols(clock)
                 + (health.get("config_version"),)).lastrowid
             for rec in records:
-                if self._write_device(rec, poll_id, clock):
+                if self._guarded("device", rec, self._write_device, rec, poll_id, clock):
                     new_obs += 1
             for a in alerts:
-                new_alerts += self._write_alert(a, poll_id)
+                new_alerts += self._guarded("alert", a, self._write_alert, a, poll_id) or 0
             self.db.execute("UPDATE polls SET new_obs = ? WHERE id = ?", (new_obs, poll_id))
             if clock and clk.get("synced") and clk.get("boot_id"):
                 self._anchor(clk, poll_id)
@@ -644,6 +691,23 @@ class Store:
             self.db.execute("ROLLBACK")
             raise
         return new_obs, new_alerts
+
+    def _guarded(self, what, rec, write, *args):
+        """write(*args) inside a savepoint: a record whose values SQLite
+        cannot store (_BAD_ROW) is rolled back and skipped with a warning -
+        the poll and every other record of it are stored. Returns write()'s
+        result, None for a skipped record."""
+        self.db.execute("SAVEPOINT rec")
+        try:
+            out = write(*args)
+        except _BAD_ROW as e:
+            self.db.execute("ROLLBACK TO rec")
+            self.db.execute("RELEASE rec")
+            ident = rec.get("key") or rec.get("hash") if isinstance(rec, dict) else None
+            log.warning("%s %s not stored: %s: %s", what, ident, type(e).__name__, e)
+            return None
+        self.db.execute("RELEASE rec")
+        return out
 
     @staticmethod
     def _clock_cols(clock):
@@ -664,19 +728,33 @@ class Store:
             return
         self.db.execute("INSERT INTO clock_anchors(boot_id, mono, wall, poll_id, source) VALUES (?, ?, ?, ?, 'ntp')",
                         (boot, clk["mono"], wall, poll_id))
-        epoch = wall - clk["mono"]
-        pending = self.db.execute(
-            "SELECT p.poll_id, p.key, p.channel, p.n_clients, p.qbss, p.qbss_stations, p.util_pct, q.mono "
-            "FROM ap_load_pending p JOIN polls q ON q.id = p.poll_id WHERE q.boot_id = ?", (boot,)).fetchall()
-        for _poll, key, channel, n_clients, qbss, stations, util, mono in pending:
-            if mono is None:
-                continue
-            self._write_load(key, int(round(epoch + mono)), channel,
-                             {"n_clients": n_clients, "qbss": qbss, "qbss_stations": stations, "util_pct": util})
-        if pending:
-            self.db.execute("DELETE FROM ap_load_pending WHERE poll_id IN "
-                            "(SELECT id FROM polls WHERE boot_id = ?)", (boot,))
-            log.info("clock anchor for boot %s: %d pending AP load rows on their true hours", boot, len(pending))
+        n = self._fold_pending(boot, wall - clk["mono"])
+        if n:
+            log.info("clock anchor for boot %s: %d pending AP load rows on their true hours", boot, n)
+
+    def _fold_pending(self, boot, epoch):
+        """The boot's pending AP load into ap_load_hourly on the true time
+        line (true ts of a poll = epoch + its mono), then deleted. One
+        statement per true hour, not one upsert per pending row: the per-row
+        loop took 4 min 55 s for the 1.5 million rows of a 9-day stretch
+        without NTP (2026-11-11) - inside the poll's transaction, so the
+        collector did not poll and the uploader could not see the anchor.
+        Returns the number of pending rows folded."""
+        polls = self.db.execute(
+            "SELECT id, mono FROM polls WHERE boot_id = ? AND clock_synced = 0 AND mono IS NOT NULL "
+            "ORDER BY id", (boot,)).fetchall()               # only unsynchronised polls leave load pending
+        by_hour = {}
+        for poll_id, mono in polls:
+            ts = int(round(epoch + mono))
+            by_hour.setdefault(ts - ts % 3600, []).append((poll_id, ts))
+        for hour in sorted(by_hour):
+            chunk = by_hour[hour]
+            for i in range(0, len(chunk), 1000):          # far below SQLite's bound-parameter limit
+                part = chunk[i:i + 1000]
+                self.db.execute(_LOAD_FOLD.format(polls=", ".join(["(?, ?)"] * len(part))),
+                                [v for pair in part for v in pair] + [hour])
+        return self.db.execute("DELETE FROM ap_load_pending WHERE poll_id IN "
+                               "(SELECT id FROM polls WHERE boot_id = ?)", (boot,)).rowcount
 
     def write_failed_poll(self, ts, error, duration_ms, clock=None, config_version=None):
         """Record a poll that raised before anything could be shaped (explicit
@@ -894,13 +972,14 @@ class Store:
             cur = self.db.execute(
                 "DELETE FROM polls WHERE ts < ? AND coalesce(clock_synced, 1) = 1", (before_ts,))
             counts["polls"] = cur.rowcount
-            if stale:
-                marks = ",".join("?" * len(stale))
+            for i in range(0, len(stale), 500):       # in parts: SQLite limits the bound parameters
+                part = stale[i:i + 500]
+                marks = ",".join("?" * len(part))
                 counts["observations"] += self.db.execute(
-                    "DELETE FROM observations WHERE poll_id IN (%s)" % marks, stale).rowcount
-                self.db.execute("DELETE FROM ap_load_pending WHERE poll_id IN (%s)" % marks, stale)
+                    "DELETE FROM observations WHERE poll_id IN (%s)" % marks, part).rowcount
+                self.db.execute("DELETE FROM ap_load_pending WHERE poll_id IN (%s)" % marks, part)
                 counts["polls"] += self.db.execute(
-                    "DELETE FROM polls WHERE id IN (%s)" % marks, stale).rowcount
+                    "DELETE FROM polls WHERE id IN (%s)" % marks, part).rowcount
             cur = self.db.execute("DELETE FROM ap_load_hourly WHERE hour + 3600 <= ?", (before_ts,))
             counts["ap_load_hourly"] = cur.rowcount
             self.db.execute("COMMIT")

@@ -35,6 +35,7 @@ Run by hand:  python3 collector.py [--once]
 import logging
 import os
 import signal
+import sqlite3
 import sys
 import time
 
@@ -67,6 +68,8 @@ DEFAULTS = {
 }
 
 PRUNE_EVERY = 3600  # seconds
+DS_ERROR_MAX = 500  # characters of polls.ds_error (the server's limit, like polls.error)
+_INT64_MAX = 2 ** 63 - 1
 
 
 # --- configuration --------------------------------------------------------------
@@ -118,17 +121,29 @@ def load_config(environ=None):
 
 # --- one poll -----------------------------------------------------------------------
 
+def _count(v):
+    """A non-negative integer the buffer can store, else None (Kismet's
+    numbers are taken as they come: a bool, a string, NaN or a value above
+    signed 64-bit must never reach the insert)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v:
+        return None
+    if not 0 <= v <= _INT64_MAX:
+        return None
+    return int(v)
+
+
 def datasource_health(sources):
     running = 1
     error = None
     packets = 0
-    for s in sources if isinstance(sources, list) else []:
+    sources = [s for s in sources if isinstance(s, dict)] if isinstance(sources, list) else []
+    for s in sources:
         if not s.get("kismet.datasource.running"):
             running = 0
         if s.get("kismet.datasource.error") and error is None:
-            error = "%s: %s" % (s.get("kismet.datasource.name"),
-                                s.get("kismet.datasource.error_reason") or "error")
-        packets += int(s.get("kismet.datasource.num_packets") or 0)
+            error = ("%s: %s" % (s.get("kismet.datasource.name"),
+                                 s.get("kismet.datasource.error_reason") or "error"))[:DS_ERROR_MAX]
+        packets += _count(s.get("kismet.datasource.num_packets")) or 0
     if not sources:
         running = 0
         error = error or "no datasources"
@@ -152,8 +167,10 @@ def poll_once(client, store, cfg, since, site=None, clk=None):
     config_version = applied_config_version(cfg.get("CONFIG_APPLIED"))
     try:
         status = client.status()
+        if not isinstance(status, dict):
+            raise KismetError("GET /system/status.json: not a JSON object")
         sources = client.datasources()
-        kismet_ts = int(status.get("kismet.system.timestamp.sec") or ts)
+        kismet_ts = _count(status.get("kismet.system.timestamp.sec")) or ts
         query_from = max(0, since - cfg["POLL_OVERLAP"])
         raw_devices = client.devices_since(query_from, DEVICE_FIELDS)
         raw_alerts = client.alerts_since(query_from)
@@ -163,22 +180,37 @@ def poll_once(client, store, cfg, since, site=None, clk=None):
         log.warning("poll failed after %d ms: %s", ms, e)
         return since
 
+    # One record Kismet reports in a shape nobody expected must never stop the
+    # poll: the resume point would not move, the same record would come back
+    # on every restart, and nothing would be collected until Kismet forgets it
+    # (the 56-minute crash loop of 2026-11-12, docs/findings.md section 6).
     records = []
     skipped = 0  # devices shape_device() rejected; a steady non-zero count means a shape.py bug
     for d in raw_devices if isinstance(raw_devices, list) else []:
         try:
             records.append(shape_device(d, ts))
-        except (ValueError, TypeError) as e:
+        except Exception as e:  # noqa: BLE001 - whatever it is, skip this device only
             skipped += 1
-            log.info("skipping device: %s", e)
-    alerts = [shape_alert(a) for a in raw_alerts if isinstance(a, dict)] \
-        if isinstance(raw_alerts, list) else []
+            log.info("skipping device: %s: %s", type(e).__name__, e)
+    alerts = []
+    for a in raw_alerts if isinstance(raw_alerts, list) else []:
+        if not isinstance(a, dict):
+            continue
+        try:
+            alerts.append(shape_alert(a))
+        except Exception as e:  # noqa: BLE001
+            log.warning("skipping alert: %s: %s", type(e).__name__, e)
 
+    sources = [s for s in sources if isinstance(s, dict)] if isinstance(sources, list) else []
     ds_running, ds_error, ds_packets = datasource_health(sources)
-    hop_n, hop_visited, hop_ok = hop_health(sources, site.channels() if site else None)
+    try:
+        hop_n, hop_visited, hop_ok = hop_health(sources, site.channels() if site else None)
+    except Exception as e:  # noqa: BLE001 - a hop list in an unknown shape: no coverage figures, the poll goes on
+        log.warning("hop coverage not read: %s: %s", type(e).__name__, e)
+        hop_n = hop_visited = hop_ok = None
     health = {
         "kismet_ts": kismet_ts,
-        "devices_total": status.get("kismet.system.devices.count"),
+        "devices_total": _count(status.get("kismet.system.devices.count")),
         "ds_running": ds_running,
         "ds_error": ds_error,
         "ds_packets": ds_packets,
@@ -242,9 +274,14 @@ def main(argv):
             # an unsynchronised clock gives a wrong cutoff: prune only on a synchronised one
             if started - last_prune >= PRUNE_EVERY and clk["synced"]:
                 cutoff = int(time.time()) - cfg["RETENTION_DAYS"] * 86400
-                removed = store.prune(cutoff)
-                if any(removed.values()):
-                    log.info("pruned rows older than %d days: %s", cfg["RETENTION_DAYS"], removed)
+                try:
+                    removed = store.prune(cutoff)
+                except sqlite3.Error as e:
+                    # retention must never stop collection: try again in an hour
+                    log.warning("prune failed (next try in %d s): %s", PRUNE_EVERY, e)
+                else:
+                    if any(removed.values()):
+                        log.info("pruned rows older than %d days: %s", cfg["RETENTION_DAYS"], removed)
                 last_prune = started
             delay = cfg["POLL_INTERVAL"] - (time.monotonic() - started)
             if delay > 0:

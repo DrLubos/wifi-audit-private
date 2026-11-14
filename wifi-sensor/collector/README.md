@@ -53,6 +53,13 @@ INFO poll ok: total=237 active=94 skipped=0 new_obs=61 alerts=0/0 ds=up 210ms
 is also logged with its reason); it should stay at 0, a steady non-zero value
 points to a shaping regression.
 
+One bad record never stops a poll: a device or alert in a shape nobody expected
+is skipped while shaping, and a record whose values SQLite cannot store is
+rolled back to its own savepoint (`WARNING device <key> not stored: ...`) while
+the poll and its other records are written. Before this, one such value stopped
+collection until Kismet forgot the device (2026-11-12, `docs/findings.md`
+section 6): the resume point never moved, so every restart met it again.
+
 ## What one poll does
 
 1. `since` = Kismet timestamp of the previous successful poll (persisted in
@@ -132,7 +139,10 @@ for the clock:
   dropped when the boot changes (`meta.last_boot_id`): on a stale clock the
   v7 rules compared with an earlier boot's true times and recorded nothing;
 - the AP load of an unsynchronised poll waits in `ap_load_pending` and goes
-  into `ap_load_hourly` on its true hour when the boot's anchor is recorded;
+  into `ap_load_hourly` on its true hour when the boot's anchor is recorded
+  (one statement per true hour, in the anchor poll's transaction: seconds for
+  days of pending load - the row-by-row fold took 4 min 55 s for 9 days on
+  2026-11-11 and kept the collector from polling for 10.5 minutes);
 - `prune()` judges unsynchronised polls by their true time (anchored boot) or
   append order (a boot that never got an anchor: gone once the first
   synchronised poll after it is older than the retention), and the collector
@@ -219,6 +229,10 @@ Schema v2 (associations deduplicated) replaced v1, where `associations` held one
 row per poll and made up ~85 % of the buffer (~290 MB/day). A v1 buffer is
 migrated automatically at start: the old table is dropped (not condensed - a
 GROUP BY over millions of rows would stall the collector on the Pi) and recreated.
+The write-ahead log (`buffer.db-wal`) is limited to 64 MB
+(`journal_size_limit`): SQLite truncates it whenever a checkpoint has emptied
+it - never delete the file by hand.
+
 The dropped pages go to SQLite's freelist, so the file stops growing but does not
 shrink; to reclaim the space once, with the collector stopped and free disk space
 of at least the DB size (the `sqlite3` CLI is not installed on Pi OS Lite, so use

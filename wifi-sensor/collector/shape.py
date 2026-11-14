@@ -97,8 +97,12 @@ _NULL_MAC = "00:00:00:00:00:00"
 
 def _text(v):
     """String field, or None when absent. "" is kept: it is a real value for
-    a cloaked SSID or a wildcard probe request."""
-    return v if isinstance(v, str) else None
+    a cloaked SSID or a wildcard probe request. NUL characters are dropped:
+    PostgreSQL text cannot hold one, the server refuses a batch that carries
+    one, and a refused batch is sent again until somebody intervenes."""
+    if not isinstance(v, str):
+        return None
+    return v.replace("\x00", "") if "\x00" in v else v
 
 
 _INT64_MAX = 2 ** 63 - 1
