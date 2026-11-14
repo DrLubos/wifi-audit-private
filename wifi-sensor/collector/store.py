@@ -997,6 +997,11 @@ class Store:
             raise
         return counts
 
+    def oldest_ts(self):
+        """ts of the oldest poll taken on a synchronised clock (None: none) -
+        where the retention's next slice starts (collector.prune_step())."""
+        return self.db.execute("SELECT min(ts) FROM polls WHERE coalesce(clock_synced, 1) = 1").fetchone()[0]
+
     def counts(self):
         out = {}
         for table in ("devices", "observations", "associations", "probes", "alerts", "polls",

@@ -124,6 +124,55 @@ class PollOnce(unittest.TestCase):
         self.assertEqual(self.q("SELECT ok, error FROM polls"), [(0, "GET /system/status.json: refused")])
 
 
+class Prune(unittest.TestCase):
+    """The retention in slices: a backlog (the first prune after days without
+    a synchronised clock) never becomes one long transaction."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(os.path.join(self.tmp.name, "buffer.db"))
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp.cleanup()
+
+    def fill(self, start, hours):
+        self.store.db.execute("BEGIN")
+        for i in range(hours * 4):
+            ts = start + 900 * i
+            pid = self.store.db.execute("INSERT INTO polls(ts, ok, clock_synced) VALUES (?, 1, 1)", (ts,)).lastrowid
+            self.store.db.execute("INSERT INTO observations(ts, key, last_time, poll_id) VALUES (?, 'K', ?, ?)",
+                                  (ts, ts, pid))
+        self.store.db.execute("COMMIT")
+
+    def test_a_backlog_goes_one_slice_at_a_time(self):
+        now = TS
+        cutoff = now - 14 * 86400
+        self.fill(cutoff - 10 * 3600, 12)                     # 10 hours past the retention, 2 hours inside it
+        removed, caught_up = collector.prune_step(self.store, 14, now)
+        self.assertFalse(caught_up)
+        self.assertEqual(removed["polls"], collector.PRUNE_SLICE_S // 900)      # one slice, not all 40
+        passes = 1
+        while not caught_up:
+            removed, caught_up = collector.prune_step(self.store, 14, now)
+            self.assertLessEqual(removed["polls"], collector.PRUNE_SLICE_S // 900)
+            passes += 1
+        self.assertEqual(passes, 5)
+        left = self.store.db.execute("SELECT count(*), min(ts) FROM polls").fetchone()
+        self.assertEqual(left, (8, cutoff))                   # exactly what is inside the retention
+        self.assertEqual(self.store.db.execute("SELECT count(*) FROM observations").fetchone()[0], 8)
+
+    def test_steady_state_is_one_pass(self):
+        now = TS
+        self.fill(now - 14 * 86400 - 3600, 3)                 # an hour past the retention, as every hour
+        removed, caught_up = collector.prune_step(self.store, 14, now)
+        self.assertTrue(caught_up)
+        self.assertEqual(removed["polls"], 4)
+
+    def test_an_empty_buffer(self):
+        self.assertEqual(collector.prune_step(self.store, 14, TS)[1], True)
+
+
 class Text(unittest.TestCase):
     def test_nul_characters_never_reach_the_buffer(self):
         from shape import shape_alert, shape_device

@@ -68,6 +68,11 @@ DEFAULTS = {
 }
 
 PRUNE_EVERY = 3600  # seconds
+# The retention deletes at most this much of the oldest data per pass (one
+# transaction): the first prune after nine days without a synchronised clock
+# (2026-11-11) deleted 1.9 million observations at once - 5 min 18 s in which
+# the collector did not poll. A backlog is worked off one slice per poll.
+PRUNE_SLICE_S = 2 * 3600
 DS_ERROR_MAX = 500  # characters of polls.ds_error (the server's limit, like polls.error)
 _INT64_MAX = 2 ** 63 - 1
 
@@ -231,6 +236,16 @@ def poll_once(client, store, cfg, since, site=None, clk=None):
     return kismet_ts
 
 
+def prune_step(store, retention_days, now):
+    """One pass of the retention: everything older than the cutoff, but no
+    more than PRUNE_SLICE_S beyond the buffer's oldest synchronised poll.
+    Returns (removed counts, caught up)."""
+    cutoff = int(now) - retention_days * 86400
+    oldest = store.oldest_ts()
+    step = cutoff if oldest is None else min(cutoff, oldest + PRUNE_SLICE_S)
+    return store.prune(step), step >= cutoff
+
+
 # --- main loop --------------------------------------------------------------------------
 
 class Stop(Exception):
@@ -273,16 +288,18 @@ def main(argv):
                 break
             # an unsynchronised clock gives a wrong cutoff: prune only on a synchronised one
             if started - last_prune >= PRUNE_EVERY and clk["synced"]:
-                cutoff = int(time.time()) - cfg["RETENTION_DAYS"] * 86400
                 try:
-                    removed = store.prune(cutoff)
+                    removed, caught_up = prune_step(store, cfg["RETENTION_DAYS"], time.time())
                 except sqlite3.Error as e:
                     # retention must never stop collection: try again in an hour
                     log.warning("prune failed (next try in %d s): %s", PRUNE_EVERY, e)
+                    caught_up = True
                 else:
                     if any(removed.values()):
-                        log.info("pruned rows older than %d days: %s", cfg["RETENTION_DAYS"], removed)
-                last_prune = started
+                        log.info("pruned rows older than %d days%s: %s", cfg["RETENTION_DAYS"],
+                                 "" if caught_up else " (a backlog: the next slice with the next poll)", removed)
+                if caught_up:
+                    last_prune = started
             delay = cfg["POLL_INTERVAL"] - (time.monotonic() - started)
             if delay > 0:
                 time.sleep(delay)
