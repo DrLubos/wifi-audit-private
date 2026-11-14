@@ -3,10 +3,14 @@
 Status: **cause found 2026-11-14** (very likely; traced on the crash of
 that day, not reproduced in isolation) - the db healthcheck's `pg_isready`,
 orphaned when its probe is killed at the timeout, is adopted by the postmaster
-(PID 1) and its exit status 2 is taken for a crashed server process. The fix
-is in `docker-compose.yml` (`init: true`, `exec pg_isready -t 3`, timeout
-10 s) and is **not deployed**: it recreates the db container (a short
-database stop, and the container's log is deleted) - the developer's OK.
+(PID 1) and its exit status 2 is taken for a crashed server process. **Fix
+deployed 2026-11-14 22:59:56 UTC** (`docker-compose.yml`: `init: true`,
+`exec pg_isready -t 3`, timeout 10 s): the db container was recreated after a
+fresh backup, the database was down 23:00:02 - 23:00:15 (a clean shutdown),
+no poll was lost; PID 1 is `docker-init` now. Whether the resets are gone
+shows at the next memory-pressure episodes - until then the diagnostic log
+flags stay. The crash's log lines (the container's log went with the old
+container) are in the developer's exports (`pg-crash-2026-11-14/`).
 
 ## Symptom
 
@@ -122,7 +126,7 @@ container):
 With `docker run --init` in the first line the orphan goes to tini and
 nothing is logged.
 
-## The fix (in `docker-compose.yml`, not deployed)
+## The fix (`docker-compose.yml`, deployed 2026-11-14)
 
 - `init: true` on the db service: tini is PID 1 and reaps every orphan - also
   those of `docker compose exec db sh -c ...` sessions (psql scripts, the
