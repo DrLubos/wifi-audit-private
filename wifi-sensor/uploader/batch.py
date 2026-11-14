@@ -159,11 +159,19 @@ def stale_windows(db, server_anchors, known=None):
     ids = {r[0] for r in db.execute("SELECT DISTINCT boot_id FROM polls WHERE clock_synced = 0") if r[0]}
     for b, boot in boots(db, ids, server_anchors).items():
         w = boot.stale_window()
-        if w is not None:
-            delta = boot.delta if boot.anchored else None
-            if delta is None and out.get(b, [None, None, None])[2] is not None:
-                continue                      # an anchor known before (a server anchor of a lost state) stays
-            out[b] = [w[0], w[1], delta]
+        if w is None:
+            continue
+        delta = boot.delta if boot.anchored else None
+        old = out.get(b)
+        if old is not None:
+            # the union with what is known: the retention removes a boot's
+            # unsynchronised polls oldest first, so the window read from the
+            # buffer shrinks day by day - the devices first seen in its early
+            # part keep their stale first_seen all the same
+            w = (min(old[0], w[0]), max(old[1], w[1]))
+            if delta is None:
+                delta = old[2]                # an anchor known before stays
+        out[b] = [w[0], w[1], delta]
     return out
 
 
@@ -411,8 +419,9 @@ def build(db, cursor, current_boot, server_anchors, max_polls, windows=None):
     # the devices every row refers to, their time fields placed: against the
     # stale window of every boot known to have run on a wrong clock
     info["windows"] = stale_windows(db, server_anchors, windows) if has_v8 else dict(windows or {})
-    all_boots = list(bmap.values()) + [timeline.Window(*w) for b, w in sorted(info["windows"].items())
-                                       if b not in bmap]
+    # (also for the batch's own boots: the remembered window is the union, the
+    # one read from the buffer has lost what the retention removed)
+    all_boots = list(bmap.values()) + [timeline.Window(*w) for b, w in sorted(info["windows"].items())]
     dev_rows = []
     for k in sorted(set(keys) | {h[0] for h in hist_rows} | {lr[0] for lr in load_rows}):
         d = db.execute("SELECT * FROM devices WHERE key = ?", (k,)).fetchone()

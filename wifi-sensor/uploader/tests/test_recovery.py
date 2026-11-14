@@ -327,6 +327,24 @@ class FirstSeen(Base):
         self.assertEqual(self.server.devices[key]["first_seen"], HOUR0)
         self.assertEqual(up_c.state["stale_windows"][A][2], STALE)
 
+    def test_the_window_does_not_shrink_while_the_retention_removes_its_polls(self):
+        mono = self.offline_stretch(hours=4, aps=(1,))
+        self.anchor_poll(mono, hours=4)
+        up = self.uploader()
+        self.assertTrue(self.catch_up(up))
+        full = list(up.state["stale_windows"][A])
+        # the retention takes the first three hours of the stale stretch (oldest first)
+        db = sqlite3.connect(self.db_path)
+        db.execute("DELETE FROM polls WHERE clock_synced = 0 AND id <= 12")
+        db.commit()
+        db.close()
+        t = HOUR0 + 4 * 3600 + 60
+        self.poll(t, [ap(1, t)], A, mono + 60, True, wall=float(t))
+        up2 = self.uploader()
+        self.assertTrue(self.catch_up(up2))
+        self.assertEqual(up2.state["stale_windows"][A], full)
+        self.assertEqual(self.server.devices["4202770D00000000_%012X" % 1]["first_seen"], HOUR0)
+
     def test_a_window_without_an_anchor_makes_the_value_unplaceable(self):
         self.offline_stretch(hours=1, aps=(1,))                        # boot A ends without any anchor
         t = HOUR0 + 86400
