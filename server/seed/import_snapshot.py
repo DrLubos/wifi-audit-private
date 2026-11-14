@@ -53,8 +53,21 @@ lost connection) leaves the database untouched. After COMMIT the stream
      fails, the import stays and `SELECT * FROM refresh_rollups(<id>)` can be
      re-run by hand (idempotent).
 
+Buffers v8 and v9 (live upload) record the clock data of every poll. A poll
+whose clock was not synchronised (a boot without NTP: the Pi has no RTC)
+carries a stale time, and so do its rows; only the sensor's uploader places
+those on the true time line (wifi-sensor/uploader/timeline.py - it also knows
+the server anchors, which no snapshot holds). The importer therefore loads
+the time-verified part of such a snapshot - synchronised polls and their
+observations, history rows and alerts, the hourly AP load (already on true
+hours) - leaves the unsynchronised polls out and says how many, and places
+the device-level times (first / last seen, the alert and deauth times Kismet
+stamped before the clock was set) with the boot's clock anchor, or leaves
+them out when the boot never got one (Placement below). To bring such a
+stretch to the server, let the uploader send it.
+
 Column and semantics reference: wifi-sensor/collector/store.py (buffer schema v2
-to v7; v3 added observations.disconnects_last, v4 polls.ds_hop_*, v5
+to v9; v3 added observations.disconnects_last, v4 polls.ds_hop_*, v5
 observations.rssi_floor; older snapshots import them as NULL - their floor
 readings stay raw in rssi and are read through rssi_valid(); v6 devices.cur_*
 and client_bssids; v7 ap_load_hourly) and server/schema.sql (schema 14:
@@ -69,7 +82,7 @@ import sys
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-EXPECTED_SCHEMA_VERSIONS = ("2", "3", "4", "5", "6", "7")
+EXPECTED_SCHEMA_VERSIONS = ("2", "3", "4", "5", "6", "7", "8", "9")
 
 _MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
 # COPY text format: backslash, tab, newline and carriage return are escaped;
@@ -93,6 +106,13 @@ _COPY_ESCAPE = str.maketrans({"\\": "\\\\", "\t": "\\t", "\n": "\\n", "\r": "\\r
 # optional_table: the buffer table exists only from some version on; a
 #         snapshot without it skips the spec.
 # client: client data, staged only with --with-client-tables (D4).
+# synced_only: the buffer column that names the row's poll ("id" for polls
+#         themselves): rows of polls whose clock was not synchronised are
+#         left out (buffers v8+; Placement).
+# place:  stage columns holding a time that may be stale (written by Kismet
+#         or the collector on a wrong clock); "last" names the one a row
+#         cannot do without, "first" falls back to it, the others become
+#         NULL when they cannot be placed (Placement.row()).
 # ap_only: without --with-client-tables only the rows of AP devices (the
 #         snapshot's AP evidence) - what the live ingest accepts.
 # The merge itself is ingest_merge() in schema.sql.
@@ -104,6 +124,9 @@ def _stage_select(spec, db, with_clients=False):
     if spec.get("ap_only") and not with_clients:
         where = " WHERE %s IN (SELECT key FROM devices WHERE %s)" % (spec["ap_only"], _AP_EVIDENCE)
     present = {r[1] for r in db.execute("PRAGMA table_info(%s)" % spec["name"])}
+    poll_col = spec.get("synced_only")
+    if poll_col and poll_col in present and _has_clock(db):
+        where += (" AND " if where else " WHERE ") + _SYNCED_POLL % {"c": poll_col}
     cols = []
     for c in spec["stage"]:
         expr = c[2] if len(c) > 2 else c[0]
@@ -111,6 +134,15 @@ def _stage_select(spec, db, with_clients=False):
             expr = "NULL AS " + c[0]
         cols.append(expr)
     return "SELECT %s FROM %s%s%s" % (", ".join(cols), spec["name"], where, spec.get("order", ""))
+
+
+# Rows of polls whose clock was synchronised (buffers v8+; rows written
+# before v8 have no poll id and no clock data: time as recorded).
+_SYNCED_POLL = "(%(c)s IS NULL OR %(c)s NOT IN (SELECT id FROM polls WHERE clock_synced = 0))"
+
+
+def _has_clock(db):
+    return "clock_synced" in {r[1] for r in db.execute("PRAGMA table_info(polls)")}
 
 
 # A device of the snapshot that has been an AP (server schema 10,
@@ -161,6 +193,8 @@ TABLES = [
         "optional": _CUR_COLS,                                      # buffer v6
         "ap_only": "key",
         "macs": ("mac",),
+        "place": {"last": "last_seen", "first": "first_seen", "null": ("config_changed_at", "cur_at"),
+                  "with": {"cur_at": ("cur_n_clients", "cur_qbss_stations", "cur_util_pct")}},
     },
     {
         "name": "polls",
@@ -173,12 +207,14 @@ TABLES = [
                   ("config_version", "integer")],
         "optional": ("ds_hop_n", "ds_hop_visited", "ds_hop_ok",    # buffer v4
                      "config_version"),                             # buffer v9
+        "synced_only": "id",
         "macs": (),
     },
     {
         "name": "device_config_history",
         "order": " ORDER BY key, ts",
         "stage": [("device_key", "text", "key"), ("ts", "bigint")] + _CONFIG_STAGE,
+        "synced_only": "poll_id",
         "macs": (),
     },
     {
@@ -200,6 +236,8 @@ TABLES = [
                   ("disconnects", "integer"), ("disconnects_last", "bigint"),
                   ("bss_timestamp", "bigint")],
         "optional": ("disconnects_last", "rssi_floor"),   # buffer v3, v5
+        "synced_only": "poll_id",
+        "place": {"null": ("disconnects_last",)},         # Kismet's frame time, maybe from before the clock step
         "macs": (),
     },
     {
@@ -226,6 +264,7 @@ TABLES = [
         "ap_only": "key",
         "stage": [("device_key", "text", "key"), ("freq_khz", "integer"), ("packets", "bigint"),
                   ("updated_ts", "bigint")],
+        "place": {"last": "updated_ts"},
         "macs": (),
     },
     {
@@ -233,6 +272,7 @@ TABLES = [
         "client": True,
         "stage": [("ap_key", "text"), ("client_mac", "text"), ("first_seen", "bigint"),
                   ("last_seen", "bigint")],
+        "place": {"last": "last_seen", "first": "first_seen"},
         "macs": ("client_mac",),
     },
     {
@@ -241,6 +281,7 @@ TABLES = [
         "select": _client_bssids_select,
         "stage": [("device_key", "text"), ("bssid", "text"), ("first_seen", "bigint"),
                   ("last_seen", "bigint")],
+        "place": {"last": "last_seen", "first": "first_seen"},
         "macs": ("bssid",),
     },
     {
@@ -248,6 +289,7 @@ TABLES = [
         "client": True,
         "stage": [("device_key", "text", "key"), ("ssid", "text"), ("first_time", "bigint"),
                   ("last_time", "bigint")],
+        "place": {"last": "last_time", "first": "first_time"},
         "macs": (),
     },
     {
@@ -258,6 +300,8 @@ TABLES = [
                   ("dest_mac", "text"), ("transmitter_mac", "text"), ("other_mac", "text"),
                   ("channel", "text"), ("freq_khz", "integer"), ("device_key", "text"),
                   ("text", "text"), ("raw", "text")],
+        "synced_only": "poll_id",
+        "place": {"last": "ts"},                          # Kismet's alert time
         "macs": ("source_mac", "dest_mac", "transmitter_mac", "other_mac"),
     },
 ]
@@ -267,6 +311,98 @@ TABLES = [
 
 class SnapshotError(Exception):
     pass
+
+
+class Placement:
+    """The stale clock windows of a v8+ snapshot and what to do with a time
+    that falls into one.
+
+    A boot without NTP runs on a stale clock until chrony steps it; the
+    collector marks those polls clock_synced = 0 and stores one anchor per
+    boot (clock_anchors: wall and monotonic time of its first synchronised
+    poll). The boot's stale window is [first, last unsynchronised poll] on
+    the stale clock, +- MARGIN_S; its shift to true time is
+    delta = (anchor wall - anchor mono) - (stale ts - mono of the first
+    unsynchronised poll). place(value): outside every window - as it is;
+    inside the window of an anchored boot - shifted (unchanged below
+    MIN_SHIFT_S); inside one without an anchor, or of a clock that was
+    ahead - None (not placeable). These are the rules of the uploader's
+    timeline.placeable() (wifi-sensor/uploader/timeline.py; a test keeps the
+    two equal) - the importer has no server anchors, so a boot the uploader
+    anchored on the server's time is "without an anchor" here.
+    """
+    MIN_SHIFT_S = 10.0
+    MARGIN_S = 120.0
+
+    def __init__(self, db):
+        self.windows = []          # (from, to, delta or None), on the stale clock
+        self.boots = []            # per boot: polls left out, their raw span, whether it is anchored
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if not _has_clock(db):
+            return
+        anchors = dict((r[0], (r[1], r[2])) for r in db.execute("SELECT boot_id, wall, mono FROM clock_anchors")) \
+            if "clock_anchors" in tables else {}
+        rows = db.execute("SELECT boot_id, count(*), min(ts), max(ts), min(mono), max(mono), min(id), max(id) "
+                          "FROM polls WHERE clock_synced = 0 GROUP BY boot_id ORDER BY min(id)").fetchall()
+        for boot, n, ts_lo, ts_hi, mono_lo, mono_hi, id_lo, id_hi in rows:
+            delta = None
+            first = db.execute("SELECT ts, mono FROM polls WHERE clock_synced = 0 AND mono IS NOT NULL AND boot_id IS ? "
+                               "ORDER BY id LIMIT 1", (boot,)).fetchone()
+            if first is not None and boot in anchors:
+                epoch_stale = first[0] - first[1]
+                delta = (anchors[boot][0] - anchors[boot][1]) - epoch_stale
+                self.windows.append((epoch_stale + mono_lo - self.MARGIN_S, epoch_stale + mono_hi + self.MARGIN_S,
+                                     delta))
+            else:
+                self.windows.append((ts_lo - self.MARGIN_S, ts_hi + self.MARGIN_S, None))
+            self.boots.append({"boot_id": boot, "polls": n, "raw_from": ts_lo, "raw_to": ts_hi, "seq_from": id_lo,
+                               "seq_to": id_hi, "delta": delta})
+
+    def __bool__(self):
+        return bool(self.windows)
+
+    def place(self, value):
+        if value is None:
+            return None
+        for lo, hi, delta in self.windows:
+            if not lo <= value <= hi:
+                continue
+            if delta is not None and delta >= self.MIN_SHIFT_S:
+                shifted = value + delta
+                return int(round(shifted)) if isinstance(value, int) else shifted
+            if delta is not None and abs(delta) < self.MIN_SHIFT_S:
+                return value
+            return None
+        return value
+
+    def row(self, spec, row):
+        """The staged row with its times placed, or None when the row cannot
+        be placed (its "last" time lies in a window without an anchor)."""
+        rule = spec["place"]
+        idx = {c[0]: i for i, c in enumerate(spec["stage"])}
+        row = list(row)
+        if "last" in rule:
+            last = self.place(row[idx[rule["last"]]])
+            if last is None and row[idx[rule["last"]]] is not None:
+                return None
+            row[idx[rule["last"]]] = last
+            if "first" in rule:
+                first = self.place(row[idx[rule["first"]]])
+                row[idx[rule["first"]]] = last if first is None else min(first, last)
+        for col in rule.get("null", ()):
+            row[idx[col]] = self.place(row[idx[col]])
+            if row[idx[col]] is None:
+                for dependent in rule.get("with", {}).get(col, ()):
+                    row[idx[dependent]] = None
+        return row
+
+    def describe(self, log):
+        for b in self.boots:
+            how = ("its other times are shifted by %+.0f s (clock anchor)" % b["delta"] if b["delta"] is not None
+                   else "no clock anchor: times inside it are left out")
+            log("  boot %s: %d poll(s) with an unsynchronised clock (raw %s .. %s, seq %d-%d) NOT imported - "
+                "only the uploader places them; %s" % ((b["boot_id"] or "?")[:8], b["polls"], fmt_ts(b["raw_from"]),
+                                                       fmt_ts(b["raw_to"]), b["seq_from"], b["seq_to"], how))
 
 
 def open_snapshot(path):
@@ -322,16 +458,22 @@ def snapshot_summary(db):
 
 # --- stream generation ---------------------------------------------------------------
 
-def emit_copy(out, db, spec, log, with_clients=False):
+def emit_copy(out, db, spec, log, with_clients=False, placement=None):
     """COPY the rows of one buffer table into its staging table (created by
     ingest_stage_create()). Returns the row count."""
     name = spec["name"]
     mac_idx = [i for i, c in enumerate(spec["stage"]) if c[0] in spec["macs"]]
+    place = placement if placement and spec.get("place") else None
     out.write("\\echo -- %s\n" % name)
     out.write("COPY stage_%s (%s) FROM STDIN;\n" % (name, ", ".join(c[0] for c in spec["stage"])))
-    n = 0
+    n = left_out = 0
     try:
         for row in db.execute(_stage_select(spec, db, with_clients)):
+            if place is not None:
+                row = place.row(spec, row)
+                if row is None:
+                    left_out += 1
+                    continue
             for i in mac_idx:
                 v = row[i]
                 if v is not None and not _MAC_RE.match(v):
@@ -346,12 +488,18 @@ def emit_copy(out, db, spec, log, with_clients=False):
             n += 1
     finally:
         out.write("\\.\n")
-    log("  %-22s %9d rows staged" % (name, n))
+    log("  %-22s %9d rows staged%s" % (name, n, " (%d left out: time in a stale window without an anchor)" % left_out
+                                        if left_out else ""))
     return n
 
 
 def emit_stream(out, db, args, log):
     counts, lo, hi = snapshot_summary(db)
+    placement = Placement(db)
+    if placement:
+        placement.describe(log)
+        # the span of what is imported: the synchronised polls
+        lo, hi = db.execute("SELECT MIN(ts), MAX(ts) FROM polls WHERE coalesce(clock_synced, 1) = 1").fetchone()
     out.write("-- generated by import_snapshot.py from %s\n" % os.path.basename(args.snapshot))
     out.write("-- snapshot span %s .. %s, %d polls, %d observations\n"
               % (fmt_ts(lo), fmt_ts(hi), counts["polls"], counts["observations"]))
@@ -387,7 +535,7 @@ def emit_stream(out, db, args, log):
         if spec.get("client") and not args.with_client_tables:
             log("  %-22s   (client table: left on the sensor, --with-client-tables)" % spec["name"])
             continue
-        emit_copy(out, db, spec, log, args.with_client_tables)
+        emit_copy(out, db, spec, log, args.with_client_tables, placement)
 
     # 3. the merge shared with the live ingest; :merged = {staged, inserted, conflicts, min_ts, excluded}
     out.write("\\echo -- ingest_merge\n")
@@ -502,6 +650,7 @@ def main(argv):
         for t, n in counts.items():
             log("  %-22s %9d" % (t, n))
         if args.dry_run:
+            Placement(db).describe(log)
             return 0
 
         # The SQL stream must be UTF-8 whatever the locale says; anything the

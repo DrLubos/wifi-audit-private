@@ -263,8 +263,8 @@ class Stream(unittest.TestCase):
     def test_upload_is_recorded_in_the_transaction(self):
         sql = self.stream()
         rec = sql.split("INSERT INTO sensor_uploads")[1].split(";")[0]
-        self.assertIn("SELECT :sid, 'snapshot', '7', to_timestamp(1758981600), to_timestamp(1758981900), "
-                      "NULL,", rec)                       # no export meta in this fixture
+        self.assertIn("SELECT :sid, 'snapshot', '%d', to_timestamp(1758981600), to_timestamp(1758981900), "
+                      "NULL," % store.SCHEMA_VERSION, rec)      # the collector's version; no export meta here
         self.assertIn("coalesce(:'merged'::jsonb -> 'inserted', '{}'::jsonb)", rec)
         self.assertLess(sql.index("INSERT INTO sensor_uploads"), sql.index("COMMIT;"))
         self.assertLess(sql.index("SELECT ingest_merge("), sql.index("INSERT INTO sensor_uploads"))
@@ -287,7 +287,173 @@ class Stream(unittest.TestCase):
         db = sqlite3.connect(self.path)
         v = db.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
         db.close()
+        self.assertEqual(v, str(store.SCHEMA_VERSION))
+        # the collector's current buffer must be importable: a recovery tool that
+        # refuses the deployed version is none (v8 and v9 were refused for a month)
         self.assertIn(v, imp.EXPECTED_SCHEMA_VERSIONS)
+        self.assertEqual(imp.EXPECTED_SCHEMA_VERSIONS[-1], str(store.SCHEMA_VERSION))
+
+    def test_a_snapshot_without_stale_polls_is_staged_as_before(self):
+        db = imp.open_snapshot(self.path)
+        self.assertFalse(imp.Placement(db))
+        db.close()
+        rows = staged(self.stream())
+        self.assertEqual(len(rows["polls"]), 3)
+        self.assertEqual(len(rows["observations"]), 3)
+
+
+BOOT_STALE = "aaaaaaaa-1111-4111-8111-111111111111"     # a boot without NTP that got its anchor
+BOOT_LOST = "bbbbbbbb-2222-4222-8222-222222222222"      # a boot that ended without one
+T0 = 1793656800                                         # 2026-11-02 22:00:00 UTC, true time
+DELTA = 54660                                           # the stale clock was 15 h 11 min behind
+AP2 = "4202770D00000000_A1B2C3D4E5F7"
+AP3 = "4202770D00000000_A1B2C3D4E5F8"
+
+
+def make_stale_buffer(path):
+    """A v9 buffer after a stretch without NTP, as the collector leaves it:
+
+      boot LOST   2 unsynchronised polls, never anchored (stale clock a year back)
+      boot STALE  3 unsynchronised polls on a clock DELTA behind, then the
+                  anchor poll (synchronised) and one more
+    AP  is seen in every poll of boot STALE; AP2 only in its unsynchronised
+    polls (first and last seen on the stale clock); AP3 only in boot LOST."""
+    s = store.Store(path)
+    db = s.db
+    db.execute("BEGIN")
+    stale0, lost0 = T0 - DELTA, T0 - 400 * 86400
+
+    def poll(ts, boot, mono, synced):
+        return db.execute("INSERT INTO polls (ts, kismet_ts, devices_total, devices_active, new_obs, ds_running, "
+                          "duration_ms, ok, mono, boot_id, clock_synced) VALUES (?, ?, 2, 2, 2, 1, 200, 1, ?, ?, ?)",
+                          (ts, ts, mono, boot, 1 if synced else 0)).lastrowid
+
+    def obs(ts, key, pid, disc=None):
+        db.execute("INSERT INTO observations (ts, key, last_time, rssi, pk_total, pk_data, disconnects_last, poll_id) "
+                   "VALUES (?, ?, ?, -60, 10, 0, ?, ?)", (ts, key, ts, disc, pid))
+
+    for i in range(2):
+        pid = poll(lost0 + 30 * i, BOOT_LOST, 50.0 + 30 * i, False)
+        obs(lost0 + 30 * i, AP3, pid)
+    for i in range(3):
+        pid = poll(stale0 + 30 * i, BOOT_STALE, 100.0 + 30 * i, False)
+        obs(stale0 + 30 * i, AP, pid)
+        obs(stale0 + 30 * i, AP2, pid)
+    db.execute("INSERT INTO device_config_history (ts, key, ssid, adv_channel, poll_id) VALUES (?, ?, 'Net', '6', ?)",
+               (stale0 + 30, AP, pid - 1))
+    db.execute("INSERT INTO alerts (hash, ts, header, raw, poll_id) VALUES ('stale-poll', ?, 'DEAUTHFLOOD', '{}', ?)",
+               (stale0 + 31.5, pid))
+    anchor = poll(T0 + 90, BOOT_STALE, 190.0, True)
+    db.execute("INSERT INTO clock_anchors (boot_id, mono, wall, poll_id) VALUES (?, 190.0, ?, ?)",
+               (BOOT_STALE, float(T0 + 90), anchor))
+    obs(T0 + 90, AP, anchor, disc=stale0 + 45)          # a deauth frame Kismet stamped before the clock step
+    db.execute("INSERT INTO alerts (hash, ts, header, raw, poll_id) VALUES ('before-the-step', ?, 'BSSTIMESTAMP', "
+               "'{}', ?), ('after-the-step', ?, 'CHANCHANGE', '{}', ?)", (stale0 + 50.25, anchor, T0 + 88.0, anchor))
+    last = poll(T0 + 120, BOOT_STALE, 220.0, True)
+    obs(T0 + 120, AP, last)
+    db.execute("INSERT INTO device_config_history (ts, key, ssid, adv_channel, poll_id) VALUES (?, ?, 'Net', '11', ?)",
+               (T0 + 120, AP, last))
+    for key, mac, first, lastseen, changed in (
+            (AP, "A1:B2:C3:D4:E5:F6", stale0, T0 + 120, T0 + 120),      # first seen on the stale clock
+            (AP2, "A1:B2:C3:D4:E5:F7", stale0, stale0 + 60, stale0),    # everything on the stale clock
+            (AP3, "A1:B2:C3:D4:E5:F8", lost0, lost0 + 30, None)):       # a boot without an anchor
+        db.execute("INSERT INTO devices (key, mac, type, first_seen, last_seen, ssid, config_changed_at, "
+                   "cur_n_clients, cur_at) VALUES (?, ?, 'ap', ?, ?, 'Net', ?, 4, ?)",
+                   (key, mac, first, lastseen, changed, lastseen))
+    db.executemany("INSERT INTO device_freq_hist (key, freq_khz, packets, updated_ts) VALUES (?, 2412000, 5, ?)",
+                   [(AP, T0 + 120), (AP2, stale0 + 60), (AP3, lost0 + 30)])
+    db.execute("INSERT INTO ap_load_hourly (key, hour, channel, polls, first_ts, last_ts) VALUES (?, ?, '6', 5, ?, ?)",
+               (AP, T0, T0, T0 + 120))                   # folded by the collector: true hours already
+    db.execute("COMMIT")
+    s.close()
+
+
+class StaleClock(unittest.TestCase):
+    """A buffer v8/v9 with polls whose clock was not synchronised."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.path = os.path.join(cls.tmp.name, "stale.db")
+        make_stale_buffer(cls.path)
+        db = imp.open_snapshot(cls.path)
+        out, cls.log = io.StringIO(), []
+        imp.emit_stream(out, db, args(), cls.log.append)
+        db.close()
+        cls.sql = out.getvalue()
+        cls.rows = staged(cls.sql)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_only_synchronised_polls_and_their_rows(self):
+        self.assertEqual([r[1] for r in self.rows["polls"]], [str(T0 + 90), str(T0 + 120)])
+        self.assertEqual([r[0] for r in self.rows["observations"]], [str(T0 + 90), str(T0 + 120)])
+        self.assertEqual([r[1] for r in self.rows["device_config_history"]], [str(T0 + 120)])
+        self.assertNotIn("stale-poll", [r[0] for r in self.rows["alerts"]])
+        # nothing staged carries a stale time
+        stale = {str(T0 - DELTA + d) for d in range(0, 121)}
+        for table, rows in self.rows.items():
+            for r in rows:
+                self.assertFalse(stale & set(r), (table, r))
+
+    def test_kismet_times_from_before_the_clock_step_are_shifted(self):
+        obs = {r[0]: r for r in self.rows["observations"]}
+        self.assertEqual(obs[str(T0 + 90)][7], str(T0 + 45))                    # disconnects_last
+        alerts = {r[0]: r[1] for r in self.rows["alerts"]}
+        self.assertEqual(float(alerts["before-the-step"]), T0 + 50.25)
+        self.assertEqual(float(alerts["after-the-step"]), T0 + 88.0)
+
+    def test_device_times_are_placed_with_the_anchor(self):
+        dev = {r[0]: r for r in self.rows["devices"]}
+        self.assertEqual(dev[AP][4:6], [str(T0), str(T0 + 120)])                # first_seen no longer stale
+        self.assertEqual(dev[AP2][4:6], [str(T0), str(T0 + 60)])                # both shifted
+        self.assertEqual(dev[AP2][16], str(T0))                                 # config_changed_at
+        self.assertEqual(dev[AP2][20], str(T0 + 60))                            # cur_at
+        freq = {r[0]: r[3] for r in self.rows["device_freq_hist"]}
+        self.assertEqual(freq, {AP: str(T0 + 120), AP2: str(T0 + 60)})
+
+    def test_a_boot_without_an_anchor_is_left_out(self):
+        self.assertNotIn(AP3, [r[0] for r in self.rows["devices"]])
+        self.assertNotIn(AP3, [r[0] for r in self.rows["device_freq_hist"]])
+        self.assertNotIn(AP3, [r[1] for r in self.rows["observations"]])
+        text = "\n".join(self.log)
+        self.assertIn("boot aaaaaaaa: 3 poll(s) with an unsynchronised clock", text)
+        self.assertIn("shifted by +54660 s", text)
+        self.assertIn("boot bbbbbbbb: 2 poll(s)", text)
+        self.assertIn("no clock anchor", text)
+        self.assertIn("1 left out", text)
+
+    def test_the_hourly_load_is_on_true_hours_already(self):
+        self.assertEqual([r[1] for r in self.rows["ap_load_hourly"]], [str(T0)])
+
+    def test_the_recorded_span_is_the_imported_one(self):
+        rec = self.sql.split("INSERT INTO sensor_uploads")[1].split(";")[0]
+        self.assertIn("to_timestamp(%d), to_timestamp(%d)" % (T0 + 90, T0 + 120), rec)
+
+    def test_placement_equals_the_uploaders_placeable(self):
+        """One rule, two places: wifi-sensor/uploader/timeline.py placeable()."""
+        sys.path.insert(0, os.path.join(HERE, "..", "..", "..", "wifi-sensor", "uploader"))
+        import timeline
+        db = imp.open_snapshot(self.path)
+        pl = imp.Placement(db)
+        db.close()
+        self.assertEqual((pl.MIN_SHIFT_S, pl.MARGIN_S), (timeline.MIN_SHIFT_S, timeline.WINDOW_MARGIN_S))
+        stale0, lost0 = T0 - DELTA, T0 - 400 * 86400
+        boots = [timeline.Boot(BOOT_LOST, stale_ts=lost0, stale_mono=50.0, unsynced_mono=(50.0, 80.0)),
+                 timeline.Boot(BOOT_STALE, anchor=(float(T0 + 90), 190.0), source="ntp", stale_ts=stale0,
+                               stale_mono=100.0, unsynced_mono=(100.0, 160.0))]
+        for base in (stale0, lost0, T0):
+            for d in (-500, -121, -120, -1, 0, 30, 60, 179, 180, 181, 5000):
+                v = base + d
+                self.assertEqual(pl.place(v), timeline.placeable(v, boots), v)
+                # a fractional time (an alert's) is judged alike and keeps its fraction,
+                # like timeline.place_kismet()
+                vf = v + 0.25
+                want = timeline.placeable(vf, boots)
+                self.assertEqual(pl.place(vf), want if want is None or want == vf else vf + DELTA, vf)
+        self.assertIsNone(pl.place(None))
 
 
 class StreamV5(unittest.TestCase):

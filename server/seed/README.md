@@ -124,7 +124,22 @@ python3 seed/import_snapshot.py buffer-snapshot.db --sensor pi-fri \
   `ops/delete_client_rows.sh` (dry run by default) is there for a later
   decision. Apply schema 14 (`ops/migrate_schema14.sh`) before importing with
   this importer.
-- Buffer schema v2 to v7 snapshots are accepted. v3 (collector deployed
+- **Buffers v8 and v9 (live upload; clock data per poll):** accepted. A poll
+  whose clock was not synchronised (a boot without NTP - the Pi has no RTC)
+  carries a stale time; **such polls and their observations, history rows
+  and alerts are left out**, and the importer says how many per boot. Only
+  the sensor's uploader places them on the true time line (it also has the
+  server anchors, which a snapshot does not hold) - to bring such a stretch
+  to the server, let the uploader send it (it resumes after the server's
+  newest poll; without its state file, from there too). What a snapshot of
+  such a buffer still gives: every synchronised poll with its rows, the
+  hourly AP load (the collector folds it onto true hours), and the device
+  rows with their times placed - a first / last seen, alert or deauth time
+  Kismet stamped on the stale clock is shifted by the boot's clock anchor,
+  and left out when the boot never got one (`Placement` in
+  `import_snapshot.py`; the uploader's `timeline.placeable()` rule, a test
+  keeps the two equal). `--dry-run` lists the stale stretches of a snapshot.
+- Buffer schema v2 to v9 snapshots are accepted. v3 (collector deployed
   2026-09-22 or later) carries `observations.disconnects_last`, v4 (2026-09-27 or
   later) `polls.ds_hop_n / ds_hop_visited / ds_hop_ok` (hop-list coverage), v5
   `observations.rssi_floor` (the RSSI was an adapter floor value, stored as NULL
