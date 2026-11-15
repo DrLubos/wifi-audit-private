@@ -285,8 +285,9 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
   that is not on the bus. **Remote fix that worked:** power-cycle the hub port as root -
   `echo 1 > /sys/bus/usb/devices/1-1.1:1.0/1-1.1-port2/disable; sleep 5; echo 0
   > .../disable` (port 1 is the `lan78xx` Ethernet uplink - never touch port 1
-  or the whole hub `1-1.1`). The developer needs `ssh -t pi` for the sudo
-  prompt (no passwordless sudo). Suspect the hardware (cable, connector,
+  or the whole hub `1-1.1`). The developer needed `ssh -t pi` for the sudo
+  prompt (no passwordless sudo then; there is since 2026-10-18, see
+  "Operating rules"). Suspect the hardware (cable, connector,
   adapter); details in `docs/findings.md` section 6.
   **The watchdog now does this itself** (`sensor/capture-watchdog.sh`):
   - The port is **learned, not configured**: on every run while `wlan1` exists,
@@ -427,8 +428,11 @@ Eventbus (push) for alerts later. Fields of interest:
     `uploader.py --check`, enabling the uploader, writing the ingest token into
     `/etc/wifi-sensor/uploader.conf` (from `ops/sensor_token.sh` on the server
     in one pipeline - never printed).
-  - sudo needs the developer's password (`ssh -t pi`): when a step needs sudo
-    and no password can be given, stop and hand the developer the exact
+  - sudo: the sensor user has passwordless sudo since 2026-10-18
+    (`/etc/sudoers.d/020-pi-nopasswd`, `sudo -n -l`: `(ALL) NOPASSWD: ALL`;
+    until 2026-11-15 this file still said it needs the developer's password).
+    That widens nothing: it is used only for the steps listed above; for any
+    other step that needs root, stop and hand the developer the exact
     commands.
 - **Never on the Pi:** change network, Tailscale, SSH, firewall or chrony
   configuration (beyond the N11 timer), reboot it, or change capture settings
