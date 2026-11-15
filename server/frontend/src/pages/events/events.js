@@ -6,7 +6,7 @@
 // security change, sensor outage) and "Who saw it" from who_saw_it.
 
 import { SEVERITY, STATUS } from "../../app/status.js";
-import { fmtDate, fmtDateTime, fmtDuration, fmtInt, fmtTime, partsOf } from "../../format.js";
+import { fmtDate, fmtDateTime, fmtDbm, fmtDuration, fmtInt, fmtTime, sameDay } from "../../format.js";
 
 export const STATUSES = ["open", "confirmed", "benign", "false_positive"];   // schema 12: three outcomes
 export const KINDS = [["detection", "Detection"], ["kismet", "Kismet alert"], ["config", "Configuration change"],
@@ -57,7 +57,7 @@ export function timeText(e, tz) {
 }
 export function timeTitle(e, tz) {
   if (!e.ts_end || e.ts_end === e.ts) return undefined;
-  const same = partsOf(e.ts, tz).day === partsOf(e.ts_end, tz).day;
+  const same = sameDay(e.ts, e.ts_end, tz);
   return `${fmtDateTime(e.ts, tz)} – ${same ? fmtTime(e.ts_end, tz) : fmtDateTime(e.ts_end, tz)}`;
 }
 
@@ -66,7 +66,7 @@ const NOUNS = { kismet: "episodes", config: "changes", detection: "detections" }
 export function groupText(e, tz) {
   const g = e.group;
   const end = g.ts_last ?? e.ts;
-  const same = partsOf(g.ts_first, tz).day === partsOf(end, tz).day;
+  const same = sameDay(g.ts_first, end, tz);
   return `${fmtInt(g.n)} ${NOUNS[e.kind] ?? "events"} on ${fmtDate(g.ts_first, tz)}, ${fmtTime(g.ts_first, tz)} – `
     + `${same ? fmtTime(end, tz) : fmtDateTime(end, tz)}`;
 }
@@ -194,6 +194,16 @@ export function labelBody(outcome, reason, cause, note) {
   return { status: outcome, reason, cause, note: n };
 }
 
+// the request of a label. One event: the note as the form has it - the form
+// starts from the stored note, an empty one clears it. Several events (a
+// group row, a selection): the same label for all; an empty note is left out,
+// so each event keeps its own (api: writes.keeps_note)
+export function labelRequest(ids, body) {
+  if (ids.length === 1) return { url: `/api/v2/events/${ids[0]}/status`, body };
+  const { note, ...rest } = body;
+  return { url: "/api/v2/events/status", body: note == null ? { ...rest, ids } : { ...rest, note, ids } };
+}
+
 // the events a selection or a group row labels
 export function idsOf(rows) {
   return [...new Set(rows.flatMap((e) => (e.group ? e.group.members.map((m) => m.id) : [e.id])))].sort((a, b) => a - b);
@@ -252,7 +262,11 @@ export function whyRows(ev, tz) {
     const b = x.bursts ?? {};
     const a = x.alerts ?? {};
     const rules = [];
-    if (x.rules?.bursts) rules.push(`${fmtInt(b.n)} deauth/disassoc bursts within ${dur(x.params?.burst_window_s ?? 600)} (threshold ${b.threshold})`);
+    // the rule counts the bursts inside one window, not every burst of the episode
+    if (x.rules?.bursts) {
+      const all = b.max_in_window != null && b.n > b.max_in_window ? `, ${fmtInt(b.n)} in the whole episode` : "";
+      rules.push(`${fmtInt(b.max_in_window ?? b.n)} deauth/disassoc bursts within ${dur(x.params?.burst_window_s ?? 600)} (threshold ${b.threshold})${all}`);
+    }
     if (x.rules?.alerts) rules.push(`${fmtInt(a.n)} Kismet DEAUTHFLOOD alerts within ${dur(a.span_s ?? 0)}`);
     const rows = [{ dt: "Rule", dd: rules.join("; ") || ev.summary }];
     if (x.observed?.bursts_per_hour != null && x.baseline?.bursts_per_hour != null) {
@@ -264,9 +278,49 @@ export function whyRows(ev, tz) {
     if (x.ap) rows.push({ dt: "MFP required", dd: x.ap.mfp_req ? "yes" : "no - clients can be disconnected by forged frames" });
     return rows;
   }
+  if (ev.type === "evil_twin") return x.rssi ? twinRssiRows(x) : twinUnknownRows(ev, x);
   // another detector: its scalar evidence as it is
   return Object.entries(x).filter(([, v]) => v == null || typeof v !== "object").slice(0, 6)
     .map(([k, v]) => ({ dt: k.replaceAll("_", " "), dd: v == null ? "–" : String(v) }));
+}
+
+const one = (v) => (v == null ? "–" : String(Math.round(v * 10) / 10).replace(/^-/, "−"));
+const FACET = { median_shift: "the median of its readings moved", spread_inflation: "its readings spread out, as from two positions",
+                both: "the median moved and the readings spread out" };
+
+// evil_twin (b): the AP's RSSI left the baseline it has had for days
+function twinRssiRows(x) {
+  const r = x.rssi;
+  const b = r.baseline ?? {};
+  const o = r.observed ?? {};
+  const rows = [
+    { dt: "Rule", dd: `RSSI ${o.direction ?? "away from"} than its baseline by up to ${one(o.max_dev_db)} dB `
+      + `(${one(o.k_sigma)} robust σ) - ${FACET[r.facet] ?? r.facet ?? "deviation"}` },
+    { dt: "Baseline", dd: `${fmtDbm(b.median)} dBm, robust σ ${one(b.robust_sd)} dB, from ${fmtInt(b.n_obs)} readings on ${fmtInt(b.n_days)} days` },
+    { dt: "Persistence", dd: `${fmtInt(o.max_in_window)} deviating windows within ${dur(x.params?.persist_window_s ?? 900)}`
+      + ` (needs ${r.threshold?.persistence_obs ?? "–"}), ${fmtInt(o.n_windows)} in the episode` },
+  ];
+  if (x.duration_s != null) rows.push({ dt: "Duration", dd: dur(x.duration_s) });
+  if (x.rules?.unknown_bssid) rows.push({ dt: "Also", dd: "an unknown BSSID advertised this SSID at the same time" });
+  return rows;
+}
+
+// evil_twin (a): a BSSID outside the trusted set of an established SSID
+function twinUnknownRows(ev, x) {
+  const m = x.membership ?? {};
+  const p = m.persistence ?? {};
+  const o = x.observed ?? {};
+  const rows = [
+    { dt: "BSSID", dd: `${ev.ap?.bssid ?? "–"}${x.ap?.random_bssid ? " (randomized)" : ""}`, mono: true },
+    { dt: "Advertises SSID", dd: `${x.ssid ?? ev.ap?.network ?? "–"} - not among its ${fmtInt((m.trusted_bssids ?? []).length)} trusted BSSIDs` },
+    { dt: "Against them", dd: `${m.oui_in_trusted ? "same vendor prefix" : "foreign vendor prefix"}, `
+      + (m.crypt_matches ? "same encryption" : `encryption differs (${x.ap?.crypt ?? "unknown"}, theirs ${m.dominant_crypt ?? "unknown"})`) },
+    { dt: "Present", dd: `${fmtInt(p.n_obs)} observations over ${dur(p.span_s ?? 0)}` },
+    { dt: "Signal", dd: o.win_median_dbm == null ? "floor readings only"
+      : `median ${fmtDbm(o.win_median_dbm)} dBm${o.close ? " - close or stronger than the trusted ones" : ""}` },
+  ];
+  if (x.rules?.rssi_deviation) rows.push({ dt: "Also", dd: "a trusted BSSID of this SSID left its RSSI baseline at the same time" });
+  return rows;
 }
 
 // "Who saw it": per sensor the median RSSI and the clients in the event's

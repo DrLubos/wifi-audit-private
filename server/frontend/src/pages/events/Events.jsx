@@ -28,7 +28,7 @@ import { useAccount } from "../../hooks/useAccount.js";
 import { useFilters } from "../../hooks/useFilters.js";
 import { fmtDateTime, fmtInt } from "../../format.js";
 import {
-  actionText, actionsFor, apCell, bssidCell, groupText, headText, historyLine, idsOf, KINDS, labelBody, labelText, OUTCOMES, CAUSES, WITH_CAUSE,
+  actionText, actionsFor, apCell, bssidCell, groupText, headText, historyLine, idsOf, KINDS, labelBody, labelRequest, labelText, OUTCOMES, CAUSES, WITH_CAUSE,
   pagerText, parseStatus, rowOf, selected, SEVERITY_MIN, severityBadge, statusBadge, statusChips, statusParam,
   timeText, timeTitle, typeText, whoRows, whyRows,
 } from "./events.js";
@@ -296,7 +296,10 @@ function LabelForm({ ids, outcome: first, reason: firstReason = null, cause: fir
   const [outcome, setOutcome] = useState(first);
   const [reason, setReason] = useState(firstReason);
   const [cause, setCause] = useState(firstCause ?? "");
-  const [note, setNote] = useState(firstNote ?? "");
+  // one event: the form starts from its stored note and writes what it holds (empty
+  // clears it); several: an empty note leaves each event its own (labelRequest)
+  const many = ids.length > 1;
+  const [note, setNote] = useState(many ? "" : firstNote ?? "");
   const [state, setState] = useState({ busy: false, error: null });
   const body = labelBody(outcome, reason, cause, note);
   const save = async (ev) => {
@@ -304,8 +307,8 @@ function LabelForm({ ids, outcome: first, reason: firstReason = null, cause: fir
     if (body.error) return;
     setState({ busy: true, error: null });
     try {
-      if (ids.length === 1) await w.send("POST", `/api/v2/events/${ids[0]}/status`, body, REFETCH);
-      else await w.send("POST", "/api/v2/events/status", { ...body, ids }, REFETCH);
+      const req = labelRequest(ids, body);
+      await w.send("POST", req.url, req.body, REFETCH);
       onDone();
     } catch (e) {
       setState({ busy: false, error: e.message });
@@ -348,7 +351,7 @@ function LabelForm({ ids, outcome: first, reason: firstReason = null, cause: fir
           </select>
         </label>
       )}
-      <label className="fl label-note">Note ({cause === "other" && WITH_CAUSE.includes(outcome) ? "required: name the cause" : "optional"}{ids.length > 1 ? ", the same for all" : ""})
+      <label className="fl label-note">Note ({cause === "other" && WITH_CAUSE.includes(outcome) ? "required: name the cause" : "optional"}{many ? ", the same for all - empty keeps each event's own" : ""})
         <input className="in" value={note} maxLength={1000} onChange={(e) => setNote(e.target.value)} />
       </label>
       <div className="label-foot">

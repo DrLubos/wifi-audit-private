@@ -156,4 +156,20 @@ test("discard mode: the excluded share and the excluded rows", () => {
   eq([rows[0].duration, rows[0].cause, rows[0].documented], ["6 h", "Discard mode: PoE power test", true]);
 });
 
+test("the head names discard mode and an unverified clock, not catching up", () => {
+  const s = (status) => ({ name: "pi-fri", status, last_poll: "2026-11-12T08:28:00Z", last_capture_at: "2026-11-12T08:28:00Z",
+    contact: { last_contact_at: "2026-11-12T09:59:40Z", backlog_polls: status === "catching_up" ? 400 : 0 },
+    discard: status === "discarding" ? { until: "2026-11-12T16:20:00Z", polls: 180 } : null });
+  const now = Date.parse("2026-11-12T10:00:00Z");
+  eq(headText([s("discarding")], 15, now, TZ), "1 sensor in the account · 0 online · 1 in discard mode");
+  eq(headText([s("clock_unverified")], 15, now, TZ), "1 sensor in the account · 0 online · 1 waiting for the clock");
+  eq(headText([s("catching_up"), s("discarding")], 15, now, TZ),
+     "2 sensors in the account · 0 online · 1 catching up · 1 in discard mode");
+});
+
+test("a snapshot's data end on the same day number of another month keeps its date", () => {
+  eq(uploadText({ via: "import", at: "2026-11-06T09:00:00Z", polls_to: "2026-10-06T19:33:00Z" }, Date.now(), TZ),
+     "6 Nov 10:00 · snapshot import, data to 6 Oct 21:33");
+});
+
 done();

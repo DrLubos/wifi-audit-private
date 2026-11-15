@@ -5,7 +5,7 @@
 // its last import (SPEC Q7): "between imports" is neither online nor offline.
 
 import { sensorState } from "../../app/status.js";
-import { fmtAgo, fmtDate, fmtDateTime, fmtDay, fmtInt, fmtTime, partsOf, toDate } from "../../format.js";
+import { fmtAgo, fmtDate, fmtDateTime, fmtDay, fmtInt, fmtTime, partsOf, sameDay, toDate } from "../../format.js";
 
 const HOUR = 3600e3;
 
@@ -31,9 +31,15 @@ export function headText(sensors, offlineMin, now, tz) {
   const online = st.filter((x) => x.tone === "ok").length;
   const offline = st.filter((x) => x.offline).length;
   const between = sensors.filter((s, i) => st[i].tone === "neu" && toDate(s.last_poll)).length;
-  const busy = st.filter((x) => x.tone === "warn").length;
+  // the live states that are neither online nor offline, each by its own name
+  const live = (status) => sensors.filter((s) => s.contact && s.status === status).length;
+  const busy = live("catching_up");
+  const discarding = live("discarding");
+  const unverified = live("clock_unverified");
   return [`${fmtInt(sensors.length)} ${sensors.length === 1 ? "sensor" : "sensors"} in the account`,
           `${fmtInt(online)} online`, busy ? `${fmtInt(busy)} catching up` : null,
+          discarding ? `${fmtInt(discarding)} in discard mode` : null,
+          unverified ? `${fmtInt(unverified)} waiting for the clock` : null,
           offline ? `${fmtInt(offline)} offline` : null,
           between ? `${fmtInt(between)} between imports` : null].filter(Boolean).join(" · ");
 }
@@ -50,7 +56,7 @@ export function lastPollText(s, now, tz) {
 export function uploadText(u, now, tz) {
   if (!u) return "none yet";
   if (u.via === "ingest") return `${fmtAgo(u.at, now)} · after every poll`;
-  const same = u.polls_to && partsOf(u.polls_to, tz).day === partsOf(u.at, tz).day;
+  const same = u.polls_to && sameDay(u.polls_to, u.at, tz);
   const to = u.polls_to ? `, data to ${same ? fmtTime(u.polls_to, tz) : fmtDateTime(u.polls_to, tz)}` : "";
   return `${fmtDateTime(u.at, tz)} · snapshot import${to}`;
 }

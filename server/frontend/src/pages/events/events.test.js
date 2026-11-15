@@ -1,6 +1,6 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
-  actionText, actionsFor, apCell, bssidCell, CAUSES, causeText, groupText, historyLine, idsOf, labelBody, labelText, reasonText, headText,
+  actionText, actionsFor, apCell, bssidCell, CAUSES, causeText, groupText, historyLine, idsOf, labelBody, labelRequest, labelText, reasonText, headText,
   pagerText, parseStatus, rowOf, selected, severityBadge,
   statusBadge, statusChips, statusParam, timeTitle, typeText, whoRows, whyRows,
 } from "./events.js";
@@ -156,6 +156,56 @@ test("who saw it", () => {
     "−66 dBm then · up to 7 clients then · known since 15 Sep, last seen 11 Oct 22:46",
     "not seen in the event's hours · known since 27 Sep, last seen 10 Oct 16:41",
     "only floor readings then · known since 27 Sep, last seen 10 Oct 16:41"]);
+});
+
+test("an episode's end on the same day number of another month keeps its date", () => {
+  eq(timeTitle({ ts: "2026-10-06T19:33:15Z", ts_end: "2026-10-06T20:10:00Z" }, TZ), "6 Oct 21:33 – 22:10");
+  eq(timeTitle({ ts: "2026-10-06T19:33:15Z", ts_end: "2026-11-06T08:10:00Z" }, TZ), "6 Oct 21:33 – 6 Nov 09:10");
+});
+
+test("the deauth rule line counts the bursts inside one window", () => {
+  const ev = (bursts) => ({ kind: "detection", type: "deauth_flood", summary: "x",
+    evidence: { rules: { bursts: true, alerts: false }, bursts, params: { burst_window_s: 600 } } });
+  eq(whyRows(ev({ n: 58, max_in_window: 21, threshold: 3 }), TZ)[0].dd,
+     "21 deauth/disassoc bursts within 10 min (threshold 3), 58 in the whole episode");
+  eq(whyRows(ev({ n: 4, max_in_window: 4, threshold: 3 }), TZ)[0].dd, "4 deauth/disassoc bursts within 10 min (threshold 3)");
+  eq(whyRows(ev({ n: 4, threshold: 3 }), TZ)[0].dd, "4 deauth/disassoc bursts within 10 min (threshold 3)");
+});
+
+test("why an evil_twin event fired: the RSSI episode and the unknown BSSID", () => {
+  const b = whyRows({ kind: "detection", type: "evil_twin", summary: "x", ap: { bssid: "EC:58:EA:55:89:DC" },
+    evidence: { detector: "evil_twin", version: 2, signal: "b", rules: { rssi_deviation: true, unknown_bssid: true },
+      window_start: "2026-11-10T03:00:00.000Z", window_end: "2026-11-10T03:05:30.000Z", duration_s: 330, ssid: "IK-WIFI",
+      rssi: { facet: "median_shift", baseline: { median: -71, robust_sd: 1.5, n_obs: 9120, n_days: 9 },
+              observed: { max_dev_db: 15.2, k_sigma: 10.13, n_windows: 12, max_in_window: 12, direction: "stronger" },
+              threshold: { k: 6, floor_db: 8, persistence_obs: 6, window_w: 10 } },
+      params: { persist_window_s: 900 } } }, TZ);
+  eq(b.map((r) => r.dt), ["Rule", "Baseline", "Persistence", "Duration", "Also"]);
+  eq(b[0].dd, "RSSI stronger than its baseline by up to 15.2 dB (10.1 robust σ) - the median of its readings moved");
+  eq(b[1].dd, "−71 dBm, robust σ 1.5 dB, from 9,120 readings on 9 days");
+  eq(b[2].dd, "12 deviating windows within 15 min (needs 6), 12 in the episode");
+  eq(b[4].dd, "an unknown BSSID advertised this SSID at the same time");
+  const a = whyRows({ kind: "detection", type: "evil_twin", summary: "x", ap: { bssid: "(redacted)", network: "IK-WIFI" },
+    evidence: { detector: "evil_twin", version: 2, signal: "a", rules: { rssi_deviation: false, unknown_bssid: true },
+      ssid: "IK-WIFI", ap: { crypt: "WPA2-PSK", random_bssid: false },
+      membership: { trusted_bssids: ["EC:58:EA:55:89:DC", "EC:58:EA:54:45:8C"], oui_in_trusted: false, crypt_matches: false,
+                    dominant_crypt: "Open", persistence: { n_obs: 2800, span_s: 86400, sustained: true } },
+      observed: { win_median_dbm: -58.4, close: true } } }, TZ);
+  eq(a.map((r) => r.dt), ["BSSID", "Advertises SSID", "Against them", "Present", "Signal"]);
+  eq(a[1].dd, "IK-WIFI - not among its 2 trusted BSSIDs");
+  eq(a[2].dd, "foreign vendor prefix, encryption differs (WPA2-PSK, theirs Open)");
+  eq(a[3].dd, "2,800 observations over 1 d");
+  eq(a[4].dd, "median −58 dBm - close or stronger than the trusted ones");
+});
+
+test("a label's note: written as the form has it for one event, left out when empty for several", () => {
+  const body = labelBody("false_positive", "rule_defect", "kismet_rule", "");
+  eq(labelRequest([7], body), { url: "/api/v2/events/7/status",
+    body: { status: "false_positive", reason: "rule_defect", cause: "kismet_rule", note: null } });
+  eq(labelRequest([7, 9], body), { url: "/api/v2/events/status",
+    body: { status: "false_positive", reason: "rule_defect", cause: "kismet_rule", ids: [7, 9] } });
+  eq(labelRequest([7, 9], labelBody("confirmed", "staged_test", null, " run 3 ")).body,
+     { status: "confirmed", reason: "staged_test", cause: null, note: "run 3", ids: [7, 9] });
 });
 
 done();

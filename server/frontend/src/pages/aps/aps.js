@@ -141,9 +141,10 @@ export function groupLabel(group, key, n) {
 // a Kismet device key of the previous pages ("4202770D00000000_F62CE5D4C3B2"):
 // its second part is the MAC byte-reversed (api privacy.key_mac)
 export function bssidOfKey(key) {
-  const m = /^[0-9A-Fa-f]{16}_([0-9A-Fa-f]{12})$/.exec(key ?? "");
+  // the MAC part is a number in hex without leading zeros (up to 12 digits)
+  const m = /^[0-9A-Fa-f]{16}_([0-9A-Fa-f]{1,12})$/.exec(key ?? "");
   if (!m) return null;
-  const h = m[1].toUpperCase();
+  const h = m[1].toUpperCase().padStart(12, "0");
   const out = [];
   for (let i = 10; i >= 0; i -= 2) out.push(h.slice(i, i + 2));
   return out.join(":");
@@ -332,8 +333,11 @@ export function rssiTip(i, d, colors, tz) {
     const floors = d.n_floor?.[name]?.[i] ?? 0;
     rows.push({ c: colors[name], v: v == null ? "–" : dbm(v),
                 l: v == null ? (floors ? `${name}: floor readings only` : `${name}: no reading`) : name });
+    // a reading is compared with the baseline only inside the baseline's own window (one
+    // capture-hardware period, schema 11) - where the band is drawn (bandSpan)
     const b = d.baseline?.[name];
-    if (b && v != null && Math.abs(v - b.median) > 2 * (b.robust_sd ?? 0)) {
+    const comparable = b && (!b.from || t >= Date.parse(b.from));
+    if (comparable && v != null && Math.abs(v - b.median) > 2 * (b.robust_sd ?? 0)) {
       notes.push(`${name}: outside its baseline band (${dbm(b.median + 2 * b.robust_sd)} to ${dbm(b.median - 2 * b.robust_sd)})`);
     }
   }

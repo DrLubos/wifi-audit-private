@@ -1,5 +1,5 @@
 import { test, eq, done } from "./testing/tiny.js";
-import { fmtAgo, fmtDateTime, fmtDay, fmtDbm, fmtDuration, fmtInt, fmtPct, fmtTime, partsOf } from "./format.js";
+import { fmtAgo, fmtDateTime, fmtDay, fmtDbm, fmtDuration, fmtInt, fmtPct, fmtTime, partsOf, sameDay } from "./format.js";
 
 const TZ = "Europe/Bratislava";
 
@@ -28,6 +28,14 @@ test("numbers", () => {
   eq(fmtPct(0.0938), "9 %");
   eq(fmtPct(0.0938, 1), "9.4 %");
   eq(fmtDbm(-63.4), "−63");
+});
+
+test("the same local day is day, month and year", () => {
+  const tz = "Europe/Bratislava";
+  eq(sameDay("2026-10-06T19:33:15Z", "2026-10-06T21:50:00Z", tz), true);
+  eq(sameDay("2026-10-06T19:33:15Z", "2026-10-06T22:10:00Z", tz), false);     // 00:10 local on the 7th
+  eq(sameDay("2026-10-06T19:33:15Z", "2026-11-06T08:10:00Z", tz), false);     // the 6th of another month
+  eq(sameDay("2026-10-06T19:33:15Z", null, tz), false);
 });
 
 done();

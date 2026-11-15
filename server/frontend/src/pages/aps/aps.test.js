@@ -132,4 +132,20 @@ test("RSSI chart", () => {
   eq(utilSummary([null], [null], ["a"]), null);
 });
 
+test("a device key without leading zeros in its MAC part", () => {
+  eq(bssidOfKey("4202770D00000000_C8955EA58EC"), "EC:58:EA:55:89:0C");
+  eq(bssidOfKey("4202770D00000000_8955EA58EC"), "EC:58:EA:55:89:00");
+  eq(bssidOfKey("4202770D00000000_"), null);
+});
+
+test("no baseline note for an hour before the baseline's own window", () => {
+  const t0 = Date.parse("2026-11-01T00:00:00Z") / 1000;
+  const d = { t: [t0, t0 + 3600 * 240], series: { "pi-fri": [-52, -52] }, n_floor: { "pi-fri": [0, 0] },
+              baseline: { "pi-fri": { median: -61, robust_sd: 1.5, from: "2026-11-08T12:00:00Z" } } };
+  eq(rssiTip(0, d, {}, TZ).notes, []);                                  // other capture hardware: not compared
+  eq(rssiTip(1, d, {}, TZ).notes, ["pi-fri: outside its baseline band (−58 dBm to −64 dBm)"]);
+  d.baseline["pi-fri"].from = null;                                     // a baseline without a recorded start
+  eq(rssiTip(0, d, {}, TZ).notes.length, 1);
+});
+
 done();

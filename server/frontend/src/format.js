@@ -37,6 +37,14 @@ export function partsOf(v, tz) {
   };
 }
 
+// two instants on one local calendar day: day, month and year (the day number
+// alone made 6 Oct and 6 Nov "the same day")
+export function sameDay(a, b, tz) {
+  const x = partsOf(a, tz);
+  const y = partsOf(b, tz);
+  return Boolean(x && y && x.day === y.day && x.month === y.month && x.year === y.year);
+}
+
 export function fmtTime(v, tz) {
   const p = partsOf(v, tz);
   return p ? `${p.hour}:${p.minute}` : "–";
