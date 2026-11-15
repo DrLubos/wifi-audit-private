@@ -54,7 +54,7 @@ def _config(c):
 
 @router.get("/sensors")
 def sensors(request: Request, acc=Depends(deps.get_account)):
-    tag, cached = deps.etag(request, acc, deps.minute_epoch(), _us(acc.get("contact_at")))
+    tag, cached = deps.live_etag(request, acc)
     if cached:
         return cached
     now = shape.utc_now()
@@ -126,11 +126,6 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
         "sensors": out,
     }
     return deps.respond(body, tag)
-
-
-def _us(t):
-    """A timestamp as integer microseconds (an ETag part), None for None."""
-    return None if t is None else round(shape.parse_ts(t).timestamp() * 1_000_000)
 
 
 def _sensor(conn, acc, name):

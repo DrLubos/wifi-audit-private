@@ -91,6 +91,15 @@ def parse_status(body):
     return status, reason, cause, note
 
 
+def keeps_note(body):
+    """A label write without the key "note" leaves each event's stored note
+    (a bulk label of events that have their own); with it the note is written
+    as sent - null or "" clears it. Before, null kept the stored note too: a
+    relabel carried the previous label's note along and no note could ever be
+    removed."""
+    return "note" not in body
+
+
 def parse_ids(body):
     ids = body.get("ids")
     if not isinstance(ids, list) or not ids or len(ids) > BULK_MAX:

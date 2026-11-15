@@ -105,10 +105,11 @@ RETURNING starts_at
 -- The operator's label of events of the account (schema 12: open, or one of
 -- the three outcomes with its reason - the constraint refuses a mismatch;
 -- schema 17: the cause of a benign / false-positive label, NULL otherwise).
--- A NULL note keeps the stored one; detectors' columns (updated_at) stay.
+-- keep_note (the request had no "note"): the stored note stays; else the
+-- note is written as sent, NULL clears it. Detectors' columns (updated_at) stay.
 UPDATE detections d
 SET status = %(status)s, status_reason = %(reason)s, status_cause = %(cause)s, status_at = now(),
-    status_note = coalesce(%(note)s, d.status_note)
+    status_note = CASE WHEN %(keep_note)s::boolean THEN d.status_note ELSE %(note)s END
 FROM sensors se
 WHERE se.id = d.sensor_id AND se.account_id = %(account_id)s AND d.id = ANY (%(ids)s::bigint[])
 RETURNING d.id

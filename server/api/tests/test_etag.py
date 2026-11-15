@@ -14,6 +14,36 @@ T = datetime(2026, 10, 11, 14, 8, 52, 299878, tzinfo=timezone.utc)
 E = datetime(2026, 10, 11, 13, 49, 32, 927121, tzinfo=timezone.utc)
 
 
+class SilentEpoch(unittest.TestCase):
+    NOW = datetime(2026, 11, 15, 20, 0, 30, tzinfo=timezone.utc)
+
+    def test_none_while_a_sensor_delivers(self):
+        fresh = self.NOW - timedelta(seconds=45)
+        self.assertIsNone(cache.silent_epoch([fresh], self.NOW))
+        self.assertIsNone(cache.silent_epoch([self.NOW - timedelta(days=3), fresh, None], self.NOW))
+        self.assertIsNone(cache.silent_epoch([self.NOW - timedelta(seconds=300)], self.NOW))
+        self.assertIsNone(cache.silent_epoch([], self.NOW))            # no poll yet: nothing to cover
+        self.assertIsNone(cache.silent_epoch([None], self.NOW))
+
+    def test_the_minute_once_every_sensor_is_silent(self):
+        silent = [datetime(2026, 11, 15, 7, 20, tzinfo=timezone.utc), None]
+        a = cache.silent_epoch(silent, self.NOW)
+        self.assertEqual(a, int(self.NOW.timestamp()) // 60)
+        self.assertEqual(cache.silent_epoch(silent, self.NOW + timedelta(seconds=20)), a)
+        self.assertEqual(cache.silent_epoch(silent, self.NOW + timedelta(seconds=40)), a + 1)
+
+    def test_a_period_tag_moves_with_it(self):
+        # nothing refreshed since 07:20: the tag of 07:21 and of 20:00 differ, so the cached
+        # body with the morning's coverage of today's bucket is not served in the evening
+        t = datetime(2026, 11, 15, 7, 20, 30, tzinfo=timezone.utc)
+        poll = datetime(2026, 11, 15, 7, 20, tzinfo=timezone.utc)
+        tag = lambda now: cache.v2_etag(1, t, 10, None, 1794610800, cache.silent_epoch([poll], now))  # noqa: E731
+        morning = tag(datetime(2026, 11, 15, 7, 21, tzinfo=timezone.utc))
+        self.assertTrue(morning.endswith('-x"'))
+        self.assertNotEqual(morning, tag(self.NOW))
+        self.assertNotEqual(tag(self.NOW), tag(self.NOW + timedelta(minutes=1)))
+
+
 class V2Etag(unittest.TestCase):
     def test_every_part_changes_the_tag(self):
         base = cache.v2_etag(1, T, 3, E, 1760180400)

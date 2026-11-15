@@ -189,7 +189,9 @@ def get_ap(request: Request, bssid: str = Path(pattern=BSSID_RE), acc=Depends(de
         sensors = deps.run(conn, _Q, "ap_sensors", ap_id=a["ap_id"])
         history = deps.run(conn, _Q, "config_history", ap_id=a["ap_id"])
         events = deps.run(conn, _Q, "events", account_id=acc["id"], bssid=bssid)
-        allowed = deps.allowed_bssids(conn, acc, [a["bssid"]] + [e["summary"] for e in events]
+        # every text of the response: an account AP's BSSID in the operator's notes stays readable
+        allowed = deps.allowed_bssids(conn, acc, [a["bssid"], a["note"]]
+                                      + [[e["summary"], e["status_note"]] for e in events]
                                       + ([sibling["bssid"]] if sibling else []))
     days = sum(s["days_seen"] for s in sensors)
     channel_changes = sum(s["channel_changes"] for s in sensors)

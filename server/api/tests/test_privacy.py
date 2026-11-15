@@ -47,6 +47,27 @@ class Scanner(unittest.TestCase):
         self.assertEqual(privacy.redact("bssid:e4:8d:8c:41:7b:a2: ok", BSSIDS), "bssid:e4:8d:8c:41:7b:a2: ok")
 
 
+class DeviceKeys(unittest.TestCase):
+    def test_a_key_without_leading_zeros_is_a_mac_too(self):
+        # Kismet prints the key's MAC part as a number: a last octet below 0x10 gives
+        # eleven hex digits, 00 gives ten (6 % of the stored keys are shorter than twelve)
+        self.assertEqual(privacy.key_mac("C8955EA58EC"), "EC:58:EA:55:89:0C")
+        self.assertEqual(privacy.key_mac("8955EA58EC"), "EC:58:EA:55:89:00")
+        self.assertEqual(privacy.key_mac("DC8955EA58EC"), "EC:58:EA:55:89:DC")
+        ev = {"ap": {"device_key": "4202770D00000000_C8955EA58EC"},
+              "sources": ["4202770D00000000_1F0C7BDC571C", "4202770D00000000_F0C7BDC571C", "seen as 4202770D00000000_7BDC571C"]}
+        self.assertEqual(privacy.macs_in(ev), {"EC:58:EA:55:89:0C", "1C:57:DC:7B:0C:1F", "1C:57:DC:7B:0C:0F",
+                                               "1C:57:DC:7B:00:00"})
+        out = privacy.redact(ev, {"EC:58:EA:55:89:0C"})
+        self.assertEqual(out["ap"]["device_key"], "4202770D00000000_C8955EA58EC")       # the account AP's own key
+        self.assertEqual(out["sources"], [privacy.MASK, privacy.MASK, "seen as " + privacy.MASK])
+        self.assertEqual(privacy.foreign_macs(out, {"EC:58:EA:55:89:0C"}), set())
+
+    def test_not_a_key(self):
+        for s in ("00_0", "4202770D00000000_", "4202770D0000_DC8955EA58EC", "4202770D00000000_DC8955EA58EC00"):
+            self.assertEqual(privacy.macs_in(s), set(), s)
+
+
 class Redact(unittest.TestCase):
     def test_client_macs_go_bssids_stay(self):
         ev = {"ap": {"bssid": "E4:8D:8C:41:7B:A2", "device_key": "4202770D00000000_A27B418C8DE4"},

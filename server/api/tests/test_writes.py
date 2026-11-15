@@ -71,6 +71,24 @@ class Labels(unittest.TestCase):
                 w.parse_ids(bad)
 
 
+class LabelNote(unittest.TestCase):
+    def test_a_note_is_written_as_sent_and_kept_only_when_left_out(self):
+        base = {"status": "false_positive", "reason": "rule_defect", "cause": "kismet_rule"}
+        self.assertTrue(w.keeps_note(base))                               # a bulk label: each event keeps its own
+        for sent, stored in ((None, None), ("", None), ("  ", None), (" new ", "new")):
+            body = dict(base, note=sent)
+            self.assertFalse(w.keeps_note(body))
+            self.assertEqual(w.parse_status(body)[3], stored)
+        self.assertFalse(w.keeps_note({"status": "open", "note": None}))  # "Open again" can clear it
+
+    def test_the_statement_keeps_or_writes(self):
+        sql = open(os.path.join(os.path.dirname(__file__), "..", "app", "v2", "sql", "writes.sql"),
+                   encoding="utf-8").read()
+        stmt = sql[sql.index("-- name: event_status"):sql.index("-- name: ap_classification")]
+        self.assertIn("status_note = CASE WHEN %(keep_note)s::boolean THEN d.status_note ELSE %(note)s END", stmt)
+        self.assertNotIn("coalesce(%(note)s", stmt)
+
+
 class Aps(unittest.TestCase):
     def test_classification_and_note(self):
         self.assertEqual(w.parse_ap_classification({"classification": "managed"}), "managed")

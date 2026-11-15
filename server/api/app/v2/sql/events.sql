@@ -76,7 +76,8 @@ WITH ev AS MATERIALIZED (
   LIMIT %(limit)s::int
 ), page AS MATERIALIZED (
   SELECT d.id, d.ts, d.ts_end, d.severity, d.kind, d.type, d.summary, d.mac, d.ssid, d.status, d.status_at,
-         d.status_reason, d.status_cause, d.sensor_id, coalesce(nullif(su.ssid, ''), su.name_seen, d.ssid) AS network,
+         d.status_reason, d.status_cause, d.status_note, d.sensor_id,
+         coalesce(nullif(su.ssid, ''), su.name_seen, d.ssid) AS network,
          t.ts_first, t.members
   FROM top t
   JOIN detections d ON d.id = t.id
@@ -88,7 +89,8 @@ WITH ev AS MATERIALIZED (
 )
 SELECT p.id, p.ts, p.ts_end, p.severity, p.kind, p.type, {{_label}} AS type_label, p.summary,
        upper(p.mac::text) AS bssid, p.ssid, p.network, c.classification, s.name AS sensor, p.status, p.status_at,
-       p.status_reason, p.status_cause, p.ts_first, p.members, (p.ts AT TIME ZONE %(tz)s::text)::date AS day
+       p.status_reason, p.status_cause, p.status_note, p.ts_first, p.members,
+       (p.ts AT TIME ZONE %(tz)s::text)::date AS day
 FROM page p
 JOIN sensors s ON s.id = p.sensor_id
 LEFT JOIN kismet_alert_rules r ON p.kind = 'kismet' AND r.header = p.type
@@ -98,7 +100,8 @@ ORDER BY p.ts DESC, p.id DESC
 -- name: members
 -- The events of the page's grouped rows (feed.members) with their BSSIDs
 -- (the APs of one network).
-SELECT d.id, d.ts, d.ts_end, d.summary, d.status_at, d.status_reason, d.status_cause, upper(d.mac::text) AS bssid
+SELECT d.id, d.ts, d.ts_end, d.summary, d.status_at, d.status_reason, d.status_cause, d.status_note,
+       upper(d.mac::text) AS bssid
 FROM detections d
 WHERE d.id = ANY (%(ids)s::bigint[])
 ORDER BY d.ts DESC, d.id DESC

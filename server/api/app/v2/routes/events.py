@@ -59,6 +59,8 @@ def _item(r, members=()):
                 "classification": r["classification"]}),
         "sensors": [r["sensor"]], "status": r["status"], "status_at": iso(r["status_at"]),
         "status_reason": r["status_reason"], "status_cause": r.get("status_cause"),
+        # the relabel form starts from the stored note (it is written as the form sends it)
+        "status_note": r.get("status_note"),
     }
     if "members" in r:
         item["group"] = shape.event_group(r, members)
@@ -97,8 +99,8 @@ def events(request: Request, acc=Depends(deps.get_account), sensor: str = Depend
                         after_ts=a[0], after_id=a[1], oldest_first=bool(after), limit=limit + 1, **filters)
         ids = [i for r in rows for i in (r["members"] or ())]
         members = deps.run(conn, _Q, "members", ids=ids) if ids else []
-        allowed = deps.allowed_bssids(conn, acc, [[r["bssid"], r["summary"]] for r in rows]
-                                      + [[m["bssid"], m["summary"]] for m in members])
+        allowed = deps.allowed_bssids(conn, acc, [[r["bssid"], r["summary"], r["status_note"]] for r in rows]
+                                      + [[m["bssid"], m["summary"], m["status_note"]] for m in members])
     # one row more than the page: more events in the direction of travel
     more = len(rows) > limit
     if more:
@@ -162,8 +164,10 @@ def event(request: Request, event_id: int = Path(ge=1, le=2 ** 63 - 1), acc=Depe
             # the hours of the event; a point event: its hour
             end = r["ts_end"] or ts
             who = deps.run(conn, _Q, "who_saw_it", ap_id=r["ap_id"], ts=ts, ts_end=end)
-        allowed = deps.allowed_bssids(conn, acc, [r["bssid"], r["summary"], r["evidence"]])
         history = deps.run(conn, _Q, "label_history", account_id=acc["id"], event_id=event_id)
+        # every text of the response: an account AP's BSSID in the operator's note stays readable
+        allowed = deps.allowed_bssids(conn, acc, [r["bssid"], r["summary"], r["evidence"], r["status_note"],
+                                                  [[h["old"], h["new"]] for h in history]])
     item = _item(r)
     item.update({"status_note": r["status_note"], "created_at": iso(r["created_at"]),
                  "updated_at": iso(r["updated_at"])})
@@ -180,20 +184,21 @@ def event(request: Request, event_id: int = Path(ge=1, le=2 ** 63 - 1), acc=Depe
 def _label(acc, ids, body):
     """One label for the given events, one transaction, one audit row per event."""
     status, reason, cause, note = deps.invalid(writes.parse_status, body)
+    keep_note = writes.keeps_note(body)
     with deps.write_tx(acc) as (conn, audit):
         old = {r["id"]: r for r in deps.run(conn, _Q, "labels", account_id=acc["id"], ids=ids)}
         missing = [i for i in ids if i not in old]
         if missing:
             raise HTTPException(status_code=404, detail="unknown event(s) %s" % missing[:10])
         deps.run(conn, _QW, "event_status", account_id=acc["id"], ids=ids, status=status, reason=reason,
-                 cause=cause, note=note)
+                 cause=cause, note=note, keep_note=keep_note)
         for i in ids:
             o = old[i]
             audit("event.status", "event:%d" % i,
                   {"status": o["status"], "reason": o["status_reason"], "cause": o["status_cause"],
                    "note": o["status_note"]},
                   {"status": status, "reason": reason, "cause": cause,
-                   "note": note if note is not None else o["status_note"]})
+                   "note": o["status_note"] if keep_note else note})
     return deps.written({"ids": ids, "status": status, "reason": reason, "cause": cause})
 
 
@@ -201,7 +206,8 @@ def _label(acc, ids, body):
 def post_status(event_id: int = Path(ge=1, le=2 ** 63 - 1), body: dict = Body(...), acc=Depends(deps.get_account)):
     """Label one event: {status, reason, cause?, note?} - open, or confirmed /
     benign / false_positive with one of its reasons (schema 12; any event
-    kind); benign and false_positive with a cause (schema 17)."""
+    kind); benign and false_positive with a cause (schema 17). note: written
+    as sent (null clears it); left out, the stored note stays."""
     return _label(acc, [event_id], body)
 
 

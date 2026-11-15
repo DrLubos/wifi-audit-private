@@ -34,6 +34,21 @@ def v2_etag(account_id, refreshed_at, write_version, events_at, bucket_epoch, *e
     return 'W/"%s"' % "-".join(parts)
 
 
+def silent_epoch(last_polls, now, after_s=300):
+    """An extra part of a period endpoint's tag: None while a sensor delivers
+    (every refresh moves refreshed_at, so the tag moves by itself), else the
+    current minute. A period body holds the coverage of its last, unfinished
+    bucket - capture seconds / seconds up to now. When every sensor is silent
+    nothing refreshes, the tag stood still and the body cached at the first
+    request kept that bucket's coverage for the rest of the hour, window or
+    day (0.999 served at 20:00 for a sensor silent since 07:20). last_polls:
+    the newest stored poll per sensor (None: no poll yet)."""
+    newest = max((t for t in last_polls if t is not None), default=None)
+    if newest is None or (now - newest).total_seconds() <= after_s:
+        return None
+    return int(now.timestamp()) // 60
+
+
 def _opaque(tag):
     tag = tag.strip()
     return tag[2:] if tag.startswith("W/") else tag

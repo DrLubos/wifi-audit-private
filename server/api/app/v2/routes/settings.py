@@ -36,8 +36,9 @@ DETECTORS = ("deauth_min_bursts", "deauth_window_s", "evil_twin_k", "evil_twin_m
 NETWORK_FIELDS = ("ssid", "kind", "expected_security", "require_mfp", "allowed_bssids", "allowed_ouis", "note")
 
 
-def _read(request, acc, build):
-    tag, cached = deps.etag(request, acc, None)
+def _read(request, acc, build, live=False):
+    """live: the response shows the sensors' state between refreshes (deps.live_etag())."""
+    tag, cached = deps.live_etag(request, acc) if live else deps.etag(request, acc, None)
     if cached:
         return cached
     with deps.connection() as conn:
@@ -232,7 +233,8 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
                    for h in history]
         return {"sensors": out, "mixed_plans": len(plans) > 1, "history": changes,
                 "plans": {"all_89": writes.ALL_89, "ht20_37": list(writes.HT20_37), "lock": list(writes.HT20_ALL)}}
-    return _read(request, acc, build)
+    # the discard window's counters and the delivery state come with every upload
+    return _read(request, acc, build, live=True)
 
 
 def _window(w):

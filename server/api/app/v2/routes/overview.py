@@ -13,7 +13,7 @@ Series are aligned with the buckets; null = no selected sensor collecting.
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import deps, queries, shape
+from .. import deps, privacy, queries, shape
 from ..periods import iso
 
 router = APIRouter(prefix="/overview", tags=["v2 overview"])
@@ -35,6 +35,8 @@ def status(request: Request, acc=Depends(deps.get_account), sensor: str = Depend
         st = deps.run(conn, _Q, "status", account_id=acc["id"], sensor_ids=sel["ids"], latest=sel["latest"])[0]
         events = deps.run(conn, _Q, "attention", sensor_ids=sel["ids"], latest=sel["latest"])
         older = deps.run(conn, _Q, "attention_older", sensor_ids=sel["ids"], latest=sel["latest"])[0]["n"]
+        # event summaries (the detectors') and BSSIDs: no MAC but an account AP's (privacy.redact())
+        allowed = deps.allowed_bssids(conn, acc, [[e["bssid"], e["summary"]] for e in events])
     summary, findings = shape.compliance(st["networks"])
     for e in events:
         e["ts"], e["ts_end"] = iso(e["ts"]), iso(e["ts_end"])
@@ -44,7 +46,7 @@ def status(request: Request, acc=Depends(deps.get_account), sensor: str = Depend
         "filters": {"sensor": sel["filter"]},
         "open_events": {"total": st["open_total"], "by_severity": shape.severity_counts(st["open_by_severity"])},
         "compliance": dict(summary, networks=st["networks"]),
-        "attention": items,
+        "attention": privacy.redact(items, allowed),
         "attention_total": total,
         # open events (medium or higher) older than the 7 days before the latest capture
         "attention_older": older,
@@ -67,6 +69,7 @@ def period(request: Request, acc=Depends(deps.get_account), sensor: str = Depend
         pres = deps.run(conn, _Q, "presence", **args)[0]
         clients = deps.run(conn, _Q, "clients", **{k: args[k] for k in ("account_id", "sensor_ids", "from", "to")})
         events = deps.run(conn, _Q, "events", **{k: args[k] for k in ("sensor_ids", "starts", "from", "to")})
+        allowed = deps.allowed_bssids(conn, acc, [e["summary"] for e in events])
 
     n = len(p.starts)
     cov = shape.coverage(p, hours, sel["sensors"])
@@ -111,7 +114,7 @@ def period(request: Request, acc=Depends(deps.get_account), sensor: str = Depend
                                 "series": cseries, "load_share": load_share},
         },
         "aps": {"fixed": shape.series(fixed, on), "mobile": shape.series(mobile, on),
-                "events": per_bucket, "event_counts": counts},
+                "events": privacy.redact(per_bucket, allowed), "event_counts": counts},
         "security": shape.security_rows(pres["security"]),
     })
     return deps.respond(body, tag)

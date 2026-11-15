@@ -111,6 +111,8 @@ def etag(request: Request, acc, epoch, *extra, envelope=None):
     (respcache), else None - the endpoint runs its queries and respond()s.
     envelope: the period envelope of this request (a period endpoint), so a
     cached body never carries an old request time."""
+    if envelope is not None:      # a period response: its last bucket's coverage reads "now"
+        extra += (cache.silent_epoch([s["last_poll"] for s in acc["sensors"]], shape.utc_now()),)
     value = cache.v2_etag(acc["id"], acc["refreshed_at"], acc["write_version"], acc["events_at"], epoch, *extra)
     tag = respcache.make_tag(value, respcache.request_key(request.url.path, request.query_params.multi_items()),
                              envelope)
@@ -126,6 +128,17 @@ def etag(request: Request, acc, epoch, *extra, envelope=None):
 def minute_epoch():
     """The ETag epoch of status responses: they read "now"."""
     return int(shape.utc_now().timestamp()) // 60
+
+
+def live_etag(request: Request, acc):
+    """etag() of a response that shows what the sensors report between
+    refreshes (contact, backlog, the discard window's counters, configuration
+    delivery): the current minute and the newest contact are part of the tag.
+    Without them the tag stands still while nothing is stored - the Settings
+    page showed "0 polls discarded" for a whole discard window."""
+    contact = acc.get("contact_at")
+    return etag(request, acc, minute_epoch(),
+                None if contact is None else round(shape.parse_ts(contact).timestamp() * 1_000_000))
 
 
 def respond(body, tag):

@@ -3,7 +3,7 @@
 SPEC section 2: client devices only ever appear as counts - no client MAC,
 probe SSID or per-client row in the api. macs_in() finds every MAC-shaped
 string in a decoded JSON response (also the MAC inside a Kismet device key,
-<16 hex>_<12 hex>, which holds it byte-reversed: ..._DC8955EA58EC is
+<16 hex>_<up to 12 hex>, which holds it byte-reversed: ..._DC8955EA58EC is
 EC:58:EA:55:89:DC); foreign_macs() returns those that are not in the set of
 the account's AP BSSIDs; redact() replaces those in a value before it is
 returned (the detectors' evidence names deauth sources, i.e. client MACs).
@@ -26,7 +26,11 @@ _HEX = "[0-9A-Fa-f]"
 _MAC = re.compile(r"(?<!%(h)s)(?<![^0-9A-Za-z]%(h)s{2}[:-])(?<!^%(h)s{2}[:-])"
                   r"(%(h)s{2}(?:[:-]%(h)s{2}){5})"
                   r"(?!%(h)s)(?![:-]%(h)s{2}(?!%(h)s))" % {"h": _HEX})
-_KEY = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{16}_([0-9A-Fa-f]{12})(?![0-9A-Fa-f])")
+# The key's second part is the MAC as a number in hex, WITHOUT leading zeros
+# (Kismet prints %X): EC:58:EA:55:89:0C is ..._C8955EA58EC, eleven digits. 6 %
+# of the stored keys are shorter than twelve (13 960 of 222 843 on 2026-11-15)
+# and the first version of this pattern, twelve digits exactly, missed them.
+_KEY = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{16}_([0-9A-Fa-f]{1,12})(?![0-9A-Fa-f])")
 
 
 def normalize(mac):
@@ -36,8 +40,8 @@ def normalize(mac):
 
 
 def key_mac(hex12):
-    """The MAC of a device key's last part (byte-reversed)."""
-    h = hex12.upper()
+    """The MAC of a device key's last part (byte-reversed; leading zeros restored)."""
+    h = hex12.upper().zfill(12)
     return ":".join(h[i:i + 2] for i in range(10, -2, -2))
 
 
