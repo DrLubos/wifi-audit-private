@@ -324,7 +324,14 @@ in section 7).**
   and `ops/repair_first_seen.sql` set the 6 values at 09:08:34 to the earlier
   of the AP's first stored row and the shifted value (0 - 31 s before the
   first row now; one `audit_log` row each, a database backup taken at
-  08:56:02 is on the developer's Mac). The check lists none since. What the
+  08:56:02 is on the developer's Mac). The check lists none since.
+  **Confirmed live 2026-11-15 11:02:57:** one of the three APs of boot
+  `3b93db8a` (`audit_log` id 25) was seen and uploaded again. Its
+  `first_seen` in the buffer is still the stale 2026-10-21 11:17:47 and the
+  uploader knows that boot's window only from `STALE_WINDOWS` (its state
+  holds boot `a864e8cb` alone); the server kept 2026-10-21 19:42:46 and
+  moved only `last_seen` (read at 11:04:11, three new rows). The other five
+  had not been seen again by then. What the
   rule cannot tell apart, on the sensor and on the server alike: a value
   inside a stale window that was written on a true clock (the stale clock
   re-reads the hours before the power-off) - it is shifted too; the server's
