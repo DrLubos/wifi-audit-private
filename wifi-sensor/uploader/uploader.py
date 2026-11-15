@@ -62,7 +62,7 @@ import sensorinfo  # noqa: E402
 import state as statemod  # noqa: E402
 from client import Client, Refused, describe_token  # noqa: E402
 
-VERSION = "1.3"
+VERSION = "1.4"
 log = logging.getLogger("uploader")
 
 DEFAULTS = {
@@ -80,6 +80,7 @@ DEFAULTS = {
     "RETENTION_DAYS": "14", "HTTP_TIMEOUT": "30", "LOG_LEVEL": "INFO",
     "CONFIG_APPLY": "0", "CONFIG_DIR": "/var/lib/wifi-sensor-uploader/config",
     "CONFIG_STATE_DIR": "/var/lib/wifi-sensor-config",
+    "STALE_WINDOWS": "",
 }
 CAPABILITIES_EVERY_S = 3600       # capabilities ride in a heartbeat hourly, and when the applier's file changes
 NUMERIC = ("WATCH_S", "HEARTBEAT_S", "CATCHUP_POLLS", "CATCHUP_PAUSE_S", "MAX_BATCH_BYTES", "MAX_BATCH_ROWS",
@@ -172,6 +173,12 @@ class Uploader:
         self.offers_logged = set()
         self.rewinds_logged = set()
         self.repairs_logged = set()
+        # stale windows of boots neither the buffer nor the state knows any more
+        self.config_windows, unread = batchmod.parse_windows(cfg.get("STALE_WINDOWS", ""))
+        for entry in unread:
+            log.warning("STALE_WINDOWS: cannot read the entry %r (boot_id:from:to:delta) - left out", entry)
+        if self.config_windows:
+            log.info("STALE_WINDOWS: the stale window of %d boot(s) from the configuration", len(self.config_windows))
 
     # --- buffer ---------------------------------------------------------------------------------
 
@@ -325,7 +332,7 @@ class Uploader:
                             "by %d poll(s) to %d - rows after it are sent (again)", back, cur["polls_id"])
             cur, resent = self.rewound(db, cur)
             b, new, info = batchmod.build(db, cur, self.boot, self.state.get("server_anchors"), self.max_polls,
-                                          self.state.get("stale_windows"))
+                                          self.state.get("stale_windows"), self.config_windows)
             info["last_poll"] = batchmod.poll_identity(db, new["polls_id"])
         finally:
             db.execute("COMMIT")

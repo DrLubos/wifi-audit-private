@@ -15,7 +15,8 @@ a test keeps it equal); the AP load and frequency rows updated up to the
 batch's last true ts (at most LOAD_ROWS_PER_BATCH load rows a batch - the
 rest goes with the next ones); the devices the batch references, with their
 time fields placed (timeline.py) against the stale window of every boot the
-buffer or the uploader's state still knows, not only the batch's own. Polls
+buffer, the uploader's state or its configuration (STALE_WINDOWS) still
+knows, not only the batch's own. Polls
 pruned on the sensor before the upload (the cursor is older than the oldest
 poll) are a 'lost' gap.
 
@@ -23,6 +24,7 @@ Column lists equal the server's (server/api/app/ingest/validate.py - a test
 compares them). Standard library only (tests/test_batch.py).
 """
 
+import math
 import os
 import sqlite3
 from urllib.parse import quote
@@ -175,6 +177,51 @@ def stale_windows(db, server_anchors, known=None):
     return out
 
 
+def parse_windows(text):
+    """The STALE_WINDOWS setting: ({boot_id: [from, to, delta]}, [entries
+    that cannot be read]). Entries 'boot_id:from:to:delta', separated by
+    spaces or commas: from/to in unix seconds on the stale clock, delta the
+    shift to true time in seconds ('none': the boot never got an anchor).
+
+    For the boots the uploader cannot learn about by itself: their polls were
+    pruned before it remembered stale windows (uploader < 1.3), or its state
+    file was lost after the retention removed them. The device rows keep
+    those boots' stale first_seen all the same. The server has what is
+    needed (sensor_clock_boots; server/tests/sql/check_first_seen.sql prints
+    the entries)."""
+    out, bad = {}, []
+    for entry in (text or "").replace(",", " ").split():
+        parts = entry.split(":")
+        try:
+            if len(parts) != 4 or not parts[0]:
+                raise ValueError(entry)
+            start, end = float(parts[1]), float(parts[2])
+            delta = None if parts[3].lower() == "none" else float(parts[3])
+            if not (math.isfinite(start) and math.isfinite(end) and start <= end):
+                raise ValueError(entry)
+            if delta is not None and not math.isfinite(delta):
+                raise ValueError(entry)
+        except ValueError:
+            bad.append(entry)
+            continue
+        out[parts[0]] = [start, end, delta]
+    return out, bad
+
+
+def merge_windows(*maps):
+    """One {boot_id: [from, to, delta]} of several: per boot the union of
+    the ranges and the first delta that is known (earlier maps first)."""
+    out = {}
+    for m in maps:
+        for b, w in (m or {}).items():
+            old = out.get(b)
+            if old is None:
+                out[b] = list(w)
+            else:
+                out[b] = [min(old[0], w[0]), max(old[1], w[1]), old[2] if old[2] is not None else w[2]]
+    return out
+
+
 def load_rewind(db, boot_id):
     """Where the AP load cursor must go back to for a boot the uploader
     anchored on the server's time: (done, ts).
@@ -274,13 +321,15 @@ def _ranges(ids):
     return out
 
 
-def build(db, cursor, current_boot, server_anchors, max_polls, windows=None):
+def build(db, cursor, current_boot, server_anchors, max_polls, windows=None, extra_windows=None):
     """(batch, new cursor, info) or (None, cursor, info) when nothing is due.
 
     batch: {"tables": {name: {"cols", "rows"}}, "gaps": [...], "boots": [...],
     "polls": n}; the envelope (v, batch_seq, buffer_id, ...) is added by the
     caller. windows: stale windows the uploader's state remembers
-    (stale_windows()). info: {"held": n, "unverified": {boot: polls},
+    (stale_windows()); extra_windows: those of the configuration
+    (parse_windows()) - used like the remembered ones, never added to them.
+    info: {"held": n, "unverified": {boot: polls},
     "corrected": {boot: (n, [offsets])}, "windows": {boot: [from, to, delta]}}.
     """
     has_v8 = "clock_synced" in _cols(db, "polls")
@@ -421,7 +470,8 @@ def build(db, cursor, current_boot, server_anchors, max_polls, windows=None):
     info["windows"] = stale_windows(db, server_anchors, windows) if has_v8 else dict(windows or {})
     # (also for the batch's own boots: the remembered window is the union, the
     # one read from the buffer has lost what the retention removed)
-    all_boots = list(bmap.values()) + [timeline.Window(*w) for b, w in sorted(info["windows"].items())]
+    known = merge_windows(info["windows"], extra_windows)
+    all_boots = list(bmap.values()) + [timeline.Window(*w) for b, w in sorted(known.items())]
     dev_rows = []
     for k in sorted(set(keys) | {h[0] for h in hist_rows} | {lr[0] for lr in load_rows}):
         d = db.execute("SELECT * FROM devices WHERE key = ?", (k,)).fetchone()

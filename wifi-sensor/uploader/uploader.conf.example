@@ -23,6 +23,16 @@ CAPTURE_IFACE=wlan1
 # anchor is then on its way).
 #SERVER_ANCHOR_AFTER_S=120
 #SERVER_ANCHOR_SYNCED_S=1800
+# Stale windows of boots the uploader cannot learn about by itself: their
+# polls left the buffer before it remembered such windows (uploader < 1.3),
+# or its state file was lost after the retention removed them. The device
+# rows keep a first_seen written on those boots' stale clocks; without the
+# entry it is uploaded as it is and the server keeps the earlier time.
+# Entries 'boot_id:from:to:delta' separated by spaces: from/to in unix
+# seconds on the stale clock, delta the shift to true time in seconds
+# ('none': the boot never got an anchor). The server prints them:
+# server/tests/sql/check_first_seen.sql (column stale_windows_entry).
+#STALE_WINDOWS=
 #LOG_LEVEL=INFO
 
 # Configuration delivery (server/docs/config-delivery.md): 1 = accept the

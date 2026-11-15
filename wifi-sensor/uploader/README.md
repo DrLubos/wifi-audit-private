@@ -27,7 +27,12 @@ design in `../../server/docs/live-upload.md` (sections 4, 5 and 8.3).
   clock keeps the stale `first_seen` on the sensor for good, so the stale
   window of every such boot stays in the state file (`stale_windows`) and
   the value is corrected in every later batch, also after the retention has
-  removed the boot's polls.
+  removed the boot's polls. A boot the state cannot know - its polls were
+  pruned before uploader 1.3, or the state file was lost since - is given
+  in `uploader.conf` (`STALE_WINDOWS`, uploader 1.4: `boot_id:from:to:delta`
+  entries, printed by the server's `tests/sql/check_first_seen.sql`); the
+  configuration is used like the remembered windows and never copied into
+  the state.
 - **AP load after a late NTP anchor**: the collector folds a stretch's
   pending AP load into `ap_load_hourly` when its NTP anchor commits. If the
   uploader had sent that stretch on a server anchor before, it moves its

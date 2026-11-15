@@ -465,3 +465,69 @@ class State(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfiguredWindows(Base):
+    """STALE_WINDOWS: the stale window of a boot neither the buffer nor the
+    state knows (its polls were pruned before uploader 1.3 remembered
+    windows - the boots of 2026-10-19..23 - or the state file was lost)."""
+
+    KEY = "4202770D00000000_%012X" % 1
+
+    def forgotten_boot(self):
+        """Boot A ran an hour on the stale clock and saw AP 1 first; the
+        server got the true first_seen then. Its polls are gone and no state
+        remembers it; AP 1 is seen again in boot B."""
+        mono = self.offline_stretch(hours=1, aps=(1,))
+        self.anchor_poll(mono, hours=1)
+        self.assertTrue(self.catch_up(self.uploader()))
+        self.assertEqual(self.server.devices[self.KEY]["first_seen"], HOUR0)
+        db = sqlite3.connect(self.db_path)
+        db.execute("DELETE FROM polls WHERE clock_synced = 0")
+        db.commit()
+        db.close()
+        with open(self.state_path) as f:
+            st = json.load(f)
+        st["stale_windows"] = {}                                   # as written by an uploader before 1.3
+        statemod.save(self.state_path, st)
+        t = HOUR0 + 86400
+        self.poll(t, [ap(1, t)], B, 80.0, True, wall=float(t))
+        return "%s:%d:%d:%d" % (A, HOUR0 - STALE - 120, HOUR0 - STALE + 3600 + 120, STALE)
+
+    def test_without_the_setting_the_stale_value_goes_out_and_the_server_keeps_it(self):
+        self.forgotten_boot()
+        self.assertTrue(self.catch_up(self.uploader(boot=B)))
+        self.assertEqual(self.server.devices[self.KEY]["first_seen"], HOUR0 - STALE)      # the defect
+
+    def test_the_configured_window_places_the_value(self):
+        entry = self.forgotten_boot()
+        up = self.uploader(boot=B, STALE_WINDOWS=entry)
+        self.assertTrue(self.catch_up(up))
+        self.assertEqual(self.server.devices[self.KEY]["first_seen"], HOUR0)
+        self.assertEqual(up.state["stale_windows"], {})            # the configuration is not copied into the state
+
+    def test_the_setting_and_the_state_know_the_same_boot(self):
+        mono = self.offline_stretch(hours=4, aps=(1,))
+        self.anchor_poll(mono, hours=4)
+        # the configuration knows the first hour only and no shift; the state the whole stretch
+        up = self.uploader(STALE_WINDOWS="%s:%d:%d:none" % (A, HOUR0 - STALE - 120, HOUR0 - STALE + 3600))
+        self.assertTrue(self.catch_up(up))
+        self.assertEqual(self.server.devices[self.KEY]["first_seen"], HOUR0)
+        self.assertEqual(up.state["stale_windows"][A][2], STALE)
+
+    def test_entries_that_cannot_be_read_are_left_out_and_named(self):
+        good = "%s:100:200:54661.19" % A
+        got, bad = batch.parse_windows("  %s, %s:300:400:none nonsense %s:9:1:5 %s:1:2:x :1:2:3 %s:1:2:inf " % (
+            good, B, A, A, A))
+        self.assertEqual(got, {A: [100.0, 200.0, 54661.19], B: [300.0, 400.0, None]})
+        self.assertEqual(len(bad), 5)
+        self.assertEqual(batch.parse_windows(""), ({}, []))
+        self.assertEqual(batch.parse_windows(None), ({}, []))
+        with self.assertLogs("uploader", level="WARNING") as logs:
+            up = self.uploader(STALE_WINDOWS=good + " nonsense")
+        self.assertEqual(list(up.config_windows), [A])
+        self.assertIn("nonsense", logs.output[0])
+
+    def test_merge_keeps_the_first_known_shift_and_the_widest_range(self):
+        got = batch.merge_windows({A: [10, 20, None], B: [1, 2, 7.0]}, {A: [5, 15, 3.0], B: [0, 9, 8.0]}, None)
+        self.assertEqual(got, {A: [5, 20, 3.0], B: [0, 9, 7.0]})
