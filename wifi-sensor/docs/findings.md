@@ -273,11 +273,20 @@ in section 7).**
   everything up to its cursor. Poll seq 123577 is 2026-11-02 07:15:17 on the
   server and the (failed) first poll of the next boot on the Pi; seq 150443
   likewise (2026-11-12 07:05:25 / 2026-11-13 14:47:46).
-  - 2026-11-02: polls 123578 and 123579 (22:00:06, 22:00:36) are on the
-    server with 0 of 39 and 32 of 47 AP observations: **54 AP observations
-    lost**, and the failed poll 123577. Not recoverable: those polls carry the
-    server anchor's time, a re-send would place them 1 s earlier and store
-    them twice.
+  - 2026-11-02: polls 123578 and 123579 (22:00:06, 22:00:36) were on the
+    server with 0 of 39 and 32 of 47 AP observations: 54 AP observations
+    missing, and the failed poll 123577 (still not on the server: its seq is
+    the lost poll's). The uploader cannot send them again - those polls carry
+    the server anchor's time, a re-send would place them 1 s earlier and store
+    the two polls' rows twice. **Restored 2026-11-15 09:09:36**: a read-only
+    extract of the two polls' AP rows from the buffer
+    (`analysis/extract_poll_rows.py`, a day before the retention reached
+    them) was merged on the server by `ops/merge_poll_rows.sh` - each row on
+    the stored poll's time, through `ingest_merge()`: 86 staged, 54 inserted,
+    32 already there; the server now has 39/39 and 47/47. The configuration
+    history of the two polls was complete (17 and 9 rows), no alert was
+    fetched by them. The extract is in the developer's exports
+    (`obs-recovery-2026-11-15/`).
   - 2026-11-13: polls 150444 and 150445 (14:48:16, 14:48:46) had 0 of 45 and
     10 of 47: 82 AP observations, **re-sent 2026-11-14 23:04** (the uploader's
     cursor moved back to poll 150442 by hand; 33 batches, the server merged
@@ -300,11 +309,26 @@ in section 7).**
 - *`devices.first_seen` of APs first seen on a stale clock.* The Pi keeps the
   stale value (MIN over all boots); the uploader corrected it only while the
   batch held polls of that boot, and after the next reboot the raw value went
-  out and the server's `LEAST()` kept it: 3 APs first seen 2026-10-21 are
-  8 h 25 min early on the server (not repaired - a write to the live
-  database). 216 APs carry a stale `first_seen` from boot `a864e8cb` on the
+  out and the server's `LEAST()` kept it. **6 APs** were early on the server:
+  3 by 8 h 25 min (boot `3b93db8a`, 2026-10-20..23) and 3 by 2 h 47 min -
+  5 h 28 min (boot `726f6757`, 2026-10-19: the stale value replaced an
+  earlier true `first_seen` on the Pi, so the first stored row is the best
+  value left). 216 APs carry a stale `first_seen` from boot `a864e8cb` on the
   Pi; uploader 1.3 keeps that boot's stale window in its state, so they stay
-  correct on the server.
+  correct on the server. The boots of 2026-10-19 (two) and 10-20..23 were
+  pruned before 1.3 ran - it could not learn their windows, and the next
+  sighting of any AP first seen in them would have sent the stale value
+  again. **Fixed 2026-11-15:** uploader 1.4 takes such windows from
+  `uploader.conf` (`STALE_WINDOWS`, section 7; the four entries come from the
+  server's `sensor_clock_boots`, printed by `tests/sql/check_first_seen.sql`),
+  and `ops/repair_first_seen.sql` set the 6 values at 09:08:34 to the earlier
+  of the AP's first stored row and the shifted value (0 - 31 s before the
+  first row now; one `audit_log` row each, a database backup taken at
+  08:56:02 is on the developer's Mac). The check lists none since. What the
+  rule cannot tell apart, on the sensor and on the server alike: a value
+  inside a stale window that was written on a true clock (the stale clock
+  re-reads the hours before the power-off) - it is shifted too; the server's
+  `LEAST()` keeps the true value where the device was uploaded then.
 
 **2026-09-22 disk-full gap** (boundaries read from `polls` in the live buffer):
 
@@ -380,6 +404,9 @@ read from the running system after the change (journal, `polls`), not planned.
 | 2026-10-25 14:46:07 | **Delivered configuration v5 = `ht20_37`** (staged test 2, config-delivery.md 12; saved 14:45:24, a retry of the refused v4). Kismet stopped 14:45:40, started 14:45:42, capture source ready 14:45:45 - **capture gap ~5 s**, no poll missed (14:45:37 on 89 entries, 14:46:07 the first on 37). Verified by 3 collecting polls; server: v5 confirmed 14:46:07, a `change` boundary | **Dataset boundary**: from 14:46:07 the sensor hops the 37 20-MHz entries only (no HT40 / VHT80 settings; 5 GHz 36-165 without 144) - until 14:52:37 (below) |
 | 2026-10-25 14:48:41 - 14:50:43 | **Forced rollback** (staged test 2): v6 = `all_89` saved 14:48:19 with `VERIFY_S=30` set on the Pi so it could not verify. Kismet restarted on the 89 list 14:48:41 (ready 14:48:45, ~4 s), one poll on it (14:49:07); verification failed (1 collecting poll in 30 s) -> the last good `ht20_37` files restored and Kismet restarted 14:49:12 (ready 14:49:16, ~4 s); 3 collecting polls on the 37 list from 14:49:37 -> `rolled_back` 14:50:43. Server: v6 refused, a `coverage` window 14:48:37 - 14:49:37 in the configuration history, `config_rolled_back` event 392973 (closed 14:54:10). Override removed 14:51 | No boundary (the configuration before and after is `ht20_37`); the window 14:48:37 - 14:49:37 ran two restarts (~8 s without capture in all) and one poll on the 89-entry list - exclude it from per-channel figures |
 | 2026-10-25 14:52:37 | **Delivered configuration v7 = `all_89`** (staged test 2, a retry of v6; saved 14:51:55). Kismet stopped 14:52:10, started 14:52:11, source ready 14:52:13 - **capture gap ~3 s**, no poll missed; hop guard paused 14:52:10 - 14:53:41; `applied` 14:53:41; server: v7 confirmed 14:52:37, a `change` boundary. **Staged test passed; final state all_89, delivery ON** | **Dataset boundary**: the 89-entry list again from 14:52:37, now with an explicit `channel_hoprate=5/sec` in the source line (the same 5 hops/s as Kismet's default before) and `polls.config_version` 7. 0 polls lost during the test (seq contiguous) |
+| 2026-11-14 23:03:08 / 23:07:55 | Collector (`install_collector.sh` twice; commits `f9ae5dd`, `a4c4567`, `068e2ec`): `synchronous=FULL` (a commit is on the card before the uploader can see it), one savepoint per device and alert (a record SQLite cannot bind is skipped, the poll is stored), any unexpected record shape skipped while shaping, NUL characters dropped from text, `ds_error` cut to 500 characters, the pending-load fold per true hour, the retention in two-hour slices, WAL limited to 64 MB. Restarted 23:03:08 and 23:07:55; Kismet and the hop guard not restarted | Nothing about what is captured. No poll missed (spacing <= 45 s on the server 22:50 - 23:09, 0 failed). `buffer.db-wal` 408 MB -> 64 MB at the first checkpoint. From now on a power cut cannot make the buffer forget a poll the uploader has sent (section 6) |
+| 2026-11-14 23:04:06 / 23:13:04 | Uploader 1.3 (`install_uploader.sh`, commits `39767e7`, `a4c4567`; stopped 23:03:50, started 23:04:06; restarted 23:13:04 with `dad64af` - a remembered stale window is the union, it never shrinks): AP load folded behind the load cursor is sent again, no server anchor for 30 min while chrony is synchronised, stale windows of earlier boots kept in the state (`first_seen`), the cursor checked against the buffer (`last_poll`) and moved back after a lost tail, at most 5,000 load rows / 25,000 rows a batch, a 422 halved down to its poll, the AP evidence looked up per device. Before the start the cursor was set back to poll 150442 by hand (the state before it is kept as `state.json.before-1.3`) | Nothing about what is captured. The re-send: 33 batches 23:04:10 - 23:07:19, 2,047 AP-load rows (the 17 hours of section 6), 82 AP observations and the failed poll 150443; everything else a no-op on the server. One batch per poll again after the last re-send batch (23:07:19). The first 4.5 h after it (to 2026-11-15 03:42): 565 polls on the server, none failed, spacing exactly 30 s; the uploader's CPU 0.9 % of a core (2.6 % before), the collector's 0.64 % (0.52 %) |
+| 2026-11-15 08:55:00 | Uploader 1.4 (`install_uploader.sh`, commit `95b6318`; stopped 08:54:59, started 08:55:00) and `STALE_WINDOWS` in `/etc/wifi-sensor/uploader.conf` (the copy before it: `uploader.conf.before-1.4`): the stale windows of boots `726f6757` and `8e173531` (2026-10-19), `3b93db8a` (10-20..23) and `a864e8cb` (11-02..11), as the server derives them from its record of the boots' clocks. The first three were pruned from the buffer before uploader 1.3 could remember them | Nothing about what is captured or stored on the Pi. A device first seen on one of those stale clocks is uploaded with its `first_seen` shifted to true time again (section 6); no batch was refused around the restart (batch 31735 at 08:54:58, 31736 at 08:55:30) |
 | 2026-09-26 ~22:40 | Journal persistent (`journalctl --flush` during the install; the oldest entry kept from that boot is 22:40:39) | Kernel, Kismet and collector logs survive reboots (200 MB cap). Earlier incidents have only ~4 min of journal. Each boot's first lines carry the stale clock (e.g. 2026-09-15 13:53) until chrony syncs - the pre-start logs "clock synchronised" at that point |
 
 **Hop coverage before and after 22:45:26** (measured with
@@ -393,8 +420,6 @@ read from the running system after the change (journal, `polls`), not planned.
 | Full cycle | ~20.1 s | ~9.7 s (45 x 0.215 s) | ~19.1 s |
 | 2.4 GHz time share | 18.2 % | 19.7 % (20 s sample) | 19.5 % |
 | Channel 165 airtime | ~4.6 % (165 + 165HT40-, incl. stall) | 0 % (`165` is not visited) | ~1.1 % (`165` only) |
-| 2026-11-14 23:03:08 / 23:07:55 | Collector (`install_collector.sh` twice; commits `f9ae5dd`, `a4c4567`, `068e2ec`): `synchronous=FULL` (a commit is on the card before the uploader can see it), one savepoint per device and alert (a record SQLite cannot bind is skipped, the poll is stored), any unexpected record shape skipped while shaping, NUL characters dropped from text, `ds_error` cut to 500 characters, the pending-load fold per true hour, the retention in two-hour slices, WAL limited to 64 MB. Restarted 23:03:08 and 23:07:55; Kismet and the hop guard not restarted | Nothing about what is captured. No poll missed (spacing <= 45 s on the server 22:50 - 23:09, 0 failed). `buffer.db-wal` 408 MB -> 64 MB at the first checkpoint. From now on a power cut cannot make the buffer forget a poll the uploader has sent (section 6) |
-| 2026-11-14 23:04:06 / 23:13:04 | Uploader 1.3 (`install_uploader.sh`, commits `39767e7`, `a4c4567`; stopped 23:03:50, started 23:04:06; restarted 23:13:04 with `dad64af` - a remembered stale window is the union, it never shrinks): AP load folded behind the load cursor is sent again, no server anchor for 30 min while chrony is synchronised, stale windows of earlier boots kept in the state (`first_seen`), the cursor checked against the buffer (`last_poll`) and moved back after a lost tail, at most 5,000 load rows / 25,000 rows a batch, a 422 halved down to its poll, the AP evidence looked up per device. Before the start the cursor was set back to poll 150442 by hand (the state before it is kept as `state.json.before-1.3`) | Nothing about what is captured. The re-send: 33 batches 23:04:10 - 23:07:19, 2,047 AP-load rows (the 17 hours of section 6), 82 AP observations and the failed poll 150443; everything else a no-op on the server. One batch per poll again after the last re-send batch (23:07:19). The first 4.5 h after it (to 2026-11-15 03:42): 565 polls on the server, none failed, spacing exactly 30 s; the uploader's CPU 0.9 % of a core (2.6 % before), the collector's 0.64 % (0.52 %) |
 
 Why only half: the capture helper steps through the (shuffled) list with a fixed
 stride that Kismet 2025-09 derives from the list length alone - the Linux Wi-Fi
