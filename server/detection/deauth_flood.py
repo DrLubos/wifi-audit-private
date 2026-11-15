@@ -175,10 +175,13 @@ SELECT ts, prev, cur, extract(epoch FROM since_prev)::int AS since_prev_s, mgmt_
 FROM s WHERE """ + _REGULAR_POLL + """ AND mgmt_delta >= 0
 ORDER BY ts"""
 
-AP_INFO_SQL = """
-SELECT device_key, upper(bssid::text) AS bssid, ssid, crypt, mfp_req,
-       coalesce(trusted, false) AS trusted
-FROM ap_inventory WHERE sensor_id = %(sid)s AND device_key = ANY(%(keys)s)"""
+# trusted: the operator's whitelist (common.MANAGED_CTE), or the older flag
+AP_INFO_SQL = "WITH " + common.MANAGED_CTE + """
+SELECT i.device_key, upper(i.bssid::text) AS bssid, i.ssid, i.crypt, i.mfp_req,
+       (coalesce(i.trusted, false) OR m.device_key IS NOT NULL) AS trusted
+FROM ap_inventory i
+LEFT JOIN managed m ON m.device_key = i.device_key
+WHERE i.sensor_id = %(sid)s AND i.device_key = ANY(%(keys)s)"""
 
 
 # --- data ---------------------------------------------------------------------------
@@ -441,6 +444,30 @@ def _rate(baseline):
     return float(baseline["bursts"]) / float(baseline["active_hours"])
 
 
+def baseline_without(ep, baseline, b_from, b_to, poll_s=POLL_INTERVAL_S):
+    """The AP's baseline row over [b_from, b_to) without the episode it is
+    about to judge: its own burst events and its own time taken out. The
+    scan-range fallback (an AP with < 24 h of lookback) contains the episode,
+    and an attack must not raise its own threshold - a slow flood on an AP
+    first seen an hour earlier put the Poisson threshold above its own burst
+    count (6 bursts, threshold 7; the floor is 3). Nothing left = no rate, so
+    the floor decides. The row is returned unchanged when the episode has no
+    burst in the range."""
+    if not baseline:
+        return baseline
+    own = sum(1 for b in ep.bursts if b_from <= (b.poll_ts or b.ts) < b_to)
+    if not own:
+        return baseline
+    lo = max(ep.first_ts, b_from)
+    hi = min(ep.last_ts + timedelta(seconds=poll_s), b_to)
+    own_h = max(0.0, (hi - lo).total_seconds()) / 3600.0
+    row = dict(baseline)
+    row["bursts"] = max(0, int(row.get("bursts") or 0) - own)
+    row["active_hours"] = max(0.0, float(row.get("active_hours") or 0) - own_h)
+    row["own_bursts_excluded"] = own
+    return row
+
+
 def evidence_dict(ep, params, observed=None, baseline_range=None):
     by_header = defaultdict(int)
     for a in ep.alerts:
@@ -478,6 +505,8 @@ def evidence_dict(ep, params, observed=None, baseline_range=None):
             "fallback": bool(b.get("fallback")) if b else None,
             "active_hours": round(float(b["active_hours"]), 2) if b.get("active_hours") is not None else None,
             "polls": b.get("polls"), "bursts": b.get("bursts"),
+            # the episode's own bursts, taken out of the range it lies in (baseline_without())
+            "own_bursts_excluded": b.get("own_bursts_excluded", 0) if b else None,
             "bursts_per_hour": round(base_rate, 4) if base_rate is not None else None,
             "flood_alerts": b.get("flood_alerts"),
             "mgmt_per_poll_median": _num(b.get("mgmt_med")),
@@ -528,6 +557,8 @@ def analyse(conn, sensor, frm, to, params, quiet=False):
     sid = sensor["id"]
     scan_from = frm - timedelta(seconds=params.gap_s)
     scan_to = to + timedelta(seconds=params.gap_s)
+    # a stored episode that reaches outside the window is rebuilt whole
+    scan_from, scan_to = detections.widen(conn, sid, TYPE, scan_from, scan_to, params.gap_s)
     base_from = frm - timedelta(seconds=params.lookback_s)
     headers = list(params.headers) + list(CORROBORATING_HEADERS)
 
@@ -579,11 +610,12 @@ def analyse(conn, sensor, frm, to, params, quiet=False):
 
     findings = []
     for ep in candidates:
-        assess(ep, params, baselines.get(ep.device_key), ap_info.get(ep.device_key))
+        base = baselines.get(ep.device_key)
+        used = (base_from, scan_to) if (base or {}).get("fallback") else (base_from, frm)
+        assess(ep, params, baseline_without(ep, base, *used), ap_info.get(ep.device_key))
         if not ep.emitted:
             continue
         observed = _episode_polls(conn, sid, ep, params) if ep.device_key else None
-        used = (base_from, scan_to) if (ep.baseline or {}).get("fallback") else (base_from, frm)
         ep.finding = make_finding(ep, params, observed, used)
         findings.append(ep.finding)
     info["candidates"] = len(candidates)

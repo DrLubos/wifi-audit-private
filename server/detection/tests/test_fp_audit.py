@@ -70,5 +70,30 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(fa.ap_kind(None), "?")
 
 
+class SplitAndHardwareTest(unittest.TestCase):
+    def test_the_default_split_is_the_middle_of_the_window(self):
+        frm, to = datetime(2026, 9, 15, tzinfo=UTC), datetime(2026, 9, 28, tzinfo=UTC)
+        self.assertEqual(fa.split_point(frm, to), datetime(2026, 9, 21, 12, tzinfo=UTC))
+        # the middle of all stored data (2026-09-15 .. 2026-11-15) is after this window's end
+        self.assertLess(fa.split_point(frm, to), to)
+        at = datetime(2026, 9, 20, tzinfo=UTC)
+        self.assertEqual(fa.split_point(frm, to, at), at)
+
+    def test_readings_of_other_hardware_are_counted_not_compared(self):
+        from collections import Counter
+        swap = datetime(2026, 10, 1, tzinfo=UTC)
+        readings = [(swap + timedelta(hours=h), -60) for h in range(-3, 4)]
+        skipped = Counter()
+        new = fa.same_hardware(readings, {"hw_from": swap, "hw_to": None}, skipped)
+        self.assertEqual((len(new), skipped["other_hardware"]), (4, 3))
+        old = fa.same_hardware(readings, {"hw_from": None, "hw_to": swap})
+        self.assertEqual([r[0] < swap for r in old], [True] * 3)
+        self.assertEqual(len(fa.same_hardware(readings, {"hw_from": None, "hw_to": None})), 7)
+
+    def test_the_split_fit_is_cut_to_a_hardware_period(self):
+        self.assertIn("hardware_period(%(sid)s, %(at)s)", fa.HARDWARE_PERIOD_SQL)
+        self.assertIn("o.ts >= %(p_from)s", fa.SPLIT_SQL)
+
+
 if __name__ == "__main__":
     unittest.main()

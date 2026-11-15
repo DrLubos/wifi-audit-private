@@ -40,6 +40,21 @@ def get_sensor(conn, name=None):
     return row
 
 
+# The operator's whitelist of a sensor's APs (dashboard v2): the devices whose
+# account AP is classified managed - by hand, or by the rules of its managed
+# network (allowed BSSIDs / OUIs; view account_aps, ap_classification()). The
+# detectors' "trusted" is this, or the older ap_baselines.trusted flag, which
+# no page of the dashboard writes (all false on 2026-11-15: evil_twin (a)
+# never fired and no episode got its trusted-AP grade). A CTE for a statement
+# with the parameter %(sid)s; ~0.1 s for ~850 APs (per-row functions).
+MANAGED_CTE = """managed AS MATERIALIZED (
+  SELECT x.device_key
+  FROM account_aps v
+  JOIN ap_sensors x ON x.ap_id = v.ap_id
+  WHERE x.sensor_id = %(sid)s AND v.classification = 'managed'
+)"""
+
+
 # --- time -----------------------------------------------------------------------
 
 def parse_when(text):

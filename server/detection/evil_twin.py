@@ -74,7 +74,9 @@ from . import common, detections
 from .common import POLL_INTERVAL_S, fmt_dur, fmt_ts, iso
 
 TYPE = "evil_twin"
-VERSION = 1
+VERSION = 2                     # 2: evidence.signal - (a) and (b) of one AP are two rows
+SIGNAL_A = "a"                  # unknown BSSID for an established SSID (membership)
+SIGNAL_B = "b"                  # RSSI baseline deviation (episodes)
 SEVERITIES = ("info", "low", "medium", "high", "critical")
 APSPOOF_HEADERS = ("APSPOOF",)
 
@@ -84,7 +86,7 @@ APSPOOF_HEADERS = ("APSPOOF",)
 
 # Signal (b), part 1: one row per AP that has a qualifying baseline - the AP's
 # identity and that baseline (small: one row per AP, fetched whole).
-AP_META_SQL = """
+AP_META_SQL = "WITH " + common.MANAGED_CTE + """
 SELECT d.device_key,
        upper(d.mac::text) AS bssid, d.ssid, d.manuf, d.crypt,
        trunc(d.mac)::text AS oui,
@@ -96,7 +98,7 @@ SELECT d.device_key,
        b.rssi_median, b.rssi_robust_sd, b.n_obs AS base_n_obs, b.n_days AS base_n_days,
        b.n_floor AS base_n_floor,
        b.window_start AS base_from, b.window_end AS base_to,
-       coalesce(b.trusted, false) AS trusted,
+       (coalesce(b.trusted, false) OR m.device_key IS NOT NULL) AS trusted,
        -- schema 11 / 13: the capture-hardware period the baseline was learned in
        -- (between 'hardware_change' entries of the history); readings outside it
        -- came through other hardware and are not compared
@@ -104,6 +106,7 @@ SELECT d.device_key,
        b.hw_from, nullif(upper(hardware_period(d.sensor_id, coalesce(b.hw_from, '-infinity'))), 'infinity') AS hw_to
 FROM devices d
 JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.device_key
+LEFT JOIN managed m ON m.device_key = d.device_key
 WHERE d.sensor_id = %(sid)s AND d.ever_ap
   AND b.rssi_median IS NOT NULL AND b.rssi_robust_sd IS NOT NULL"""
 
@@ -132,11 +135,11 @@ ORDER BY device_key, ts"""
 
 # Signal (a): every AP advertising a named SSID, with its in-window presence and
 # median RSSI. device_config_history SSIDs are unioned in analyse().
-INVENTORY_SQL = """
+INVENTORY_SQL = "WITH " + common.MANAGED_CTE + """
 SELECT d.device_key, upper(d.mac::text) AS bssid, trunc(d.mac)::text AS oui, d.manuf,
        d.ssid, d.crypt,
        (d.mac & macaddr '02:00:00:00:00:00') <> macaddr '00:00:00:00:00:00' AS random_bssid,
-       coalesce(b.trusted, false) AS trusted,
+       (coalesce(b.trusted, false) OR m.device_key IS NOT NULL) AS trusted,
        d.first_seen, d.last_seen,
        count(rssi_valid(o.rssi)) FILTER (WHERE o.ts >= %(scan_from)s AND o.ts < %(scan_to)s) AS win_obs,
        min(o.ts)     FILTER (WHERE o.ts >= %(scan_from)s AND o.ts < %(scan_to)s) AS win_first,
@@ -145,12 +148,13 @@ SELECT d.device_key, upper(d.mac::text) AS bssid, trunc(d.mac)::text AS oui, d.m
          FILTER (WHERE rssi_valid(o.rssi) IS NOT NULL AND o.ts >= %(scan_from)s AND o.ts < %(scan_to)s) AS win_median
 FROM devices d
 LEFT JOIN ap_baselines b ON b.sensor_id = d.sensor_id AND b.device_key = d.device_key
+LEFT JOIN managed m ON m.device_key = d.device_key
 -- Only the scan window is joined: every aggregate above is window-filtered, so
 -- this gives the same rows while reading a fraction of the history.
 LEFT JOIN observations o ON o.sensor_id = d.sensor_id AND o.device_key = d.device_key
                         AND o.ts >= %(scan_from)s AND o.ts < %(scan_to)s
 WHERE d.sensor_id = %(sid)s AND d.ever_ap AND d.ssid IS NOT NULL AND d.ssid <> ''
-GROUP BY d.device_key, d.mac, d.manuf, d.ssid, d.crypt, b.trusted, d.first_seen, d.last_seen"""
+GROUP BY d.device_key, d.mac, d.manuf, d.ssid, d.crypt, b.trusted, m.device_key, d.first_seen, d.last_seen"""
 
 # SSIDs each AP advertised in the past (so a twin that has since changed its SSID
 # is still matched to the protected name it cloned).
@@ -506,6 +510,32 @@ def assess(ep, params, baseline, bssid, ssid, trusted):
     return ep
 
 
+def corroborate(episodes, unknowns, tsets, gap_s):
+    """Set corroborated_a / corroborated_b on assessed episodes and unknowns: an
+    unknown BSSID that would be reported itself (sustained, so never a
+    randomised or passing one) and an emitted deviation episode of a TRUSTED
+    BSSID of the same exact SSID, present at the same time (the unknown's
+    presence in the scan and the episode, at most gap_s apart). Before, any
+    unknown anywhere in the scan raised every episode of its SSID - a phone
+    hotspot seen for three polls eleven days earlier made a medium episode
+    high - and one deviating window below the persistence rule raised every
+    unknown."""
+    gap = timedelta(seconds=gap_s)
+    for e in episodes:
+        e.corroborated_a = False
+    for u in unknowns:
+        u.corroborated_b = False
+    for u in unknowns:
+        if not u.sustained or u.win_first is None or u.win_last is None:
+            continue
+        trusted = (tsets.get(u.ssid) or {}).get("bssids") or ()
+        for e in episodes:
+            if not e.emitted or e.ssid != u.ssid or e.bssid not in trusted:
+                continue
+            if e.first_ts <= u.win_last + gap and e.last_ts >= u.win_first - gap:
+                e.corroborated_a = u.corroborated_b = True
+
+
 def classify_unknowns(expanded, tsets, apspoof, params):
     """Pure: turn (device, exact-SSID) rows into Unknown records for the BSSIDs
     that advertise an established SSID but are not in its trusted set. The SSID
@@ -553,7 +583,7 @@ def _num(v, digits=2):
 def evidence_b(ep, params):
     b = ep.baseline
     return {
-        "detector": TYPE, "version": VERSION,
+        "detector": TYPE, "version": VERSION, "signal": SIGNAL_B,
         "rules": {"rssi_deviation": True, "unknown_bssid": ep.corroborated_a},
         "window_start": iso(ep.first_ts), "window_end": iso(ep.last_ts),
         "duration_s": round(ep.duration_s, 3), "ssid": ep.ssid,
@@ -579,7 +609,7 @@ def evidence_b(ep, params):
 
 def evidence_a(u, params):
     return {
-        "detector": TYPE, "version": VERSION,
+        "detector": TYPE, "version": VERSION, "signal": SIGNAL_A,
         "rules": {"rssi_deviation": u.corroborated_b, "unknown_bssid": True},
         "window_start": iso(u.win_first or u.first_seen), "window_end": iso(u.win_last or u.win_first or u.first_seen),
         "duration_s": round(u.span_s, 3), "ssid": u.ssid,
@@ -619,7 +649,7 @@ def make_finding_b(ep, params):
     return detections.Finding(
         type=TYPE, ts=ep.first_ts, severity=ep.severity, device_key=ep.device_key,
         mac=ep.bssid, ssid=ep.ssid, summary=summary_b(ep),
-        evidence=evidence_b(ep, params), window_start=ep.first_ts, window_end=ep.last_ts)
+        evidence=evidence_b(ep, params), window_start=ep.first_ts, window_end=ep.last_ts, signal=SIGNAL_B)
 
 
 def make_finding_a(u, params):
@@ -628,7 +658,9 @@ def make_finding_a(u, params):
     return detections.Finding(
         type=TYPE, ts=start, severity=u.severity, device_key=u.device_key,
         mac=u.bssid, ssid=u.ssid, summary=summary_a(u),
-        evidence=evidence_a(u, params), window_start=start, window_end=end)
+        evidence=evidence_a(u, params), window_start=start, window_end=end,
+        # a standing condition seen through this run's window: a refresh keeps its first start
+        signal=SIGNAL_A, extend=True)
 
 
 # --- database phase -------------------------------------------------------------------------
@@ -682,17 +714,20 @@ def analyse(conn, sensor, frm, to, params, quiet=False):
     scan_to = to + timedelta(seconds=params.gap_s)
 
     # --- signal (b): windowed deviations of every baselined AP -------------------
-    _log("scanning RSSI %s .. %s ..." % (fmt_ts(scan_from), fmt_ts(scan_to)), quiet)
+    # (b) only: a stored episode that reaches outside the window is rebuilt whole;
+    # the membership check (a) keeps the window's own range
+    b_from, b_to = detections.widen(conn, sid, TYPE, scan_from, scan_to, params.gap_s, signal=SIGNAL_B)
+    _log("scanning RSSI %s .. %s ..." % (fmt_ts(b_from), fmt_ts(b_to)), quiet)
     baselined = {r["device_key"]: r for r in conn.execute(AP_META_SQL, {"sid": sid})}
     ap_meta, excluded = eligible_aps(baselined, params)
     skipped = Counter()
     deviations, aps_scanned = scan_deviations(
-        _stream_readings(conn, READINGS_SQL, {"sid": sid, "scan_from": scan_from, "scan_to": scan_to}),
+        _stream_readings(conn, READINGS_SQL, {"sid": sid, "scan_from": b_from, "scan_to": b_to}),
         ap_meta, params, skipped)
     guard = timedelta(seconds=params.channel_guard_s)
     changes = defaultdict(list)
     if params.channel_guard_s > 0:
-        for r in conn.execute(CHANNEL_CHANGES_SQL, {"sid": sid, "from_": scan_from - guard, "to": scan_to + guard}):
+        for r in conn.execute(CHANNEL_CHANGES_SQL, {"sid": sid, "from_": b_from - guard, "to": b_to + guard}):
             changes[r["device_key"]].append(r["ts"])
     deviations, guarded = apply_channel_guard(deviations, changes, params.channel_guard_s)
     episodes = [e for e in build_episodes(deviations, params.gap_s) if e.overlaps(frm, to)]
@@ -717,26 +752,22 @@ def analyse(conn, sensor, frm, to, params, quiet=False):
 
     unknowns = classify_unknowns(expanded, tsets, apspoof, params)
 
-    # --- corroboration: an unknown BSSID and a deviating trusted member, same SSID
-    dev_ssids = {e.device_key: ap_meta[e.device_key]["ssid"] for e in episodes}
-    ssid_has_unknown = {u.ssid for u in unknowns}
-    ssid_has_deviation = set(dev_ssids.values())
-    for e in episodes:
-        e.corroborated_a = ap_meta[e.device_key]["ssid"] in ssid_has_unknown
-    for u in unknowns:
-        u.corroborated_b = u.ssid in ssid_has_deviation
-
-    # --- assess + build findings -------------------------------------------------
-    findings = []
+    # --- assess, corroborate, grade, build findings ----------------------------------
     for e in episodes:
         m = ap_meta[e.device_key]
         assess(e, params, m, m["bssid"], m["ssid"], m["trusted"])
+    for u in unknowns:
+        assess_unknown(u, params)
+    corroborate(episodes, unknowns, tsets, params.gap_s)
+    findings = []
+    for e in episodes:
         if e.emitted:
+            e.severity = grade_b(e.max_dev_db, e.direction, e.trusted, e.corroborated_a, params)
             e.finding = make_finding_b(e, params)
             findings.append(e.finding)
     for u in unknowns:
-        assess_unknown(u, params)
         if u.sustained:
+            u.severity = grade_a(u.oui_in_trusted, u.crypt_matches, u.close, u.corroborated_b)
             u.finding = make_finding_a(u, params)
             findings.append(u.finding)
 

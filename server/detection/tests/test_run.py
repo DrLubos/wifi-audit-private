@@ -10,7 +10,7 @@ import json
 import os
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -90,19 +90,24 @@ class FakeResult:
 class FakeConn:
     """Dispatches on the statement text; records every call and its parameters."""
 
-    def __init__(self, stored=None):
+    def __init__(self, stored=None, alerts=None, bursts=None, baselines=None):
         self.calls = []
         self.stored = stored or []          # detections rows already "in the table"
         self.next_id = 1
+        self.alerts = ALERT_ROWS if alerts is None else alerts
+        self.bursts = BURST_ROWS if bursts is None else bursts
+        self.baselines = baselines          # callable(params) -> rows of BASELINE_SQL, or None = the seeded ones
 
     def execute(self, sql, params=None):
         self.calls.append((sql, params))
         if sql is df.EVENTS_SQL:
-            return FakeResult([r for r in BURST_ROWS if params["scan_from"] <= r["ts"] < params["scan_to"]
+            return FakeResult([r for r in self.bursts if params["scan_from"] <= r["ts"] < params["scan_to"]
                                and r["since_prev_s"] <= params["max_gap_s"]])
         if sql is df.ALERTS_SQL:
-            return FakeResult([r for r in ALERT_ROWS if r["header"] in params["headers"]
+            return FakeResult([r for r in self.alerts if r["header"] in params["headers"]
                                and params["scan_from"] <= r["ts"] < params["scan_to"]])
+        if sql is df.BASELINE_SQL and self.baselines is not None:
+            return FakeResult(self.baselines(params))
         if sql is df.BASELINE_SQL:
             hours = 0 if params["scan_to"] <= ts("2026-09-15T13:53:00Z") else None
             rows = []
@@ -118,10 +123,19 @@ class FakeConn:
                                and params["scan_from"] <= r["ts"] < params["scan_to"]])
         if sql is df.AP_INFO_SQL:
             return FakeResult([AP_ROWS[k] for k in params["keys"] if k in AP_ROWS])
+        if sql is detections._SPAN_SQL:
+            hits = [r for r in self.stored if r["type"] == params["type"]
+                    and r["evidence"].get("signal", "") == params["signal"]
+                    and r["window_end"] >= params["start"] and r["window_start"] <= params["end"]]
+            return FakeResult([{"lo": min((r["window_start"] for r in hits), default=None),
+                                "hi": max((r["window_end"] for r in hits), default=None)}])
         if sql is detections._OVERLAP_SQL:
+            gap = timedelta(seconds=params["gap_s"])
             hits = [r for r in self.stored if r["type"] == params["type"]
                     and r["subject"] == params["subject"]
-                    and r["window_end"] >= params["start"] and r["window_start"] <= params["end"]]
+                    and r["evidence"].get("signal", "") == params["signal"]
+                    and r["window_end"] >= params["start"] - gap and r["window_start"] <= params["end"] + gap]
+            hits.sort(key=lambda r: r["ts"])
             return FakeResult([dict(id=r["id"], ts=r["ts"], severity=r["severity"], status=r["status"],
                                     evidence=r["evidence"]) for r in hits])
         if sql is detections._INSERT_SQL:
@@ -176,7 +190,10 @@ class SeededWindowTest(unittest.TestCase):
         self.assertEqual(f1.evidence["rules"], {"alerts": True, "bursts": False})
         self.assertTrue(f1.evidence["baseline"]["fallback"])          # no lookback data before 09-15
         self.assertEqual(f1.evidence["baseline"]["to"], "2026-09-21T00:05:00.000Z")   # the range used
-        self.assertEqual(f1.evidence["baseline"]["bursts"], 2)
+        # the scan-range baseline holds two bursts of K1; the episode's own one is taken out
+        self.assertEqual(f1.evidence["baseline"]["bursts"], 1)
+        self.assertEqual(f1.evidence["baseline"]["own_bursts_excluded"], 1)
+        self.assertEqual(f2.evidence["baseline"]["own_bursts_excluded"], 0)
         self.assertEqual(f1.evidence["observed"]["mgmt_per_poll_max"], 18.0)
         self.assertEqual(f1.evidence["observed"]["mgmt_ratio_to_median"], 2.0)
         self.assertEqual(f1.evidence["ap"]["bssid"], "EC:58:EA:55:89:DC")
@@ -218,6 +235,53 @@ class SeededWindowTest(unittest.TestCase):
         detections.write(conn, 1, fs[0], params.gap_s)
         self.assertEqual(fs[0].action, "update")
         self.assertEqual(len(conn.stored), 2)
+
+    def test_a_later_window_inside_a_stored_episode_rebuilds_it_whole(self):
+        # a 20-minute flood 11:50 .. 12:10, an alert every 12 s
+        flood = [dict(id=100 + i, ts=ts("2026-11-10T11:50:00Z") + timedelta(seconds=12 * i), header="DEAUTHFLOOD",
+                      bssid="EC:58:EA:55:89:DC", source_mac="EC:58:EA:55:89:DC", dest_mac="FF:FF:FF:FF:FF:FF",
+                      device_key=K1, ssid="IK-WIFI", direction="broadcast") for i in range(101)]
+        conn = FakeConn(alerts=flood, bursts=[])
+        seen = []
+        for frm, to in (("2026-11-10T10:00Z", "2026-11-10T12:00Z"),       # ends inside the flood
+                        ("2026-11-10T12:00Z", "2026-11-10T14:00Z"),       # starts inside it
+                        ("2026-11-10T12:08Z", "2026-11-10T14:00Z")):      # starts near its end
+            _, params, _, fs, info = self.run_window(conn, frm, to)
+            self.assertEqual(len(fs), 1)
+            detections.write(conn, 1, fs[0], params.gap_s)
+            r = conn.stored[0]
+            seen.append((r["ts"], r["evidence"]["alerts"]["n"], r["evidence"]["alerts"]["span_s"]))
+        self.assertEqual(len(conn.stored), 1)
+        # the first run cannot see past its own end; every later one reads the stored
+        # window too and keeps the true start (before: ts 11:55, then 12:03 with 36 alerts)
+        self.assertEqual(seen[0], (ts("2026-11-10T11:50:00Z"), 75, 888.0))
+        self.assertEqual(seen[1], (ts("2026-11-10T11:50:00Z"), 101, 1200.0))
+        self.assertEqual(seen[2], (ts("2026-11-10T11:50:00Z"), 101, 1200.0))
+        self.assertEqual(conn.stored[0]["evidence"]["runs"], 3)
+
+    def test_the_fallback_baseline_leaves_out_the_episode_it_judges(self):
+        # a slow flood (one deauth frame every poll, no Kismet alert) on an AP first seen an
+        # hour before it: the scan-range baseline is the AP's 126 polls - six of them the attack
+        start = ts("2026-11-10T12:00:00Z")
+        attack = [dict(device_key=K1, ts=start + timedelta(seconds=30 * i), poll_ts=start + timedelta(seconds=30 * i),
+                       source="last", prev=None, cur=None, since_prev_s=30, mgmt_delta=40) for i in range(6)]
+
+        def baselines(params):
+            if params["scan_to"] <= ts("2026-11-10T11:00:00Z"):
+                return []                                          # nothing before the AP appeared
+            return [dict(device_key=K1, polls=126, bursts=6, first_ts=ts("2026-11-10T11:00:00Z"),
+                         last_ts=ts("2026-11-10T12:03:00Z"), active_hours=126 * 30 / 3600.0,
+                         mgmt_med=9.0, mgmt_robust_sd=1.5)]
+        conn = FakeConn(alerts=[], bursts=attack, baselines=baselines)
+        _, params, episodes, findings, _ = self.run_window(conn, "2026-11-10T11:30Z", "2026-11-10T13:00Z")
+        # with its own six bursts in the rate the threshold was 7 and the flood was missed
+        self.assertEqual(df.poisson_threshold(6 / 1.05, params.burst_window_s, params.alpha, params.min_bursts), 7)
+        self.assertEqual(len(findings), 1)
+        ev = findings[0].evidence
+        self.assertEqual((ev["rules"], findings[0].severity), ({"alerts": False, "bursts": True}, "medium"))
+        self.assertEqual((ev["bursts"]["max_in_window"], ev["bursts"]["threshold"]), (6, 3))
+        self.assertEqual((ev["baseline"]["fallback"], ev["baseline"]["bursts"], ev["baseline"]["own_bursts_excluded"]),
+                         (True, 0, 6))
 
     def test_per_ap_baseline_protects_a_busy_ap_from_a_low_floor(self):
         # K2's bursts of 2026-09-19 16:57 and 18:11 are 74 min apart: a 90-minute gap merges

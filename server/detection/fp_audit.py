@@ -16,6 +16,13 @@ one AP at a time):
   circular2  the stored baselines evaluated on the second half only, per k;
   split      baselines refitted on the first half [data start, split point)
              and evaluated on the second half, per k.
+The split point is --split-at, else the middle of the WINDOW [--from, --to)
+(the middle of all stored data lies after any older window, so its "second
+half" was empty and circular2 / split printed 0 detections whatever the data).
+One capture-hardware period at a time (schema 11 / 13), as evil-twin itself:
+a stored baseline is compared only with readings of its own period (the others
+are counted, not compared) and the split baselines are fitted from the start of
+the window's period on.
 Each emitted detection is attributed to a class: a documented degraded window
 (degraded_windows.csv), an advertised-channel change of the AP within an hour,
 else "open"; plus the AP kind (campus / randomised / other). The channel class
@@ -53,7 +60,7 @@ WITH obs AS (
   FROM observations o
   JOIN devices d ON d.sensor_id = o.sensor_id AND d.device_key = o.device_key
   WHERE o.sensor_id = %(sid)s AND d.ever_ap AND (o.rssi IS NOT NULL OR o.rssi_floor)
-    AND o.ts >= %(p_from)s AND o.ts < %(p_until)s
+    AND o.ts >= %(p_from)s AND o.ts < %(p_until)s      -- p_from: never before the window's hardware period
 ), stats AS (
   SELECT device_key, count(rssi)::integer AS n_obs,
          count(*) FILTER (WHERE is_floor)::integer AS n_floor,
@@ -88,6 +95,12 @@ HARDWARE_CHANGES_SQL = """
 SELECT starts_at AS valid_from FROM sensor_annotations
 WHERE sensor_id = %(sid)s AND kind = 'hardware_change' AND starts_at > %(from_)s AND starts_at < %(to)s
 ORDER BY starts_at"""
+
+# the capture-hardware period that contains the window's start (open bounds as
+# NULL: psycopg cannot load an infinite time)
+HARDWARE_PERIOD_SQL = """
+SELECT nullif(lower(hardware_period(%(sid)s, %(at)s)), '-infinity') AS lo,
+       nullif(upper(hardware_period(%(sid)s, %(at)s)), 'infinity') AS hi"""
 
 AP_KIND_SQL = """
 SELECT device_key, trunc(mac)::text AS oui,
@@ -127,6 +140,21 @@ def admissible_floor_share(rows):
             break
         lo = f
     return lo, hi
+
+
+def split_point(frm, to, split_at=None):
+    """Where the audit splits [frm, to): --split-at, else the middle of the window."""
+    return split_at or (frm + (to - frm) / 2)
+
+
+def same_hardware(readings, m, skipped=None):
+    """The (ts, rssi) readings that came through the capture hardware of the AP
+    row m's baseline ([hw_from, hw_to), evil_twin.in_hardware_period()); the
+    others are counted in skipped["other_hardware"], never compared."""
+    out = [r for r in readings if et.in_hardware_period(r[0], m)]
+    if skipped is not None:
+        skipped["other_hardware"] += len(readings) - len(out)
+    return out
 
 
 def load_degraded(path, sensor_name):
@@ -178,14 +206,18 @@ def run_audit(conn, sensor, frm, to, params, ks, split_at):
     gap = timedelta(seconds=params.gap_s)
     t0, tend = conn.execute("SELECT min(ts) AS a, max(ts) AS b FROM observations WHERE sensor_id = %s",
                             (sid,)).fetchone().values()
-    tmid = split_at or (t0 + (tend - t0) / 2)
+    tmid = split_point(frm, to, split_at)
+    hw = conn.execute(HARDWARE_PERIOD_SQL, {"sid": sid, "at": frm}).fetchone()
+    fit_from = max(t0, hw["lo"]) if hw["lo"] else t0
     baselined = {r["device_key"]: r for r in conn.execute(et.AP_META_SQL, {"sid": sid})}
     meta, excluded = et.eligible_aps(baselined, params)
     split = {r["device_key"]: r for r in conn.execute(SPLIT_SQL, {
-        "sid": sid, "tz": sensor["tz"], "p_from": t0, "p_until": tmid, "min_obs": 200, "min_days": 2})
+        "sid": sid, "tz": sensor["tz"], "p_from": fit_from, "p_until": tmid, "min_obs": 200, "min_days": 2})
         if r["rssi_robust_sd"] is not None}
+    # a split baseline belongs to the window's hardware period, whatever the stored one's
     split_meta = {k: dict(baselined[k], rssi_median=v["rssi_median"], rssi_robust_sd=v["rssi_robust_sd"],
-                          base_n_obs=v["n_obs"], base_n_floor=v["n_floor"], base_n_days=v["n_days"])
+                          base_n_obs=v["n_obs"], base_n_floor=v["n_floor"], base_n_days=v["n_days"],
+                          hw_from=hw["lo"], hw_to=hw["hi"])
                   for k, v in split.items() if k in baselined}
     split_meta, split_excluded = et.eligible_aps(split_meta, params)
     changes = defaultdict(list)
@@ -198,21 +230,24 @@ def run_audit(conn, sensor, frm, to, params, ks, split_at):
     pk = {k: replace(params, k=k) for k in ks}
     circ, circ2, spl = [], defaultdict(list), defaultdict(list)
     keys = set(meta) | set(split_meta)
+    skipped = Counter()
     rows = et._stream_readings(conn, et.READINGS_SQL, {"sid": sid, "scan_from": frm - gap, "scan_to": to + gap})
     for key, group in itertools.groupby(rows, key=lambda r: r[0]):
         if key not in keys:
             continue
         readings = [(r[1], r[2]) for r in group]       # one AP (bounded by one AP's window)
-        second = [r for r in readings if r[0] >= tmid - gap]
         if key in meta:
             m = meta[key]
-            circ += et.windowed_deviations(readings, float(m["rssi_median"]), float(m["rssi_robust_sd"]),
+            own = same_hardware(readings, m, skipped)   # the stored baseline's own hardware period only
+            circ += et.windowed_deviations(own, float(m["rssi_median"]), float(m["rssi_robust_sd"]),
                                            params, key)
+            second = [r for r in own if r[0] >= tmid - gap]
             for k, p in pk.items():
                 circ2[k] += et.windowed_deviations(second, float(m["rssi_median"]),
                                                    float(m["rssi_robust_sd"]), p, key)
         if key in split_meta:
             s = split_meta[key]
+            second = [r for r in same_hardware(readings, s) if r[0] >= tmid - gap]
             for k, p in pk.items():
                 spl[k] += et.windowed_deviations(second, float(s["rssi_median"]), float(s["rssi_robust_sd"]),
                                                  p, key)
@@ -237,7 +272,9 @@ def run_audit(conn, sensor, frm, to, params, ks, split_at):
     for k in ks:
         results.append(summarise("circular2", k, circ2[k], meta, tmid, to, len(meta)))
         results.append(summarise("split", k, spl[k], split_meta, tmid, to, len(split_meta)))
-    info = {"split_at": tmid, "data_from": t0, "data_to": tend, "aps_baselined": len(baselined),
+    info = {"split_at": tmid, "data_from": t0, "data_to": tend, "split_fit_from": fit_from,
+            "hardware_period": [hw["lo"], hw["hi"]], "readings_other_hardware": skipped["other_hardware"],
+            "aps_baselined": len(baselined),
             "excluded_circular": dict(excluded), "aps_split_qualifying": len(split),
             "excluded_split": dict(split_excluded), "params": params.as_dict()}
     return info, results
@@ -285,7 +322,7 @@ def add_arguments(p):
     et.add_arguments(p)
     p.add_argument("--mode", choices=("audit", "floor-share"), default="audit")
     p.add_argument("--ks", default="3,4,6", help="k values for the split audit (default 3,4,6)")
-    p.add_argument("--split-at", metavar="WHEN", help="split point (default: middle of the data)")
+    p.add_argument("--split-at", metavar="WHEN", help="split point (default: the middle of the window)")
 
 
 def run(args):
@@ -323,6 +360,10 @@ def run(args):
     print("  baselined APs %d, excluded (circular) %s; split-qualifying %d, excluded (split) %s" % (
         info["aps_baselined"], info["excluded_circular"] or "none", info["aps_split_qualifying"],
         info["excluded_split"] or "none"))
+    if info["readings_other_hardware"]:
+        print("  %d readings not compared: the stored baselines were learned with other capture hardware "
+              "than this window's (circular / circular2 cover only the baselines' own period)"
+              % info["readings_other_hardware"])
     for r in results:
         print("  %-9s k=%-4g %4d detections on %3d APs  guarded %5d  sev %s  causes %s" % (
             r["variant"], r["k"], r["detections"], r["aps_with_detections"], r["windows_channel_guarded"],

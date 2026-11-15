@@ -65,6 +65,24 @@ episode (latest run wins). Never touched on a refresh: `id`, `status`,
 `(sensor_id, type, coalesce(device_key, upper(mac::text)), ts)` as the guarantee
 for an exact re-run.
 
+Three rules added 2026-11-15 (second review; `detections.py`, tests in
+`tests/test_run.py` and `tests/test_evil_twin_run.py`):
+
+- **A stored episode is rebuilt whole.** A run reads its window widened by the
+  gap *and* stretched over every stored episode of its type that the range
+  touches (`detections.widen()`, a SELECT in the read-only phase). Before, a
+  later window that started inside a stored flood refreshed the row with the
+  part it saw: `ts` moved from 11:50 to 12:03 and 101 alerts became 36. Not a
+  fixed point: an episode that was never stored and began before the scan
+  range still starts at the range's edge.
+- **`evidence.signal`** is part of the match. A detector with two kinds of
+  finding (evil_twin: `a` membership, `b` RSSI episode) gets one row per kind
+  and AP; before, the (a) finding - whose window is the whole scan - overwrote
+  a (b) episode of the same AP at the end of every run.
+- **A standing condition keeps its first start** (`Finding.extend`, evil_twin
+  (a)): a refresh takes the earlier `ts` and the union of the windows, so the
+  row of an unknown BSSID does not move to the start of each new run.
+
 ## deauth_flood
 
 ### What the data actually carries
@@ -149,7 +167,14 @@ Per sensor and AP, over `[--from, --to)` widened by `--gap` on both sides:
    | A with alert span < 2 s (one burst-second, the organic pattern), B false | `low` |
    | A with span 2 s .. `--sustain`, or B alone | `medium` |
    | A with span >= `--sustain` (alerts in two throttle minutes), or A and B together | `high` |
-   | one level up when the frames come from the AP side (`from_ap`/`broadcast`) on an AP with `ap_baselines.trusted` | |
+   | one level up when the frames come from the AP side (`from_ap`/`broadcast`) on a trusted AP (below) | |
+
+   **Trusted** = the operator's whitelist of the dashboard: the AP's account
+   AP is classified managed, by hand or by the rules of its managed network
+   (`account_aps`; `common.MANAGED_CTE`), or the older `ap_baselines.trusted`
+   flag. Until 2026-11-15 only that flag was read, and nothing writes it
+   (0 of 172 rows): no episode ever got this grade and evil_twin (a) had no
+   trusted set at all.
 
 5. **Evidence only, not a trigger**: the AP's non-data frame rate per poll,
    `d(pk_total - pk_data)`, with its median + 1.4826*MAD baseline over the
@@ -170,7 +195,7 @@ Per sensor and AP, over `[--from, --to)` widened by `--gap` on both sides:
 | `--burst-window` | 600 s | sliding window for rule B |
 | `--alpha` | 1e-4 | Poisson tail for the per-AP threshold above the floor |
 | `--sustain` | 60 s | alert span that makes an episode `high` |
-| `--lookback` | 7d | baseline window before `--from`; APs with < 24 h of it fall back to the scan range (marked in the evidence) |
+| `--lookback` | 7d | baseline window before `--from`; APs with < 24 h of it fall back to the scan range (marked in the evidence). The episode being judged is left out of the range it lies in (`baseline_without()`: its own bursts and time; `baseline.own_bursts_excluded`) - with them in the rate a slow flood on an AP first seen an hour earlier had 6 bursts against a threshold of 7 |
 | `--headers` | `DEAUTHFLOOD` | trigger headers |
 | `--dry-run`, `--verbose`, `--json` | | write nothing / print every episode's timeline / findings as JSON on stdout |
 
@@ -186,7 +211,7 @@ detector, version (2), window_start, window_end, duration_s, rules {alerts, burs
 alerts {ids, n, span_s, first_ts, last_ts, by_header, sources, directions, broadcast,
         corroborating {BCASTDISCON: [ids], DISCONCODEINVALID: [ids]}},
 bursts {n, sources {last, counter}, times, polls, values [[prev, cur]...], max_in_window, threshold},
-baseline {from, to, fallback, active_hours, polls, bursts, bursts_per_hour, flood_alerts,
+baseline {from, to, fallback, active_hours, polls, bursts, own_bursts_excluded, bursts_per_hour, flood_alerts,
           mgmt_per_poll_median, mgmt_per_poll_robust_sd},
 observed {bursts_per_hour, ratio_to_baseline, mgmt_per_poll_max, mgmt_per_poll_mean,
           mgmt_ratio_to_median, polls},
@@ -364,8 +389,9 @@ counted in the report's eligibility line and in `info`:
 
 ### Signal (a) algorithm
 
-The trusted BSSID set per **exact** SSID is the operator whitelist
-(`ap_baselines.trusted`), or — for the seeded FP audit before any approval —
+The trusted BSSID set per **exact** SSID is the operator whitelist (the
+BSSIDs classified managed in the dashboard, or `ap_baselines.trusted` - see
+"Trusted" under deauth_flood), or — for the seeded FP audit before any approval —
 the BSSIDs first seen before `--from + --baseline-hours` (`--trusted-source
 baseline`). A BSSID advertising an established SSID (now or in
 `device_config_history`) that is not in its trusted set, is **sustained**
@@ -374,11 +400,19 @@ candidate. Severity: `low` when OUI ∈ the set's OUIs *and* crypt = its dominan
 crypt (legit second vendor); `medium` on a foreign OUI or crypt mismatch; `+1`
 when close/strong or (b) corroborates.
 
+**Corroboration** (`corroborate()`): an unknown BSSID that is itself reported
+(sustained, so never a randomised or passing one) and an emitted (b) episode
+of a *trusted* BSSID of the same exact SSID, present at the same time (at
+most `--gap` apart). Each raises the other by one level. Before 2026-11-15
+any unknown anywhere in the scan raised every episode of its SSID, and one
+deviating window below the persistence rule raised every unknown.
+
 ### The row
 
 `type = 'evil_twin'`, `ts` = episode start = `evidence.window_start` (the
 evaluation harness's latency anchor — it keys on the type unchanged), `mac` =
-BSSID, `device_key` = subject. `evidence` carries `rules {rssi_deviation,
+BSSID, `device_key` = subject. `evidence` carries `version` (2), `signal`
+(`a` | `b`: one row per kind and AP, see Idempotency), `rules {rssi_deviation,
 unknown_bssid}`, and for (b) `rssi {facet, baseline{…}, observed{max_dev_db,
 k_sigma, spread_mad, direction, …}, threshold{…}}`, for (a) `membership
 {trusted_source, trusted_bssids, trusted_ouis, dominant_crypt, oui_in_trusted,
@@ -400,7 +434,11 @@ earlier method of this README did, which rewrites `ap_baselines`). It evaluates
 (1) the stored, circular baselines on the whole span, (2) the same on the
 second half, and (3) split baselines fitted on the first half with the same SQL
 as `refresh_ap_baselines()` (as a SELECT) and evaluated on the second half, at
-`--ks 3,4,6` (split point `--split-at`, default the middle of the data), with
+`--ks 3,4,6` (split point `--split-at`, default the middle of the window - the
+middle of all stored data lies after any older window, whose "second half"
+was then empty and printed 0 detections; the split baselines are fitted from
+the start of the window's capture-hardware period, and a stored baseline is
+compared only with readings of its own period, the rest counted), with
 the evil_twin options above. Every detection is attributed to a cause - a
 documented degraded window (`degraded_windows.csv`, from findings §6/§7; add a
 row when a new gap or coverage loss is documented), an advertised-channel
