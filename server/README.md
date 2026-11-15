@@ -95,6 +95,20 @@ tests`),
 check of the schema-7 migration on the real data: `tests/sql/check_schema7.sql`
 (also as `claude_ro`).
 
+**Repairs of stored data** (one-off, each a dry run until told to apply; a
+fresh `./backup.sh` first):
+- `tests/sql/check_first_seen.sql` (read-only, `claude_ro`): the stale-clock
+  window of every corrected boot (with its `STALE_WINDOWS` entry for the
+  sensor's `uploader.conf`) and the APs whose `first_seen` is such a clock's
+  value - expected none. `ops/repair_first_seen.sql` sets those to the earlier
+  of the AP's first stored row and the shifted value (`-v apply=1 -v
+  expect=N`; one `audit_log` row per AP). The uploader must know the windows
+  first, or its next batch moves the value back.
+- `ops/merge_poll_rows.sh [--apply] EXTRACT.json`: AP observation rows of
+  polls that were stored without all of their rows, from an extract of the
+  sensor's buffer (`wifi-sensor/analysis/extract_poll_rows.py`), placed on
+  the stored polls' times and merged by `ingest_merge()`.
+
 The dashboard reads the schema-6 tables, which only `refresh_rollups()` writes:
 the importer calls it after every load; after changing `ap_baselines` by hand
 (e.g. `trusted`) or anything else they summarise, run it again (idempotent; with
