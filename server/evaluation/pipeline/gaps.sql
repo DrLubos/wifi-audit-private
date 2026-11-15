@@ -2,7 +2,12 @@
 --   recorded  - sensor_seq_gaps (the uploader reports 'lost' / 'unverified' ranges)
 --   seq_jump  - a jump in polls.seq between consecutive stored polls (seq = the
 --               buffer's polls.id, consecutive on the sensor); a seq going down
---               is a new buffer ('buffer_change'), not a loss.
+--               is a new buffer ('buffer_change'), not a loss; the same seq
+--               again is a row id the buffer gave out twice ('seq_reused':
+--               a power cut dropped the newest committed poll after it was
+--               uploaded and the next boot reused its id - 2026-11-02 and
+--               11-12, wifi-sensor/docs/findings.md section 6; no poll is
+--               missing between the two).
 -- Discard mode (schema 20): the seqs of a jump that a discard window's batches
 -- cover (discarded_seqs()) are excluded_polls, not loss - polls = the rest; a
 -- jump they cover entirely has reason 'excluded'.
@@ -17,9 +22,11 @@ j AS (
   SELECT p.*, CASE WHEN seq > prev_seq + 1 THEN discarded_seqs(sid, prev_seq + 1, seq - 1, prev_ts, ts) ELSE 0 END AS excl
   FROM p WHERE prev_seq IS NOT NULL AND seq <> prev_seq + 1)
 SELECT 'seq_jump' AS source,
-       CASE WHEN seq < prev_seq THEN 'buffer_change' WHEN seq - prev_seq - 1 = excl THEN 'excluded' ELSE 'missing' END AS reason,
-       prev_seq + 1 AS seq_from, seq - 1 AS seq_to,
-       CASE WHEN seq < prev_seq THEN 0 ELSE seq - prev_seq - 1 - excl END AS polls,
+       CASE WHEN seq < prev_seq THEN 'buffer_change' WHEN seq = prev_seq THEN 'seq_reused'
+            WHEN seq - prev_seq - 1 = excl THEN 'excluded' ELSE 'missing' END AS reason,
+       CASE WHEN seq = prev_seq THEN seq ELSE prev_seq + 1 END AS seq_from,
+       CASE WHEN seq = prev_seq THEN seq ELSE seq - 1 END AS seq_to,
+       CASE WHEN seq <= prev_seq THEN 0 ELSE seq - prev_seq - 1 - excl END AS polls,
        excl AS excluded_polls,
        prev_ts AS after_ts, ts AS before_ts, NULL::timestamptz AS recorded_at
 FROM j

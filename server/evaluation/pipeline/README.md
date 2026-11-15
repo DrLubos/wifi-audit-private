@@ -69,7 +69,11 @@ Two independent sources, so they can be cross-checked:
 - `seq_jump`: `polls.seq` is the buffer's `polls.id`, consecutive on the
   sensor. A jump between consecutive stored polls (ordered by `ts`) is
   `seq - prev - 1` polls that never arrived. A seq going down is a new
-  buffer (`buffer_change`), not a loss.
+  buffer (`buffer_change`), not a loss. The same seq twice in a row is
+  `seq_reused` (0 polls): a power cut dropped the buffer's newest committed
+  poll after it was uploaded and the next boot reused its row id (seq
+  150443, 2026-11-12 / 11-13; the collector syncs every commit since
+  2026-11-14, so it cannot happen again).
 - `recorded`: `sensor_seq_gaps`, written by the ingest. `lost` means pruned
   on the sensor before upload, or a gap the server found. `unverified` means
   a boot that ended without a clock anchor; those polls are never uploaded
