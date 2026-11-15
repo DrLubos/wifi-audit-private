@@ -27,6 +27,7 @@ filter is applied on read. Figures published before 2026-09-27 include them
 | `rssi_stability.py` | RSSI baseline statistics across all APs (per-AP std dev distribution, day-to-day drift, out-of-baseline rate per threshold) |
 | `inventory_changes.py` | Characterisation of AP inventory churn (baseline vs later, transient vs sustained, impostor candidates for protected SSIDs) |
 | `clock_validation.py` | Clock-validation runs (`docs/clock-validation.md`): error of the live upload's timestamp correction against a truth file, per anchor and per poll; `--unverified`, `--compare-anchors`. Uses the uploader's own `batch`/`timeline` |
+| `extract_poll_rows.py` | The AP observation rows of given polls as JSON, for the server's `ops/merge_poll_rows.sh` (rows of a stored poll that the uploader cannot send again; no client row is written) |
 | `clock_truth.py` | Runs on the Mac during a clock-validation run: the ground-truth samples (Pi CLOCK_MONOTONIC vs the Mac's NTP time over one ssh session). Not installed |
 | `probe_study/` | Probe-request feasibility study tools: live capture from Kismet's stream to tmpfs, fingerprint/linkage analysis, hop-dwell measurement. Not installed; run from the repo clone. See `probe_study/README.md` |
 
