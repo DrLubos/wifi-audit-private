@@ -9,7 +9,8 @@ deployed 2026-11-14 22:59:56 UTC** (`docker-compose.yml`: `init: true`,
 fresh backup, the database was down 23:00:02 - 23:00:15 (a clean shutdown),
 no poll was lost; PID 1 is `docker-init` now. Whether the resets are gone
 shows at the next memory-pressure episodes - until then the diagnostic log
-flags stay. The crash's log lines (the container's log went with the old
+flags stay. First 4.5 h (through the nightly backup and a 9-minute baseline
+refresh): no reset, and dockerd killed no health probe (before: several a day). The crash's log lines (the container's log went with the old
 container) are in the developer's exports (`pg-crash-2026-11-14/`).
 
 ## Symptom
