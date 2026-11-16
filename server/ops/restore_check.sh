@@ -14,8 +14,9 @@
 # one; every table below has rows; per time-series table the restored rows
 # against the live rows up to the restored copy's newest poll (a difference
 # is reported, not failed: a late backlog can add older rows after the dump).
-# Needs ~1.5x the database size of free disk and some CPU: run it after a
-# refresher round, not during the build of an image. Exit 0 = PASS.
+# Needs ~1.5x the database size of free disk and the box for ~45 min (the
+# first run, 2026-11-16: the restore of a 142 MB dump took 36 min, load ~9):
+# not during the build of an image or a staged experiment. Exit 0 = PASS.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [[ -f .env ]] || { echo "restore_check: no .env next to docker-compose.yml" >&2; exit 1; }
@@ -38,8 +39,12 @@ if [[ -f $dump.sha256 ]]; then
   echo "sha256: equal to $(basename "$dump").sha256"
 fi
 
-live() { docker compose exec -T db psql -X -At -v ON_ERROR_STOP=1 -U claude_ro -d "$POSTGRES_DB" -c "$1"; }
-scratch() { docker compose exec -T db psql -X -At -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$SCRATCH" -c "$1"; }
+# The counts read up to ~10 M rows; claude_ro's own statement_timeout (120 s)
+# cancelled the observations count on the busy box (2026-11-16), so these
+# sessions set a longer one.
+SLOW='-c statement_timeout=30min'
+live() { docker compose exec -T -e PGOPTIONS="$SLOW" db psql -X -At -v ON_ERROR_STOP=1 -U claude_ro -d "$POSTGRES_DB" -c "$1"; }
+scratch() { docker compose exec -T -e PGOPTIONS="$SLOW" db psql -X -At -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$SCRATCH" -c "$1"; }
 
 cleanup() { sh ops/scratch_db.sh drop >/dev/null 2>&1 || echo "restore_check: drop $SCRATCH by hand: sh ops/scratch_db.sh drop" >&2; }
 trap cleanup EXIT
