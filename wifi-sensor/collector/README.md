@@ -73,7 +73,11 @@ section 6): the resume point never moved, so every restart met it again.
    `observations`, `ap_load_hourly`, `device_freq_hist`, `associations`,
    `probes`, `alerts`.
 5. Once per hour, delete `observations`, `polls` and the `ap_load_hourly`
-   hours older than `RETENTION_DAYS`.
+   hours older than `RETENTION_DAYS`, and the client data not seen for that
+   long (since 2026-11-16, `store.prune_clients()`): client devices - never
+   an AP - with their frequency histograms, `associations`, `client_bssids`,
+   `probes`; at most 10,000 rows a table per pass, so the first run's
+   backlog (~370k devices) goes in slices, one after every poll.
 
 A failed poll (Kismet restarting, datasource error) is recorded in `polls`
 with `ok = 0` and the loop continues; the service is never taken down by it.

@@ -22,7 +22,9 @@ passes the same file as EnvironmentFile). Environment wins over the file.
   POLL_INTERVAL      Seconds between polls.      Default: 30
   POLL_OVERLAP       Seconds re-queried on every poll so nothing is missed
                      between two polls.          Default: 5
-  RETENTION_DAYS     Delete observations older than this.  Default: 14
+  RETENTION_DAYS     Delete observations older than this, and client data
+                     (client devices, associations, client BSSIDs, probes) not
+                     seen for this long (since 2026-11-16). Default: 14
   HTTP_TIMEOUT       Seconds per Kismet request. Default: 15
   KISMET_SITE_CONF   Kismet config with the capture source= line; its explicit
                      channels= list is what polls.ds_hop_ok compares the live hop
@@ -238,12 +240,16 @@ def poll_once(client, store, cfg, since, site=None, clk=None):
 
 def prune_step(store, retention_days, now):
     """One pass of the retention: everything older than the cutoff, but no
-    more than PRUNE_SLICE_S beyond the buffer's oldest synchronised poll.
-    Returns (removed counts, caught up)."""
+    more than PRUNE_SLICE_S beyond the buffer's oldest synchronised poll,
+    and the client data not seen since the cutoff (store.prune_clients(), at
+    most CLIENT_PRUNE_LIMIT rows a table). Returns (removed counts, caught up)."""
     cutoff = int(now) - retention_days * 86400
     oldest = store.oldest_ts()
     step = cutoff if oldest is None else min(cutoff, oldest + PRUNE_SLICE_S)
-    return store.prune(step), step >= cutoff
+    removed = store.prune(step)
+    clients, clients_done = store.prune_clients(cutoff)
+    removed.update(clients)
+    return removed, step >= cutoff and clients_done
 
 
 # --- main loop --------------------------------------------------------------------------

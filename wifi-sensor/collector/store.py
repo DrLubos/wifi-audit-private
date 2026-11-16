@@ -118,6 +118,11 @@ import uuid
 log = logging.getLogger("collector.store")
 
 SCHEMA_VERSION = 9
+# A device with this is an AP for good (= uploader/batch.py AP_EVIDENCE =
+# server schema.sql ap_evidence()): the client retention never deletes it.
+AP_EVIDENCE = "type = 'ap' OR ssid IS NOT NULL OR crypt IS NOT NULL OR adv_channel IS NOT NULL"
+# prune_clients(): rows per table per call (the first run had ~370k devices)
+CLIENT_PRUNE_LIMIT = 10000
 # The WAL file keeps its largest size for good unless it is limited: the fold
 # of nine days of pending AP load (2026-11-11) left 408 MB behind. SQLite
 # truncates it to this size whenever a checkpoint has emptied it.
@@ -893,9 +898,8 @@ class Store:
                 "packets = excluded.packets, updated_ts = excluded.updated_ts",
                 [(key, f, n, rec["ts"]) for f, n in rec["freqs"].items()])
         if ap and ap["clients"]:
-            # TODO(upload): sent resets to 0 whenever last_seen advances, which for
-            # a currently associated pair is every poll - settle this before the
-            # upload step or associations will be re-uploaded on every poll.
+            # (the sent reset here is dead: the uploader keeps its own cursor
+            # and never sends a client table - module docstring)
             self.db.executemany(
                 "INSERT INTO associations(ap_key, client_mac, first_seen, last_seen) "
                 "VALUES (?, ?, ?, ?) ON CONFLICT(ap_key, client_mac) DO UPDATE SET "
@@ -953,10 +957,7 @@ class Store:
         poll after it is older than before_ts. A stale stretch therefore stays
         until the uploader could place it, and no longer than real data.
 
-        TODO(retention): the deduplicated tables (associations, probes, devices)
-        are never pruned, so distinct pairs accumulate for the life of the sensor.
-        Fine for now; a long-running sensor should eventually prune them by
-        last_seen / last_time as well."""
+        The client tables have their own retention: prune_clients()."""
         counts = {}
         self.db.execute("BEGIN")
         try:
@@ -996,6 +997,49 @@ class Store:
             self.db.execute("ROLLBACK")
             raise
         return counts
+
+    def prune_clients(self, before_ts, limit=CLIENT_PRUNE_LIMIT):
+        """Delete client data not seen since before_ts (2026-11-16: until
+        then it was kept for the life of the sensor - 490k client devices
+        since 2026-09-15): associations and client_bssids by last_seen,
+        probes by last_time, and the client devices - never an AP (the
+        uploader's AP evidence: typed ap or an advertised configuration) -
+        by last_seen, with their frequency histograms. Device identity,
+        configuration history and alerts of APs stay. None of it is uploaded
+        (the live ingest takes no client data), so nothing on the server
+        changes.
+
+        At most `limit` rows per table per call, one transaction: the first
+        run after the change has a backlog of months. Returns (counts, done);
+        done = nothing older is left. A stale clock can make a client's times
+        look old (a boot without NTP): such rows go early - client data only,
+        never uploaded."""
+        counts = {}
+        self.db.execute("BEGIN")
+        try:
+            keys = [r[0] for r in self.db.execute(
+                "SELECT key FROM devices WHERE last_seen < ? AND NOT (%s) LIMIT ?" % AP_EVIDENCE,
+                (before_ts, limit))]
+            for i in range(0, len(keys), 500):           # SQLite limits the bound parameters
+                part = keys[i:i + 500]
+                marks = ",".join("?" * len(part))
+                self.db.execute("DELETE FROM device_freq_hist WHERE key IN (%s)" % marks, part)
+                self.db.execute("DELETE FROM devices WHERE key IN (%s)" % marks, part)
+            counts["client_devices"] = len(keys)
+            done = len(keys) < limit
+            for table, pk, col in (("associations", "ap_key, client_mac", "last_seen"),
+                                   ("client_bssids", "client_key, bssid", "last_seen"),
+                                   ("probes", "key, ssid", "last_time")):
+                n = self.db.execute(
+                    "DELETE FROM %s WHERE (%s) IN (SELECT %s FROM %s WHERE %s < ? LIMIT ?)"
+                    % (table, pk, pk, table, col), (before_ts, limit)).rowcount
+                counts[table] = n
+                done = done and n < limit
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+        return counts, done
 
     def oldest_ts(self):
         """ts of the oldest poll taken on a synchronised clock (None: none) -

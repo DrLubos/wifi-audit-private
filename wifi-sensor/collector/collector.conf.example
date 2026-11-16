@@ -20,8 +20,10 @@ DB_PATH=/var/lib/wifi-sensor/buffer.db
 POLL_INTERVAL=30
 POLL_OVERLAP=5
 
-# Observations older than this are deleted once per hour. Device identity,
-# configuration history, probes and alerts are kept.
+# Observations older than this are deleted once per hour, and (since
+# 2026-11-16) the client data not seen for this long: client devices,
+# associations, client BSSIDs, probes. AP identity, configuration history and
+# alerts are kept.
 RETENTION_DAYS=14
 
 # Per-request timeout towards Kismet, seconds.

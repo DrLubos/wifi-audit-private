@@ -488,7 +488,8 @@ def show_growth(db, cfg):
     hdr = ["day"] + [t for t, _ in per_table]
     table(hdr, [[d] + [days[d].get(t, 0) for t, _ in per_table] for d in sorted(days)],
           align_right=set(range(1, len(hdr))))
-    print("  'associations', 'probes' and 'devices' are first-seen dates (never pruned);")
+    print("  'associations', 'probes' and 'devices' are first-seen dates (client rows not seen")
+    print("  for RETENTION_DAYS are pruned since 2026-11-16, AP devices never);")
     print("  the first day includes everything Kismet already knew when the collector started.")
 
     # Growth estimate. Only the retained window is on disk, so bytes/day is
