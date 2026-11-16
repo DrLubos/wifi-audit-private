@@ -1058,10 +1058,11 @@ sudo steps by the developer. Times UTC.
   of the hours 15:00 - 20:00. One round watched, 21:11:10 - 21:11:43:
   `dirty_from` 21:10:36 moved to `taken_from` while `refresh_rollups()` ran,
   an ingest set `dirty_from` 21:11:36 beside it, the finished refresh cleared
-  `taken_from` only. **Not tested live:** a refresher killed in the middle
-  of a refresh - putting back a taken mark ran in the fixture test (the
-  refresher's own three statements, on the server) and in the unit tests
-  only.
+  `taken_from` only. **Not tested live in this rollout:** a refresher killed
+  in the middle of a refresh - putting back a taken mark ran in the fixture
+  test (the refresher's own three statements, on the server) and in the unit
+  tests only. `tests/live/refresher_kill_test.sh --run` is that test (it
+  kills the refresher container once; the developer's to run).
 
 **Open (the developer's):** whether the external IP `34.42.184.97` is static
 (Console -> VPC network -> IP addresses; promote it if ephemeral - the

@@ -94,6 +94,15 @@ tests`),
 `-s seed/tests`, `-s detection/tests`, `-s evaluation/tests`, and
 `-s tests -p 'test_*.py'` (schema/migration files) (from `server/`).
 
+One live test, the developer's to run on the box: `sh
+tests/live/refresher_kill_test.sh --run` kills the refresher container once
+while a refresh holds a dirty mark, starts it again and checks that the mark
+was still in `ingest_state.taken_from`, that the new process put it back and
+refreshed from it (schema 21; PASS / FAIL / nothing tested). Without `--run`
+it only watches one refresh. It writes no data; the refresher is away for a
+few seconds. `tests/test_refresher_kill_test.py` runs the script against a
+fake `docker`.
+
 **Repairs of stored data** (one-off, each a dry run until told to apply; a
 fresh `./backup.sh` first):
 - `tests/sql/check_first_seen.sql` (read-only, `claude_ro`): the stale-clock
