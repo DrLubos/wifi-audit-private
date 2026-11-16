@@ -1037,6 +1037,31 @@ sudo steps by the developer. Times UTC.
   hourly rollups, security periods and events are recomputed by later
   rounds, and for the 29 APs with history in 20:40-21:30 the
   `ap_config_changes` table equals the rules view (0 missing, 0 extra).
+- *Schema 21, the taken mark in the table (2026-11-16; found by reading the
+  code in the review of 2026-11-15, not seen to happen):* backup
+  `wifi_audit-20261116T172503Z.dump` (sha256 075d690b...8bff7, equal on the
+  box and in `~/wifi-audit-backups/`), then `sh ops/migrate_schema21.sh`
+  17:32:06 UTC (log `~/migrate21-20261116T1732Z.log`): the migration
+  committed at 17:32:10, `schema.sql`, 11 fixture tests PASS - and the new
+  `refresher_marks_test.sql` stopped the script: its scratch copy of
+  `ingest_state` had no primary key (a defect of the test, fixed in
+  `53eb6fb`); it and the last one, `security_level_test.sql`, then PASS run
+  by hand. No scratch rehearsal: two nullable columns on a table of one
+  row, against a restore that loads the box for ~40 minutes. The schema-20
+  refresher ran on schema 21 until the swap (0 failed steps). Swap: refresher
+  stopped 17:53:03, `docker compose build api`, `up -d` 17:53:35 - 17:54:00
+  (api, refresher and frontend containers recreated), refresher start
+  17:54:04, first round 57.5 s. Checked at 21:09: 534 `refresh_runs` rows
+  since the swap, 0 failed; 460 polls since 17:20, 0 failed, widest spacing
+  30 s, no seq jump, worst upload delay 16 s; 392 batches answered 200 and
+  none otherwise; `ap_rssi_hourly` n_obs equals the observation rows for each
+  of the hours 15:00 - 20:00. One round watched, 21:11:10 - 21:11:43:
+  `dirty_from` 21:10:36 moved to `taken_from` while `refresh_rollups()` ran,
+  an ingest set `dirty_from` 21:11:36 beside it, the finished refresh cleared
+  `taken_from` only. **Not tested live:** a refresher killed in the middle
+  of a refresh - putting back a taken mark ran in the fixture test (the
+  refresher's own three statements, on the server) and in the unit tests
+  only.
 
 **Open (the developer's):** whether the external IP `34.42.184.97` is static
 (Console -> VPC network -> IP addresses; promote it if ephemeral - the
