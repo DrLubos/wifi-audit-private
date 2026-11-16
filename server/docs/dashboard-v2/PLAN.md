@@ -484,7 +484,9 @@ runs a few seconds. Measured again in phase 2 (`\timing` in the migration log).
 **Schema 8** (`ops/migrate_schema8.sh` + `.sql`): check version 7, create
 `ap_load_hourly` + index, functions, `schema_meta` 8, fixture tests
 (`ap_channel_at_test.sql`, `ap_load_test.sql`). No lock on existing tables,
-seconds. Rollback (`ops/rollback_schema8.sql`): `DROP TABLE ap_load_hourly`,
+seconds. Rollback (`ops/rollback_schema8.sql`; removed 2026-11-16 with the
+rollbacks of schemas 9-13 - each works only while the database is at its
+schema; in the git history): `DROP TABLE ap_load_hourly`,
 drop the two functions, version 7, and check out the previous importer
 (the v7 importer needs the table). The backfill is re-loadable from the kept
 files; v7 buffer rows can be re-imported for 14 days.
@@ -514,7 +516,8 @@ developer before it runs). Old api routers (`/api/overview`, `/api/detections`)
 change from `acked` to `status` in the same commit and keep their response
 field names, so the old frontend keeps working.
 
-Rollback (`ops/rollback_schema9.sql`, one transaction): refuse unless version
+Rollback (`ops/rollback_schema9.sql`, removed 2026-11-16 as above; one
+transaction): refuse unless version
 9; delete `detections` rows with `kind <> 'detection'`; re-add `acked`
 (`status <> 'open'`), rename back, restore the old indexes; drop the new
 columns, tables, views and functions; version 8; then apply `schema.sql` of

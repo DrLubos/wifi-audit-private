@@ -145,7 +145,7 @@ Conventions for the stack:
     device_key, ts) INCLUDE (rssi, rssi_floor)** plus a **BRIN on ts** (rows are
     written in ts order); ts stays in the key, so TimescaleDB stays possible.
     The pre-migration table `observations_v5` is dropped; the 2026-10-03 dump
-    in `backups/keep/` is the only copy of some pre-v6 data. Read-only check of the migration: `tests/sql/check_schema7.sql`.
+    in `backups/keep/` is the only copy of some pre-v6 data.
   - **AP queries must stay index-only scans** on the primary key
     `observations_pkey` (INCLUDE rssi, rssi_floor): a column outside the index
     makes every AP page read ~30k heap pages (7-9 s cold, measured 2026-09-28).

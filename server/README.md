@@ -92,9 +92,7 @@ Unit tests without a database: `python3 -m unittest discover -s api/tests`
 --no-deps -v "$PWD/api/tests:/app/tests:ro" api python -m unittest discover -s
 tests`),
 `-s seed/tests`, `-s detection/tests`, `-s evaluation/tests`, and
-`-s tests -p 'test_*.py'` (schema/migration files) (from `server/`). Read-only
-check of the schema-7 migration on the real data: `tests/sql/check_schema7.sql`
-(also as `claude_ro`).
+`-s tests -p 'test_*.py'` (schema/migration files) (from `server/`).
 
 **Repairs of stored data** (one-off, each a dry run until told to apply; a
 fresh `./backup.sh` first):

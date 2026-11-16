@@ -237,7 +237,9 @@ build 3 min 24 s, foreign key 12 s, BRIN 7 s; peak need estimated 1.5 GB of
 and both SQL fixture tests (PASS).
 
 **Same data, same answers.**
-- `tests/sql/check_schema7.sql` (read-only): all 30,605 stored AP-hours of
+- `tests/sql/check_schema7.sql` (read-only; removed 2026-11-16 - it reads
+  `observations_v5`, dropped since - the file is in the git history): all
+  30,605 stored AP-hours of
   `ap_rssi_hourly` - computed from the old table - are identical when
   recomputed from the new one (0 only-stored, 0 only-recomputed); 2,492,372
   rows, all APs, equal to `sensor_hourly` and `ap_summary` and per AP; all

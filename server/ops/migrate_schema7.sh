@@ -13,7 +13,8 @@
 #      index-only scans need
 #   5. refresh_rollups(sensor, now()) per sensor: rebuilds ap_summary (band,
 #      cur_*) and the latest hour; the hourly tables keep their rows (the AP
-#      rows are unchanged - tests/sql/check_schema7.sql proves it read-only)
+#      rows are unchanged - tests/sql/check_schema7.sql proved it read-only
+#      on 2026-10-03; the check read observations_v5 and went with it)
 #   6. the SQL fixture tests (scratch schema, rolled back)
 # Steps 3-6 run only after step 2 committed; each is safe to re-run.
 set -eu
