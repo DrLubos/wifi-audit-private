@@ -245,6 +245,14 @@ class Heartbeat(unittest.TestCase):
         self.assertEqual(hb["adapter"], {"usb_id": "0bda:c811", "mac": "00:11:22:33:44:55",
                                          "driver": "rtw88_8821cu", "chipset": "RTL8821CU", "interface": "wlan1"})
 
+    def test_kismet_version(self):
+        self.assertEqual(v.heartbeat({"sensor_ts": NOW, "kismet_version": "2025-09-R1"})["kismet_version"],
+                         "2025-09-R1")
+        self.assertIsNone(v.heartbeat({"sensor_ts": NOW})["kismet_version"])        # uploader <= 1.4
+        for bad in (2025, "x" * 201, "a\x00b"):
+            with self.assertRaises(v.Invalid):
+                v.heartbeat({"sensor_ts": NOW, "kismet_version": bad})
+
     def test_adapter_absent_and_invalid(self):
         self.assertIsNone(v.heartbeat({"sensor_ts": NOW, "adapter": None})["adapter"])
         for bad in ({"usb_id": "0BDA:C811"}, {"mac": "nope"}):

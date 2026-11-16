@@ -120,6 +120,17 @@ class Heartbeat(unittest.TestCase):
         self.assertEqual(hb.adapter_action(rep, {"usb_id": None, "mac": None}), "none")
         self.assertEqual(hb.adapter_action(rep, dict(rep, interface="wlan2")), "none")   # display only
 
+    def test_kismet_change(self):
+        prev = {"kismet_version": "2025-09-R1"}
+        self.assertEqual(hb.kismet_change(prev, "2025-09-R1"), ("2025-09-R1", None))
+        self.assertEqual(hb.kismet_change(prev, "2026-03-R1"), ("2026-03-R1", ("2025-09-R1", "2026-03-R1")))
+        self.assertEqual(hb.kismet_change({}, "2025-09-R1"), ("2025-09-R1", None))     # first report: no boundary
+        self.assertEqual(hb.kismet_change(None, "2025-09-R1"), ("2025-09-R1", None))
+        # an uploader before 1.5 reports none: the last known one is kept, so a
+        # later report is compared with it, not taken for a first one
+        self.assertEqual(hb.kismet_change(prev, None), ("2025-09-R1", None))
+        self.assertEqual(hb.kismet_change({}, None), (None, None))
+
     def test_retention_risk(self):
         day = 86400
         base = {"retention_days": 14, "backlog_polls": 10}
@@ -153,6 +164,17 @@ class Schedule(unittest.TestCase):
         ran = datetime(2026, 10, 17, 1, 40, tzinfo=timezone.utc)
         self.assertEqual(rs.baseline_due(late, tz, rs.local_day(ran, tz)), (False, "2026-10-17"))
         self.assertIsNone(rs.local_day(None, tz))
+
+    def test_detectors_due_once_a_night_inside_the_window(self):
+        tz = "Europe/Bratislava"                              # November: CET, 04:00 local = 03:00 UTC
+        at = lambda h, m: datetime(2026, 11, 17, h, m, tzinfo=timezone.utc)
+        self.assertEqual(rs.detectors_due(at(2, 59), tz, None), (False, "2026-11-17"))
+        self.assertEqual(rs.detectors_due(at(3, 0), tz, None), (True, "2026-11-17"))
+        self.assertEqual(rs.detectors_due(at(3, 0), tz, "2026-11-17"), (False, "2026-11-17"))
+        self.assertEqual(rs.detectors_due(at(4, 59), tz, "2026-11-16"), (True, "2026-11-17"))
+        # a refresher started later that day does not run them again
+        self.assertEqual(rs.detectors_due(at(5, 0), tz, None), (False, "2026-11-17"))
+        self.assertEqual(rs.detectors_due(at(13, 0), tz, None), (False, "2026-11-17"))
 
 
 if __name__ == "__main__":

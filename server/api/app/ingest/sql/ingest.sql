@@ -152,6 +152,14 @@ INSERT INTO sensor_annotations (sensor_id, starts_at, kind, boundary, label, ref
 VALUES (%(sensor_id)s, %(at)s, 'hardware_change', true, %(label)s, 'reported by the sensor')
 ON CONFLICT DO NOTHING
 
+-- name: kismet_boundary
+-- A change of the installed Kismet release (uploader 1.5 reports it) changes
+-- how the data is captured: a dated boundary like a configuration change
+-- (the version is pinned on the sensor: wifi-sensor/kismet/README.md).
+INSERT INTO sensor_annotations (sensor_id, starts_at, kind, boundary, label, ref)
+VALUES (%(sensor_id)s, %(at)s, 'change', true, %(label)s, 'reported by the sensor')
+ON CONFLICT DO NOTHING
+
 -- name: audit
 INSERT INTO audit_log (account_id, action, target, old, new)
 VALUES (%(account_id)s, %(action)s, %(target)s, %(old)s, %(new)s)

@@ -1,6 +1,6 @@
 import { test, eq, done } from "../../testing/tiny.js";
 import {
-  adapterText, apsText, bufferText, configText, coverageColumns, coverageText, crashText, dayNotes, durText, footText, headText,
+  adapterText, apsText, softwareText, bufferText, configText, coverageColumns, coverageText, crashText, dayNotes, durText, footText, headText,
   hopBadge, lastPollText, legendItems, liveText, localDate, outageRows, restartText, sinceText, stateNote, uploadText,
 } from "./sensors.js";
 import { sensorState } from "../../app/status.js";
@@ -68,6 +68,10 @@ test("the card", () => {
   eq(adapterText({ name: "RTL8821CU USB adapter", usb_id: null }, null, TZ),
      "RTL8821CU USB adapter · VID:PID not reported yet · no hardware change recorded");
   eq(adapterText(null, null, TZ), "not recorded");
+  eq(softwareText({ kismet: "2025-09-R1", uploader: "1.5" }), "Kismet 2025-09-R1 · uploader 1.5");
+  eq(softwareText({ kismet: null, uploader: "1.4" }), "Kismet not reported yet · uploader 1.4");
+  eq(softwareText({ kismet: null, uploader: null }), "not reported");
+  eq(softwareText(undefined), "not reported");
   eq(stateNote(FRI, { tone: "neu" }, TZ).text.slice(0, 44), "The data ends at the last import (11 Oct 22:");
   eq(stateNote({ ...FRI, outage_since: "2026-10-06T19:33:15Z" }, { offline: true }, TZ).text.slice(0, 40),
      "Not collecting since 6 Oct 21:33. Check ");

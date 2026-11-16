@@ -55,6 +55,8 @@ SELECT se.id, se.name, se.location, se.hardware,
                                     WHERE k.sensor_id = se.id AND k.confirmed_at IS NOT NULL), 0)
         ORDER BY c.version DESC LIMIT 1) AS pending,
        (st.heartbeat #>> '{config_state,accepting}')::boolean AS config_accepting,
+       -- the software the sensor reports (uploader 1.5: the installed Kismet release)
+       st.heartbeat ->> 'kismet_version' AS kismet_version, st.heartbeat ->> 'uploader_version' AS uploader_version,
        -- discard mode (schema 20): the window that is on now and what it discarded so far
        (SELECT json_build_object('started_at', t.started_at, 'until', t.until, 'note', t.note, 'polls', t.polls,
                                  'batches', t.batches, 'last_at', t.last_at)

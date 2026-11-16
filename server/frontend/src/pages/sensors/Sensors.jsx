@@ -20,7 +20,7 @@ import { useNow } from "../../hooks/useNow.js";
 import { fmtDateTime } from "../../format.js";
 import CoverageChart from "./CoverageChart.jsx";
 import {
-  adapterText, apsText, bufferText, configText, coverageColumns, coverageText, coverageTitle, crashText, footText,
+  adapterText, apsText, softwareText, bufferText, configText, coverageColumns, coverageText, coverageTitle, crashText, footText,
   headText, hopBadge, lastPollText, legendItems, liveText, localDate, outageRows, PLANS, restartText, sinceText, stateNote,
   uploadText,
 } from "./sensors.js";
@@ -71,6 +71,8 @@ function SensorCard({ s, account, now, n }) {
     ["Hardware", s.hardware ?? "–"],
     ["Capture adapter", adapterText(s.adapter, s.last_hardware_change, tz),
      "read-only; a hardware change entered in Settings is a data boundary: RSSI baselines start again from it"],
+    ["Software", softwareText(s.software),
+     "reported by the sensor; the Kismet release is pinned there, a change of it is a data boundary"],
     ["Last poll", lastPollText(s, now, tz)],
     ["Last upload", uploadText(s.last_upload, now, tz)],
     ...(s.contact ? [["Live upload", liveText(s, now),

@@ -31,7 +31,7 @@ export default function HardwareCard({ d, tz }) {
       <div className="set-head">
         <h2 id="hw-h">Capture hardware</h2>
         <span className="muted small">
-          The adapter is read-only: the sensor will report it itself in the live-upload phase. The antenna is not
+          The adapter is read-only: the sensor reports it itself (live upload, since 2026-10-17). The antenna is not
           recorded; when it is swapped - or anything else shifts every RSSI - add a hardware change. It is a data
           boundary: RSSI baselines start again from it (evil twin (b) waits until the new hardware has 200 readings on
           2 days) and measurements before and after are evaluated apart.

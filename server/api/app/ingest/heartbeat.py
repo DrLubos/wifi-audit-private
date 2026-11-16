@@ -1,6 +1,6 @@
 """Heartbeat helpers (docs/live-upload.md 4.5, 7, 8.4): the server's view of
-the sensor's clock, the history cadence, the adapter check and the
-retention warning. Standard library only (tests/test_ingest_logic.py).
+the sensor's clock, the history cadence, the adapter check, the
+Kismet version check and the retention warning. Standard library only (tests/test_ingest_logic.py).
 """
 
 HISTORY_GAP_S = 55            # sensor_heartbeats: at most one row a minute (N5)
@@ -45,6 +45,22 @@ def adapter_action(stored, reported):
         elif str(old).lower() != str(new).lower():
             return "change"
     return "fill" if fill else "none"
+
+
+def kismet_change(prev, reported):
+    """(keep, change) for the Kismet version a heartbeat reports (uploader
+    1.5: the installed release, wifi-sensor/kismet/README.md). keep: the
+    version to store with the heartbeat - the reported one, else the last
+    known one (an uploader before 1.5 reports none, and must not make the
+    next report look like a first one). change: (old, new) when a known
+    version was replaced by another - a dated dataset boundary; None when
+    nothing changed or the version is reported for the first time."""
+    old = (prev or {}).get("kismet_version")
+    if not reported:
+        return old, None
+    if old and old != reported:
+        return reported, (old, reported)
+    return reported, None
 
 
 def retention_risk(hb, now, server_newest_ts=None):

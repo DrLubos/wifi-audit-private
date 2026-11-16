@@ -363,7 +363,8 @@ _HB = {"sensor_ts": "num", "mono": "num", "boot_id": "uuid", "uptime_s": "num", 
        "last_poll_ts": "num", "last_poll_ok": "bool", "buffer_bytes": "int", "buffer_version": "text",
        "buffer_id": "uuid", "retention_days": "int", "buffer_oldest_ts": "num", "backlog_polls": "int",
        "backlog_oldest_ts": "num", "held_polls": "int", "unverified_polls": "int", "disk_free_bytes": "int",
-       "uploader_version": "text", "last_result": "text"}
+       "uploader_version": "text", "last_result": "text",
+       "kismet_version": "text"}                  # uploader 1.5: the installed Kismet release
 _ADAPTER = ("usb_id", "mac", "driver", "chipset", "interface")
 
 

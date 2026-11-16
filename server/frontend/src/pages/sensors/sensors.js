@@ -204,6 +204,13 @@ export function adapterText(a, lastChange, tz) {
   return `${a.name} · ${id} · ${lastChange ? `last hardware change ${fmtDateTime(lastChange, tz)}` : "no hardware change recorded"}`;
 }
 
+// what the sensor runs (heartbeat, uploader 1.5): "Kismet 2025-09-R1 · uploader 1.5"
+export function softwareText(sw) {
+  if (!sw || (!sw.kismet && !sw.uploader)) return "not reported";
+  return [sw.kismet ? `Kismet ${sw.kismet}` : "Kismet not reported yet",
+          sw.uploader ? `uploader ${sw.uploader}` : null].filter(Boolean).join(" · ");
+}
+
 // "since 15 Sep 2026"
 export function sinceText(s, tz) {
   if (!s.first_poll) return null;

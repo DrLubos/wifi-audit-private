@@ -157,11 +157,13 @@ def _close_events(conn, tok, kinds):
 
 # --- the heartbeat's effects (both routes) ---------------------------------------------------------
 
-def _heartbeat(conn, tok, hb, now):
-    """History row (at most one a minute), the adapter check, the retention event."""
+def _heartbeat(conn, tok, hb, now, prev=None):
+    """History row (at most one a minute), the adapter check, the Kismet
+    version check (prev: the stored heartbeat), the retention event."""
     if hb is None:
         return
     sid = tok["sensor_id"]
+    _kismet(conn, tok, hb, prev, now)
     last = _run(conn, "heartbeat_last", sensor_id=sid).fetchone()["last"]
     if hbmod.history_due(last, now):
         _run(conn, "heartbeat_insert", sensor_id=sid, received_at=now, sensor_ts=_dt(hb["sensor_ts"]),
@@ -181,6 +183,22 @@ def _heartbeat(conn, tok, hb, now):
                     retention_days=hb["retention_days"])
     else:
         _close_events(conn, tok, ("upload_retention_risk",))
+
+
+def _kismet(conn, tok, hb, prev, now):
+    """The installed Kismet version (uploader 1.5): kept with the heartbeat
+    (the last known one when an older uploader reports none); a change is a
+    dated 'change' boundary of the configuration history, audited."""
+    keep, change = hbmod.kismet_change(prev, hb.get("kismet_version"))
+    hb["kismet_version"] = keep
+    if not change:
+        return
+    label = "Kismet %s -> %s" % change
+    _run(conn, "kismet_boundary", sensor_id=tok["sensor_id"], at=now, label=label)
+    _run(conn, "audit", account_id=tok["account_id"], action="sensor.kismet", target="sensor:%s" % tok["sensor"],
+         old=Jsonb({"kismet_version": change[0]}), new=Jsonb({"kismet_version": change[1]}))
+    _run(conn, "write_version", account_id=tok["account_id"])
+    log.warning("ingest: sensor %s - %s (a dataset boundary)", tok["sensor"], label)
 
 
 def _adapter(conn, tok, reported, now):
@@ -370,7 +388,7 @@ def _merge(conn, tok, b, nbytes, now, t0):
         _gaps(conn, tok, b)
         new = stalls.after_accept(st)
         _close_events(conn, tok, stalls.CLOSE_ON_ACCEPT)
-        _heartbeat(conn, tok, b["heartbeat"], now)
+        _heartbeat(conn, tok, b["heartbeat"], now, (st or {}).get("heartbeat"))
         _status(conn, tok, new, now, hb=b["heartbeat"], batch=b)
         delivered = _config_out(conn, tok, b["heartbeat"])
     polls = len(b["tables"].get("polls", []))
@@ -395,7 +413,7 @@ def _discard(conn, tok, b, nbytes, now, t0, st, win):
     _gaps(conn, tok, dict(b, gaps=discard.stored_gaps(b)))
     new = stalls.after_accept(st)
     _close_events(conn, tok, stalls.CLOSE_ON_ACCEPT)
-    _heartbeat(conn, tok, b["heartbeat"], now)
+    _heartbeat(conn, tok, b["heartbeat"], now, (st or {}).get("heartbeat"))
     _status(conn, tok, new, now, hb=b["heartbeat"], batch=b)
     delivered = _config_out(conn, tok, b["heartbeat"])
     ms = int((time.monotonic() - t0) * 1000)
@@ -477,7 +495,7 @@ def _heartbeat_route(raw, encoding, authorization, client):
             st = _run(conn, "status_get", sensor_id=tok["sensor_id"]).fetchone()
             new = stalls.after_auth_ok(st)
             _close_events(conn, tok, ("upload_unauthorized",))
-            _heartbeat(conn, tok, hb, now)
+            _heartbeat(conn, tok, hb, now, (st or {}).get("heartbeat"))
             _status(conn, tok, new, now, hb=hb)
             resume = _run(conn, "resume", sensor_id=tok["sensor_id"]).fetchone()
             delivered = _config_out(conn, tok, hb)

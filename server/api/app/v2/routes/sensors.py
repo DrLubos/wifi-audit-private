@@ -106,6 +106,8 @@ def sensors(request: Request, acc=Depends(deps.get_account)):
             "discard": _discard(r["discard"]),
             # the adapter (read-only, schema 13) and the last hand-entered hardware change
             "adapter": r["adapter"], "last_hardware_change": iso(r["last_hardware_change"]),
+            # what the sensor runs (heartbeat; null before live upload / uploader 1.5)
+            "software": {"kismet": r["kismet_version"], "uploader": r["uploader_version"]},
             # live upload (schema 14; null for a sensor without it)
             "contact": None if contact is None else {
                 "last_contact_at": iso(r["last_contact_at"]), "last_batch_at": iso(r["last_batch_at"]),
