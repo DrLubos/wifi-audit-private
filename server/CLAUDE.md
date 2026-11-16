@@ -66,7 +66,10 @@ Conventions for the stack:
   `ap_config_changes_v`), the `refresher` compose service (rollups once a
   minute from the dirty mark, contact periods, nightly baselines; since
   schema 16, 2026-10-18, one `refresh_runs` row per step - the
-  refresh-duration series of `evaluation/pipeline/`), ingest tokens via
+  refresh-duration series of `evaluation/pipeline/`; since schema 21 the
+  mark a refresh has taken waits in `ingest_state.taken_from` until that
+  refresh is done, so a refresher that dies with it loses no window),
+  ingest tokens via
   `ops/sensor_token.sh` only. The box serves HTTPS as
   `34-42-184-97.sslip.io` (Let's Encrypt, HSTS) - the uploader depends on
   that name, so the external IP must not change.

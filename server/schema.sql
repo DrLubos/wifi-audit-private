@@ -112,7 +112,12 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 --    (refresh_sensor_periods()), never loss (discarded_seqs()), never stored
 --    later (ingest_merge() step 0); discard_start/stop/active/close_expired(),
 --    sensor_excluded(), ingest_resume() (ops/migrate_schema20.sh)
-INSERT INTO schema_meta (key, value) VALUES ('schema_version', '20')
+-- 21: ingest_state.taken_from / taken_since - the dirty mark a refresh has
+--    taken is kept in the table, not in the refresher's memory, so a refresher
+--    that dies in the middle of a refresh (the stack restarted, the box
+--    rebooted) no longer loses the window it was refreshing
+--    (ops/migrate_schema21.sh)
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '21')
   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 -- --- accounts and sensors ------------------------------------------------------------
@@ -788,12 +793,18 @@ CREATE TABLE IF NOT EXISTS sensor_heartbeats (
 
 -- What the refresher still has to do: the earliest ts an ingest inserted since
 -- the last refresh_rollups() (NULL = nothing), since when it is waiting, and
--- the last time an ingest moved it (the refresher clears it only if unchanged).
+-- the last time an ingest moved it.
 CREATE TABLE IF NOT EXISTS ingest_state (
   sensor_id   integer PRIMARY KEY REFERENCES sensors(id),
   dirty_from  timestamptz,
   dirty_since timestamptz,
-  dirty_at    timestamptz);
+  dirty_at    timestamptz,
+  -- schema 21: the mark a refresh has taken and not finished yet - the
+  -- refresher moves dirty_from / dirty_since here, refreshes and clears them;
+  -- one left behind (the refresh failed, or the refresher died with it) goes
+  -- back into dirty_from at the start of the next round
+  taken_from  timestamptz,
+  taken_since timestamptz);
 
 -- One row per boot whose polls the uploader corrected (docs/live-upload.md 8.3):
 -- the true epoch of the boot (wall - CLOCK_MONOTONIC at the anchor), the stale

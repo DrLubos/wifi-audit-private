@@ -44,6 +44,8 @@ MIGRATION19 = open(os.path.join(HERE, "..", "ops", "migrate_schema19.sql"), enco
 ROLLBACK19 = open(os.path.join(HERE, "..", "ops", "rollback_schema19.sql"), encoding="utf-8").read()
 MIGRATION20 = open(os.path.join(HERE, "..", "ops", "migrate_schema20.sql"), encoding="utf-8").read()
 ROLLBACK20 = open(os.path.join(HERE, "..", "ops", "rollback_schema20.sql"), encoding="utf-8").read()
+MIGRATION21 = open(os.path.join(HERE, "..", "ops", "migrate_schema21.sql"), encoding="utf-8").read()
+ROLLBACK21 = open(os.path.join(HERE, "..", "ops", "rollback_schema21.sql"), encoding="utf-8").read()
 SCHEMA20_TABLES = ("sensor_discard_windows", "sensor_discarded_batches")
 SCHEMA20_FUNCTIONS = ("discard_active", "discard_intervals", "sensor_excluded", "discarded_seqs", "ingest_resume",
                       "discard_close", "discard_close_expired", "discard_start", "discard_stop")
@@ -126,11 +128,13 @@ class SchemaFiles(unittest.TestCase):
     def test_version(self):
         def version(sql):
             return re.search(r"VALUES \('schema_version', '(\d+)'\)", sql).group(1)
-        self.assertEqual((version(SCHEMA), version(MIGRATION20), version(MIGRATION19), version(MIGRATION18),
+        self.assertEqual((version(SCHEMA), version(MIGRATION21), version(MIGRATION20), version(MIGRATION19),
+                          version(MIGRATION18),
                           version(MIGRATION17), version(MIGRATION16), version(MIGRATION15), version(MIGRATION14),
                           version(MIGRATION13), version(MIGRATION12), version(MIGRATION11), version(MIGRATION10),
                           version(MIGRATION9), version(MIGRATION8), version(MIGRATION)),
-                         ("20", "20", "19", "18", "17", "16", "15", "14", "13", "12", "11", "10", "9", "8", "7"))
+                         ("21", "21", "20", "19", "18", "17", "16", "15", "14", "13", "12", "11", "10", "9", "8", "7"))
+        self.assertEqual(version(ROLLBACK21), "20")
         self.assertEqual(version(ROLLBACK20), "19")
         self.assertEqual(version(ROLLBACK14), "13")
         self.assertEqual(version(ROLLBACK15), "14")
@@ -213,8 +217,8 @@ class SchemaFiles(unittest.TestCase):
     def test_schema14_tables_and_functions_equal_schema(self):
         for t in SCHEMA14_TABLES:
             self.assertIsNotNone(table_body(SCHEMA, t), t)
-            # the columns schema 18 added by ALTER (the last comment block of the body)
-            body = re.sub(r",\n  -- schema 18:.*\Z", "", table_body(SCHEMA, t), flags=re.S)
+            # the columns schemas 18 and 21 added by ALTER (the last comment block of the body)
+            body = re.sub(r",\n  -- schema (?:18|21):.*\Z", "", table_body(SCHEMA, t), flags=re.S)
             self.assertEqual(table_body(MIGRATION14, t), body, t)
             self.assertIn("DROP TABLE %s;" % t, ROLLBACK14, t)
         for name in SCHEMA14_FUNCTIONS:
@@ -420,3 +424,44 @@ class Schema20(unittest.TestCase):
         for t in ("events_test", "refresh_rollups_test", "ingest_merge_test", "discard_test"):
             src = open(os.path.join(HERE, "sql", t + ".sql"), encoding="utf-8").read()
             self.assertIn("'sensor_discard_windows', 'sensor_discarded_batches'", src, t)
+
+
+class Schema21(unittest.TestCase):
+    """The dirty mark a refresh has taken is kept in ingest_state: the
+    migration adds schema.sql's two columns, the rollback puts a taken mark
+    back before it drops them, and the refresher uses them."""
+
+    COLS = ("taken_from", "taken_since")
+
+    def test_columns_in_schema_migration_and_rollback(self):
+        body = re.sub(r"--[^\n]*", "", table_body(SCHEMA, "ingest_state"))
+        for c in self.COLS:
+            self.assertRegex(body, r"\n\s+%s\s+timestamptz" % c, c)
+            self.assertRegex(MIGRATION21, r"ADD COLUMN %s timestamptz\b" % c, c)
+            self.assertRegex(ROLLBACK21, r"DROP COLUMN %s\b" % c, c)
+        # nothing but the two columns and the version: no table, function or data statement
+        # (the version row's "ON CONFLICT ... DO UPDATE" aside)
+        code = re.sub(r"--[^\n]*", "", MIGRATION21).replace("DO UPDATE SET value", "")
+        self.assertEqual(re.findall(r"\b(CREATE|DROP|UPDATE|DELETE|ALTER TABLE \w+)\b", code), ["ALTER TABLE ingest_state"])
+
+    def test_rollback_keeps_a_taken_mark(self):
+        put_back = ROLLBACK21.index("dirty_from = least(dirty_from, taken_from)")
+        self.assertLess(put_back, ROLLBACK21.index("DROP COLUMN taken_from"))
+        self.assertIn("dirty_since = least(dirty_since, taken_since)", ROLLBACK21)
+
+    def test_the_fixture_test_runs_the_refreshers_own_statements(self):
+        import ast
+        src = open(os.path.join(HERE, "..", "api", "app", "refresher.py"), encoding="utf-8").read()
+        consts = {n.targets[0].id: ast.literal_eval(n.value) for n in ast.parse(src).body
+                  if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "").startswith("SQL_")}
+        self.assertEqual(sorted(consts), ["SQL_MARK_DONE", "SQL_RESTORE_TAKEN", "SQL_TAKE_MARK"])
+        fixture = open(os.path.join(HERE, "sql", "refresher_marks_test.sql"), encoding="utf-8").read()
+        flat = " ".join(re.sub(r"--[^\n]*", "", fixture).split())
+        for name, stmt in consts.items():
+            self.assertIn(" ".join(stmt.replace("%s", "1").split()), flat, name)
+            self.assertEqual(src.count(name), 2, name)          # defined once, executed once
+        self.assertIn("least(i.taken_from, o.dirty_from)", consts["SQL_TAKE_MARK"])
+        self.assertIn("dirty_from = least(dirty_from, taken_from)", consts["SQL_RESTORE_TAKEN"])
+        # every writer of the mark names its columns, so the new ones never shift a value
+        for name, sql in (("schema.sql", SCHEMA), ("migrate_schema20.sql", MIGRATION20)):
+            self.assertIn("INSERT INTO ingest_state AS i (sensor_id, dirty_from, dirty_since, dirty_at)", sql, name)

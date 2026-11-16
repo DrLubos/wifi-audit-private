@@ -1,6 +1,8 @@
 """The refresher's dirty-mark handling (app/refresher.py) against a fake
-connection: a refresh that dies with its connection (Postgres restarting
-after a crash) must not lose the mark it took. Standard library only - psycopg
+connection: a refresh that does not finish - it fails, its connection dies
+(Postgres restarting after a crash) or the refresher itself dies with it -
+must not lose the mark it took: the mark waits in ingest_state.taken_from
+(schema 21) and the next round puts it back. Standard library only - psycopg
 is stubbed."""
 
 import os
@@ -46,11 +48,15 @@ class Result:
 
 
 class FakeConn:
-    """ingest_state as a dict; refresh_rollups() fails (and closes) on demand."""
+    """ingest_state as two dicts (dirty_from, taken_from per sensor);
+    refresh_rollups() fails (and closes) on demand. `sql` keeps the order of
+    the statements on ingest_state and of the refreshes."""
 
-    def __init__(self, marks, fail=False):
+    def __init__(self, marks, fail=False, taken=None):
         self.marks, self.fail, self.closed, self.refreshed, self.runs = dict(marks), fail, False, [], []
+        self.taken = dict(taken or {})
         self.no_table = False
+        self.sql = []
 
     def execute(self, sql, params=(), prepare=None):
         if self.closed:
@@ -58,23 +64,37 @@ class FakeConn:
         if sql.startswith("SELECT i.sensor_id"):
             return Result([{"sensor_id": s, "name": "s%d" % s, "dirty_from": f, "dirty_at": f, "dirty_since": f}
                            for s, f in sorted(self.marks.items()) if f is not None])
-        if sql.startswith("UPDATE ingest_state"):
+        if sql.startswith("UPDATE ingest_state SET dirty_from = least(dirty_from, taken_from)"):
+            self.sql.append("restore")
+            out = []
+            for sid, t in sorted(self.taken.items()):
+                if t is None:
+                    continue
+                cur = self.marks.get(sid)
+                self.marks[sid] = t if cur is None else min(cur, t)
+                self.taken[sid] = None
+                out.append({"sensor_id": sid, "dirty_from": self.marks[sid]})
+            return Result(out)
+        if sql.startswith("UPDATE ingest_state i SET taken_from = least(i.taken_from, o.dirty_from)"):
+            self.sql.append("take")
             f = self.marks.get(params[0])
             if f is None:
                 return Result([])
-            self.marks[params[0]] = None
+            old = self.taken.get(params[0])
+            f = f if old is None else min(old, f)
+            self.marks[params[0]], self.taken[params[0]] = None, f
             return Result([{"dirty_from": f, "dirty_since": f}])
+        if sql.startswith("UPDATE ingest_state SET taken_from = NULL"):
+            self.sql.append("done")
+            self.taken[params[0]] = None
+            return Result([])
         if sql.startswith("SELECT * FROM refresh_rollups"):
+            self.sql.append("refresh")
             if self.fail:
                 self.closed = True
                 raise psycopg.Error("server closed the connection unexpectedly")
             self.refreshed.append(params)
             return Result([{"ap_hours": 1, "sensor_hours": 1}])
-        if sql.startswith("INSERT INTO ingest_state"):
-            sid, f = params[0], params[1]
-            cur = self.marks.get(sid)
-            self.marks[sid] = f if cur is None else min(cur, f)
-            return Result([])
         if "refresh_contact_periods" in sql:
             return Result([{"sensor_id": 1, "gaps": 0}])
         if "discard_close_expired" in sql:          # discard mode's auto-expiry (schema 20)
@@ -90,27 +110,47 @@ class FakeConn:
 
 class DirtyMarks(unittest.TestCase):
     def setUp(self):
-        refresher._carry.clear()
         refresher._recording = True
         self._baselines, refresher.BASELINES = refresher.BASELINES, False
 
     def tearDown(self):
         refresher.BASELINES = self._baselines
-        refresher._carry.clear()
+
+    def test_a_refresh_takes_the_mark_and_gives_it_up_only_when_done(self):
+        conn = FakeConn({1: T1})
+        refresher.round_once(conn, {})
+        self.assertEqual(conn.sql, ["restore", "take", "refresh", "done"])
+        self.assertEqual(conn.refreshed, [(1, T1)])
+        self.assertEqual((conn.marks, conn.taken), ({1: None}, {1: None}))
 
     def test_mark_survives_a_dead_connection(self):
         dead = FakeConn({1: T1}, fail=True)
         with self.assertRaises(psycopg.Error):
             refresher.round_once(dead, {})
-        self.assertEqual(refresher._carry, {1: (T1, T1)})
-        fresh = FakeConn({1: T2})                     # an ingest marked a later window meanwhile
+        self.assertEqual((dead.marks, dead.taken), ({1: None}, {1: T1}))    # in the table, not in memory
+        fresh = FakeConn({1: T2}, taken=dead.taken)   # an ingest marked a later window meanwhile
         refresher.round_once(fresh, {})
-        self.assertEqual(fresh.refreshed, [(1, T1)])  # the earlier, lost window is refreshed
+        self.assertEqual(fresh.refreshed, [(1, T1)])  # the earlier, unfinished window is refreshed
         self.assertEqual([(r["step"], r["ok"]) for r in fresh.runs], [("rollups", True), ("contact_periods", True)])
         self.assertEqual(fresh.runs[0]["refresh_from"], T1)
         self.assertEqual(fresh.runs[0]["sensor_id"], 1)
-        self.assertEqual(refresher._carry, {})
-        self.assertEqual(fresh.marks, {1: None})
+        self.assertEqual((fresh.marks, fresh.taken), ({1: None}, {1: None}))
+
+    def test_mark_survives_a_dead_refresher(self):
+        # the refresher was killed between taking the mark and the end of the
+        # refresh (the stack restarted, the box rebooted) and no ingest came
+        # since: a new process knows nothing, the table does
+        conn = FakeConn({1: None}, taken={1: T1})
+        refresher.round_once(conn, {})
+        self.assertEqual(conn.refreshed, [(1, T1)])
+        self.assertEqual((conn.marks, conn.taken), ({1: None}, {1: None}))
+
+    def test_the_earliest_of_an_unfinished_mark_and_a_new_one_wins(self):
+        for dirty, taken, want in ((T2, T1, T1), (T1, T2, T1)):
+            conn = FakeConn({1: dirty}, taken={1: taken})
+            refresher.round_once(conn, {})
+            self.assertEqual(conn.refreshed, [(1, want)], (dirty, taken))
+            self.assertEqual((conn.marks, conn.taken), ({1: None}, {1: None}))
 
     def test_restore_on_a_live_connection(self):
         conn = FakeConn({1: T1}, fail=True)
@@ -123,13 +163,27 @@ class DirtyMarks(unittest.TestCase):
         conn.execute = fail_but_stay_open
         with self.assertRaises(psycopg.Error):
             refresher.round_once(conn, {})
-        self.assertEqual(conn.marks, {1: T1})
-        self.assertEqual(refresher._carry, {})
+        self.assertEqual((conn.marks, conn.taken), ({1: T1}, {1: None}))    # back at once, not a round later
+
+    def test_a_lost_last_statement_costs_one_more_refresh_not_the_window(self):
+        conn = FakeConn({1: T1})
+
+        def die_at_done(sql, params=(), prepare=None, _orig=conn.execute):
+            if sql.startswith("UPDATE ingest_state SET taken_from = NULL"):
+                conn.closed = True
+                raise psycopg.Error("server closed the connection unexpectedly")
+            return _orig(sql, params, prepare)
+        conn.execute = die_at_done
+        with self.assertRaises(psycopg.Error):
+            refresher.round_once(conn, {})
+        self.assertEqual(conn.taken, {1: T1})
+        again = FakeConn(conn.marks, taken=conn.taken)
+        refresher.round_once(again, {})
+        self.assertEqual(again.refreshed, [(1, T1)])
 
 
 class Recording(unittest.TestCase):
     def setUp(self):
-        refresher._carry.clear()
         refresher._recording = True
         self._baselines, refresher.BASELINES = refresher.BASELINES, False
 

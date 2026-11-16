@@ -333,10 +333,14 @@ Responses: `200 {"batch_seq", "replay", "staged", "inserted", "conflicts",
 ### 6.4 The refresher (D7)
 
 A compose service `refresher` (the api image, `python -m app.refresher`,
-~40 MB): per sensor with `ingest_state.dirty_from` set,
-`refresh_rollups(sid, dirty_from)`, then clear it unless an ingest moved it
-meanwhile; `refresh_contact_periods(sid)` (8.1); nightly 03:30 Europe/
-Bratislava `refresh_ap_baselines(sid, 200, 2)`.
+~40 MB): per sensor with `ingest_state.dirty_from` set, take the mark (one
+statement moves it to `ingest_state.taken_from`), `refresh_rollups(sid,
+dirty_from)`, then clear `taken_from`; an ingest during the refresh sets a
+new mark of its own rows. A mark left in `taken_from` - the refresh failed,
+or the refresher died with it - goes back into `dirty_from` at the start of
+the next round (schema 21, `ops/migrate_schema21.sh`; section 17 has the two
+earlier forms and why they went). Then `refresh_contact_periods(sid)` (8.1);
+nightly 03:30 Europe/Bratislava `refresh_ap_baselines(sid, 200, 2)`.
 
 - **Interval**: `REFRESH_INTERVAL_S` (default 60) with a duty-cycle cap:
   after a run of d seconds the next starts no earlier than
@@ -432,6 +436,7 @@ CREATE TABLE sensor_heartbeats (                  -- history, at most one a minu
 
 CREATE TABLE ingest_state (sensor_id integer PRIMARY KEY REFERENCES sensors(id),
                            dirty_from timestamptz, dirty_since timestamptz, dirty_at timestamptz);
+                           -- + taken_from, taken_since (schema 21): the mark a refresh has taken, 6.4
 
 CREATE TABLE sensor_clock_boots (                 -- one row per corrected boot (thesis: offsets)
   sensor_id integer NOT NULL REFERENCES sensors(id), boot_id uuid NOT NULL,
@@ -1024,7 +1029,11 @@ sudo steps by the developer. Times UTC.
   rode through (502/503, retries, then one batch of 3 polls, 0 gaps), but the
   refresher could not put back the dirty mark it had taken over a dead
   connection: it now keeps it in memory and writes it back first thing in
-  the next round. The window lost at 21:23 (before the fix) was checked:
+  the next round. (Memory dies with the process: a refresher killed in the
+  middle of a refresh - with the stack restarted or the box rebooted, so
+  that Postgres aborts the statement too - still lost the window. Since
+  schema 21 the taken mark is in `ingest_state.taken_from` and survives
+  that as well; 6.4.) The window lost at 21:23 (before the fix) was checked:
   hourly rollups, security periods and events are recomputed by later
   rounds, and for the 29 APs with history in 20:40-21:30 the
   `ap_config_changes` table equals the rules view (0 missing, 0 extra).

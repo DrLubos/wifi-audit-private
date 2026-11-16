@@ -197,8 +197,8 @@ class Conn:
                 raise psycopg.errors.UndefinedFunction("function discard_close_expired() does not exist")
             out, self.expired = self.expired, []
             return Result(out)
-        if sql.startswith("SELECT i.sensor_id"):
-            return Result([])
+        if sql.startswith("SELECT i.sensor_id") or sql.startswith("UPDATE ingest_state SET dirty_from = least("):
+            return Result([])       # nothing dirty, no mark of an unfinished refresh (schema 21)
         if "refresh_contact_periods" in sql:
             return Result([])
         if sql.startswith("INSERT INTO refresh_runs"):
@@ -215,7 +215,6 @@ if not hasattr(psycopg.errors, "UndefinedFunction"):        # another test's stu
 
 class Expiry(unittest.TestCase):
     def setUp(self):
-        refresher._carry.clear()
         refresher._expiry = True
         self._baselines, refresher.BASELINES = refresher.BASELINES, False
 

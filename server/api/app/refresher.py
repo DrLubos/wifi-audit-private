@@ -10,14 +10,18 @@ it inserted; ingest_merge()) instead of refreshing per request. Each round:
    (the ingest stops discarding at `until` by itself; this writes the history
    entry's end, the audit_log row and write_version + 1, so the dashboard's
    banner goes);
-1. per dirty sensor: take the mark and clear it in one statement, then
-   refresh_rollups(sensor, dirty_from); an ingest during the refresh sets a new
-   mark for the next round (only its own new rows), and a failed refresh puts
-   the taken mark back - kept in memory when the connection itself died
-   (Postgres restarting after a crash) and written back first thing in the
-   next round, so a crash never loses the window it was refreshing. (Clearing only "if no ingest moved it meanwhile" never
-   cleared it with a batch every 30 s and rounds longer than that: every
-   round re-refreshed days of hours - found on the first live day.)
+1. per dirty sensor: take the mark - one statement moves it from dirty_from
+   to taken_from (schema 21) - then refresh_rollups(sensor, dirty_from), then
+   clear taken_from; an ingest during the refresh sets a new mark for the next
+   round (only its own new rows). A refresh that did not finish - it failed,
+   its connection died (Postgres restarting after a crash) or this process
+   died with it (the stack restarted, the box rebooted: until schema 21 the
+   taken mark lived in this process's memory only) - leaves its mark in
+   taken_from, and every round first puts such marks back into dirty_from
+   (earliest wins), so the window it was refreshing is never lost. (Clearing
+   only "if no ingest moved it meanwhile" never cleared it with a batch every
+   30 s and rounds longer than that: every round re-refreshed days of hours -
+   found on the first live day.)
 2. refresh_contact_periods() for every sensor that ever uploaded
    ('unreachable' annotations from heartbeat gaps);
 3. the e-mail notifications (app/notify.py: a sensor without contact or
@@ -70,13 +74,27 @@ DETECT_TIMEOUT_S = 1800
 DETECT_DIR = os.environ.get("DETECT_DIR", "/app")       # holds detection/ (the compose mount)
 
 _stop = False
-_carry = {}     # sensor_id -> (dirty_from, dirty_since) taken by a refresh that failed
 _recording = True
 _expiry = True  # discard_close_expired() exists (schema 20)
 
 _notifier = notify.Notifier(None)   # set up in main()
 
 _RUN_COLS = ("refresh_from", "waited_s", "ap_hours", "sensor_hours", "gaps", "baselines", "next_in_s", "error")
+
+# The dirty mark's three statements (schema 21). tests/sql/refresher_marks_test.sql
+# runs these very texts on the server (tests/test_schema_files.py compares them).
+SQL_RESTORE_TAKEN = (
+    "UPDATE ingest_state SET dirty_from = least(dirty_from, taken_from), "
+    "dirty_since = least(dirty_since, taken_since), taken_from = NULL, taken_since = NULL "
+    "WHERE taken_from IS NOT NULL RETURNING sensor_id, dirty_from")
+SQL_TAKE_MARK = (
+    "UPDATE ingest_state i SET taken_from = least(i.taken_from, o.dirty_from), "
+    "taken_since = least(i.taken_since, o.dirty_since), dirty_from = NULL, dirty_since = NULL "
+    "FROM (SELECT sensor_id, dirty_from, dirty_since FROM ingest_state "
+    "WHERE sensor_id = %s AND dirty_from IS NOT NULL FOR UPDATE) o "
+    "WHERE i.sensor_id = o.sensor_id "
+    "RETURNING i.taken_from AS dirty_from, i.taken_since AS dirty_since")
+SQL_MARK_DONE = "UPDATE ingest_state SET taken_from = NULL, taken_since = NULL WHERE sensor_id = %s"
 
 
 def record(conn, step, started_at, duration_s, sensor_id=None, ok=True, **cols):
@@ -96,16 +114,14 @@ def record(conn, step, started_at, duration_s, sensor_id=None, ok=True, **cols):
         log.warning("refresh_runs: row not written: %s", e)
 
 
-def _restore_marks(conn):
-    """Put carried marks back (earliest wins); a mark leaves _carry only once written."""
-    for sid, (dfrom, dsince) in list(_carry.items()):
-        conn.execute(
-            "INSERT INTO ingest_state AS i (sensor_id, dirty_from, dirty_since, dirty_at) "
-            "VALUES (%s, %s, %s, now()) ON CONFLICT (sensor_id) DO UPDATE SET "
-            "dirty_from = least(i.dirty_from, EXCLUDED.dirty_from), "
-            "dirty_since = coalesce(least(i.dirty_since, EXCLUDED.dirty_since), EXCLUDED.dirty_since)",
-            (sid, dfrom, dsince), prepare=False)
-        del _carry[sid]
+def restore_taken(conn):
+    """Marks a refresh took and did not finish (ingest_state.taken_from, schema
+    21) go back into dirty_from - the earliest wins. Returns how many."""
+    rows = conn.execute(SQL_RESTORE_TAKEN, prepare=False).fetchall()
+    for r in rows:
+        log.warning("sensor_id=%s: the mark of a refresh that did not finish is back, from=%s", r["sensor_id"],
+                    r["dirty_from"].isoformat())
+    return len(rows)
 
 
 def close_expired(conn):
@@ -181,21 +197,14 @@ def round_once(conn, baseline_dates):
     baselines are not paced by the duty cycle)."""
     t0 = time.monotonic()
     close_expired(conn)
-    if _carry:
-        log.info("restoring %d dirty mark(s) of a failed refresh", len(_carry))
-        _restore_marks(conn)
+    restore_taken(conn)
     dirty = conn.execute(
         "SELECT i.sensor_id, s.name, i.dirty_from, i.dirty_at, i.dirty_since "
         "FROM ingest_state i JOIN sensors s ON s.id = i.sensor_id "
         "WHERE i.dirty_from IS NOT NULL ORDER BY i.sensor_id", prepare=False).fetchall()
     for d in dirty:
         t, started = time.monotonic(), rs.utc_now()
-        taken = conn.execute(
-            "UPDATE ingest_state i SET dirty_from = NULL, dirty_since = NULL "
-            "FROM (SELECT sensor_id, dirty_from, dirty_since FROM ingest_state "
-            "      WHERE sensor_id = %s AND dirty_from IS NOT NULL FOR UPDATE) o "
-            "WHERE i.sensor_id = o.sensor_id RETURNING o.dirty_from, o.dirty_since",
-            (d["sensor_id"],), prepare=False).fetchone()
+        taken = conn.execute(SQL_TAKE_MARK, (d["sensor_id"],), prepare=False).fetchone()
         if taken is None:
             continue
         try:
@@ -204,18 +213,14 @@ def round_once(conn, baseline_dates):
         except psycopg.Error as e:
             record(conn, "rollups", started, time.monotonic() - t, d["sensor_id"], ok=False,
                    refresh_from=taken["dirty_from"], error=str(e)[:500])
-            old = _carry.get(d["sensor_id"])
-            dfrom, dsince = taken["dirty_from"], taken["dirty_since"]
-            if old is not None:
-                dfrom = min(dfrom, old[0])
-                dsince = min(x for x in (dsince, old[1]) if x is not None) if (dsince or old[1]) else None
-            _carry[d["sensor_id"]] = (dfrom, dsince)
             if not conn.closed:
                 try:
-                    _restore_marks(conn)
+                    restore_taken(conn)
                 except psycopg.Error:
-                    pass        # stays in _carry for the next round
+                    pass        # stays in taken_from for the next round
             raise
+        # only now is the window done; if this statement is lost the next round refreshes it once more
+        conn.execute(SQL_MARK_DONE, (d["sensor_id"],), prepare=False)
         dur = time.monotonic() - t
         waited = (rs.utc_now() - taken["dirty_since"]).total_seconds() if taken["dirty_since"] else 0
         log.info("refresh_rollups sensor=%s from=%s s=%.2f ap_hours=%s sensor_hours=%s waited_s=%.0f",
