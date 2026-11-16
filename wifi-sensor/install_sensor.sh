@@ -61,6 +61,15 @@
 #   KISMET_HTTPD_PASS  Web UI password    only; keep credentials out of sensor.conf.
 #   INSTALL_DIR        Where the helper scripts go.  Default: /opt/wifi-sensor
 #   SENSOR_CONF        Config file path. Default: <script dir>/sensor.conf
+#   KISMET_VERSION     The Kismet release to install and keep (apt-mark hold).
+#                      Default: 2025-09-R1 - the code works around bugs of
+#                      exactly this release (hop stride, block_channels,
+#                      tracker_max_devices, set_channel on a running source).
+#                      Changing it is a dataset boundary (docs/findings.md 7).
+#   KISMET_DEB_DIR     Folder with the saved .deb files of KISMET_VERSION,
+#                      used when the Kismet repository no longer offers it
+#                      (it keeps only the newest release). Checked against
+#                      kismet/<version>-<codename>-<arch>.sha256 in this folder.
 #
 # Idempotent: every step inspects the current state and only changes what
 # differs, so the script can be re-run at any time (e.g. after swapping the
@@ -78,7 +87,7 @@ export DEBIAN_FRONTEND=noninteractive
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_VARS=(CAPTURE_IFACE CAPTURE_CHANNELS SENSOR_USER KISMET_LOG_DIR KISMET_LOG_TITLE
            KISMET_HTTPD_PORT KISMET_HTTPD_BIND KISMET_HTTPD_USER KISMET_HTTPD_PASS INSTALL_DIR
-           KISMET_LOG_KEEP_DAYS KISMET_LOG_MAX_MB KISMET_LOG_MIN_FREE_MB)
+           KISMET_LOG_KEEP_DAYS KISMET_LOG_MAX_MB KISMET_LOG_MIN_FREE_MB KISMET_VERSION KISMET_DEB_DIR)
 
 # Helper scripts (sensor/) and unit templates (systemd/) shipped in this repository.
 SENSOR_SRC_DIR="$SCRIPT_DIR/sensor"
@@ -87,6 +96,11 @@ WATCHDOG_UNIT="wifi-sensor-capture-watchdog"
 RETENTION_UNIT="wifi-sensor-kismet-log-retention"
 HOP_GUARD_UNIT="wifi-sensor-hop-guard"
 COLLECTOR_UNIT="wifi-sensor-collector"
+
+# sha256 lists of the saved Kismet packages, one per release, codename and
+# architecture (the .deb files themselves are kept outside the repository).
+KISMET_MANIFEST_DIR="$SCRIPT_DIR/kismet"
+KISMET_VERSION_DEFAULT="2025-09-R1"
 
 # Locations defined by the Kismet / Debian packaging (not sensor-specific).
 KISMET_KEY_URL="https://www.kismetwireless.net/repos/kismet-release.gpg.key"
@@ -501,16 +515,96 @@ helper_privileged() {
   [[ $caps == *cap_net_raw* || -u $KISMET_HELPER ]]
 }
 
+# The Kismet version is pinned (KISMET_VERSION). Its repository keeps only the
+# newest release, so a plain `apt-get install kismet` installs whatever is
+# newest - re-running this script used to upgrade Kismet silently. Now: the
+# pinned version from the repository while it is there, else from the saved
+# .deb files (KISMET_DEB_DIR, sha256-checked); never anything else; held.
+kismet_manifest() {
+  printf '%s/%s-%s-%s.sha256\n' "$KISMET_MANIFEST_DIR" "$KISMET_VERSION" "$CODENAME" "$(dpkg --print-architecture)"
+}
+
+# Package names of a manifest (lines "<sha256>  <package>_<version>_<arch>.deb").
+kismet_manifest_packages() {
+  awk 'NF == 2 {f = $2; sub(/^\*/, "", f); sub(/_.*/, "", f); print f}' "$1"
+}
+
+installed_kismet_version() {
+  dpkg-query -W -f='${db:Status-Abbrev} ${Version}\n' kismet-core 2>/dev/null | awk '$1 == "ii" {print $2}'
+}
+
+# True when the configured repositories offer every given package at KISMET_VERSION.
+repo_has_kismet_version() {
+  local p
+  for p in "$@"; do
+    apt-cache madison "$p" 2>/dev/null | awk -F'|' '{gsub(/[ \t]/, "", $2); print $2}' \
+      | grep -qxF -- "$KISMET_VERSION" || return 1
+  done
+}
+
+install_kismet_debs() {
+  local manifest=$1 dir f files=()
+  [[ -f $manifest ]] || die "no sha256 list for Kismet $KISMET_VERSION on $CODENAME/$(dpkg --print-architecture) ($manifest): the saved packages fit only the system they were built for"
+  [[ -d $KISMET_DEB_DIR ]] || die "KISMET_DEB_DIR is not a directory: $KISMET_DEB_DIR"
+  dir=$(cd "$KISMET_DEB_DIR" && pwd)
+  log "installing Kismet $KISMET_VERSION from $dir (sha256 checked against $manifest)"
+  (cd "$dir" && sha256sum --quiet -c "$manifest") || die "the packages in $dir do not match $manifest"
+  while read -r _ f; do
+    if [[ -n ${f:-} ]]; then files+=("$dir/${f#\*}"); fi
+  done <"$manifest"
+  apt-get install -y -q --allow-change-held-packages --allow-downgrades "${files[@]}"
+}
+
+# apt-mark hold every installed kismet* package that is not held yet
+# (`apt-get upgrade` would otherwise move them one by one).
+hold_kismet() {
+  local held p missing=()
+  held=$(apt-mark showhold)
+  while read -r p; do
+    if [[ -n $p ]] && ! grep -qxF -- "$p" <<<"$held"; then missing+=("$p"); fi
+  done < <(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 'kismet*' 2>/dev/null | awk '$1 == "ii" {print $2}')
+  if ((${#missing[@]})); then
+    apt-mark hold "${missing[@]}" >/dev/null
+    log "held (apt-mark hold): ${missing[*]}"
+  else
+    log "every Kismet package is held"
+  fi
+}
+
 install_kismet() {
-  step "Kismet packages"
+  step "Kismet packages ($KISMET_VERSION, pinned)"
   # Pre-answer the packaging question: install the capture helpers privileged
   # (group kismet + capabilities / setuid root) so the server itself can run
   # as an unprivileged member of the kismet group.
   debconf-set-selections <<<"kismet-common kismet-common/install-setuid boolean true"
-  if pkg_installed kismet; then
-    log "kismet already installed: $(dpkg-query -W -f='${Version}' kismet)"
+  local have manifest pkgs=()
+  have=$(installed_kismet_version)
+  manifest=$(kismet_manifest)
+  if [[ -f $manifest ]]; then
+    mapfile -t pkgs < <(kismet_manifest_packages "$manifest")
+  else
+    pkgs=(kismet kismet-core kismet-capture-linux-wifi)
   fi
-  apt-get install -y -q kismet
+  if [[ $have == "$KISMET_VERSION" ]]; then
+    log "kismet $have installed (the pinned version)"
+  else
+    if [[ -n $have ]]; then
+      warn "kismet $have is installed, KISMET_VERSION is $KISMET_VERSION: changing it -" \
+           "a dataset boundary, record it in docs/findings.md section 7"
+    fi
+    if repo_has_kismet_version "${pkgs[@]}"; then
+      apt-get install -y -q --allow-change-held-packages --allow-downgrades "${pkgs[@]/%/=$KISMET_VERSION}"
+    elif [[ -n ${KISMET_DEB_DIR:-} ]]; then
+      install_kismet_debs "$manifest"
+    else
+      die "Kismet $KISMET_VERSION is not in the repository any more (it keeps only the newest release):" \
+          "set KISMET_DEB_DIR to the folder with the saved .deb files (their sha256 list: $manifest)"
+    fi
+    [[ $(installed_kismet_version) == "$KISMET_VERSION" ]] \
+      || die "kismet-core is not at $KISMET_VERSION after the install (got '$(installed_kismet_version)')"
+    mark_changed
+  fi
+  hold_kismet
   if ! helper_privileged; then
     log "capture helper is not privileged - reconfiguring"
     dpkg-reconfigure -f noninteractive kismet-capture-linux-wifi
@@ -849,7 +943,13 @@ install_service() {
 
 verify_kismet() {
   step "Verifying Kismet"
-  local url="http://127.0.0.1:${KISMET_HTTPD_PORT}" curl_auth i up=0 sources
+  local url="http://127.0.0.1:${KISMET_HTTPD_PORT}" curl_auth i up=0 sources have
+  have=$(installed_kismet_version)
+  if [[ $have == "$KISMET_VERSION" ]] && apt-mark showhold | grep -qxF kismet-core; then
+    log "kismet-core $have, held"
+  else
+    warn "kismet-core is '$have' (pinned: $KISMET_VERSION), held: $(apt-mark showhold | grep -cx 'kismet.*') packages"
+  fi
   # Credentials go through curl's config on stdin, not the command line.
   curl_auth="user = \"${KISMET_HTTPD_USER}:${KISMET_HTTPD_PASS}\""
   # Kismet needs 10-30 s on a Pi 3 to load its databases before the UI answers.
@@ -1011,6 +1111,9 @@ main() {
   for v in KISMET_LOG_KEEP_DAYS KISMET_LOG_MAX_MB KISMET_LOG_MIN_FREE_MB; do
     [[ ${!v} =~ ^[0-9]+$ ]] || die "$v must be a non-negative integer (got '${!v}')"
   done
+
+  KISMET_VERSION="${KISMET_VERSION:-$KISMET_VERSION_DEFAULT}"
+  [[ $KISMET_VERSION =~ ^[0-9A-Za-z][0-9A-Za-z.+~-]*$ ]] || die "KISMET_VERSION is not a package version (got '$KISMET_VERSION')"
 
   CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
   [[ -n $CODENAME ]] || die "cannot determine the Debian codename from /etc/os-release"

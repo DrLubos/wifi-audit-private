@@ -46,3 +46,11 @@ CAPTURE_IFACE=wlan1
 
 # Where the helper scripts (kismet pre-start, capture watchdog, log retention) are installed.
 #INSTALL_DIR=/opt/wifi-sensor
+
+# The Kismet release to install and keep (apt-mark hold). Changing it is a
+# dataset boundary - note the date in docs/findings.md (kismet/README.md).
+#KISMET_VERSION=2025-09-R1
+
+# Folder with the saved .deb files of KISMET_VERSION, for when the Kismet
+# repository no longer offers it (sha256-checked against kismet/*.sha256).
+#KISMET_DEB_DIR=/home/pi/kismet-debs/2025-09-R1
