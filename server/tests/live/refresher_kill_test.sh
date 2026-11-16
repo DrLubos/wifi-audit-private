@@ -77,10 +77,10 @@ fi
 since=$(date -u +%FT%TZ)       # the box's clock, as the database's and the log's
 trap 'docker compose up -d refresher >/dev/null 2>&1 || true' EXIT
 trap 'exit 1' INT TERM
-docker compose kill refresher >/dev/null
+out=$(docker compose kill refresher 2>&1) || { echo "$out" >&2; echo "$me: the refresher could not be killed" >&2; exit 3; }
 say "sensor $sid: refresher killed while a refresh held the mark $mark"
 after=$(taken "$sid") || after=unreadable
-docker compose up -d refresher >/dev/null
+out=$(docker compose up -d refresher 2>&1) || { echo "$out" >&2; say "FAIL: the refresher did not start again - start it: docker compose up -d refresher"; exit 1; }
 say "refresher started again"
 if [ "$after" = unreadable ]; then
   say "FAIL: the mark could not be read after the kill"

@@ -1058,11 +1058,19 @@ sudo steps by the developer. Times UTC.
   of the hours 15:00 - 20:00. One round watched, 21:11:10 - 21:11:43:
   `dirty_from` 21:10:36 moved to `taken_from` while `refresh_rollups()` ran,
   an ingest set `dirty_from` 21:11:36 beside it, the finished refresh cleared
-  `taken_from` only. **Not tested live in this rollout:** a refresher killed
-  in the middle of a refresh - putting back a taken mark ran in the fixture
-  test (the refresher's own three statements, on the server) and in the unit
-  tests only. `tests/live/refresher_kill_test.sh --run` is that test (it
-  kills the refresher container once; the developer's to run).
+  `taken_from` only. **Tested live at 21:39:48**
+  (`tests/live/refresher_kill_test.sh --run`, PASS): the refresher container
+  was killed while a refresh held the mark 21:34:06; `taken_from` still held
+  it after the kill; the new process (start 21:40:33) logged `the mark of a
+  refresh that did not finish is back, from=2026-11-16T21:34:06+00:00`, and
+  its first rollups step (from 21:34:06, 170 s, ok) left `taken_from` empty;
+  39 polls 21:25 - 21:44, none failed, none missing. Postgres stayed up, so
+  the killed refresher's backend finished its statement - the test shows the
+  way of the mark, not a repaired loss. **The whole history, the same
+  evening** (21:34 - 21:38, read-only): 1,239 finished hours from 2026-09-15
+  14:00 to 2026-11-16 20:00, 9,135,292 observation rows = the sum of
+  `ap_rssi_hourly.n_obs`, no hour with a different row count or AP count - the
+  loss schema 21 prevents has left no trace in the hourly rollup.
 
 **Open (the developer's):** whether the external IP `34.42.184.97` is static
 (Console -> VPC network -> IP addresses; promote it if ephemeral - the
