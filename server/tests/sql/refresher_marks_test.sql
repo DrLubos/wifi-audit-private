@@ -27,7 +27,7 @@ DO $$
 BEGIN
   CREATE SCHEMA refresher_marks_test;
   PERFORM set_config('search_path', 'refresher_marks_test, public', true);
-  CREATE TABLE ingest_state (LIKE public.ingest_state INCLUDING DEFAULTS);
+  CREATE TABLE ingest_state (LIKE public.ingest_state INCLUDING ALL);    -- with its primary key: the ingest's ON CONFLICT
 END $$;
 
 CREATE FUNCTION refresher_marks_test.check_eq(p_what text, p_got text, p_want text) RETURNS void
