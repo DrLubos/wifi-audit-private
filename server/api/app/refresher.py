@@ -20,7 +20,16 @@ it inserted; ingest_merge()) instead of refreshing per request. Each round:
    round re-refreshed days of hours - found on the first live day.)
 2. refresh_contact_periods() for every sensor that ever uploaded
    ('unreachable' annotations from heartbeat gaps);
-3. once a night at 03:30 in the account's time zone, refresh_ap_baselines().
+3. the e-mail notifications (app/notify.py: a sensor without contact or
+   capture, a disk running low; off without NOTIFY_SMTP_HOST / NOTIFY_TO);
+4. once a night at 03:30 in the account's time zone, refresh_ap_baselines();
+5. once a night between 04:00 and 06:00 local time, the batch detectors
+   (REFRESH_DETECTORS, default deauth-flood,evil-twin; empty = off) over
+   the last DETECT_WINDOW_H (48) hours of each sensor, each its own
+   `python -m detection` process (server/detection/ is mounted at
+   /app/detection): idempotent re-runs that write only `detections` and
+   never touch an operator's label (detection/README.md). Since 2026-11-16;
+   before, the detectors ran only by hand.
 
 The next round starts no earlier than max(REFRESH_INTERVAL_S, 4 x the last
 round's duration) after this one started (refresh_schedule.next_delay(): at
@@ -39,12 +48,15 @@ its own transaction (refresh_rollups() takes its own per-sensor lock).
 import logging
 import os
 import signal
+import subprocess
 import sys
 import time
+from datetime import timedelta
 
 import psycopg
 from psycopg.rows import dict_row
 
+from . import notify
 from . import refresh_schedule as rs
 
 log = logging.getLogger("refresher")
@@ -52,11 +64,17 @@ log = logging.getLogger("refresher")
 INTERVAL_S = float(os.environ.get("REFRESH_INTERVAL_S", "60"))
 BASELINES = os.environ.get("REFRESH_BASELINES", "1").strip() not in ("0", "false", "no", "off")
 RETRY_S = 30
+DETECTORS = [d.strip() for d in os.environ.get("REFRESH_DETECTORS", "deauth-flood,evil-twin").split(",") if d.strip()]
+DETECT_WINDOW_H = float(os.environ.get("DETECT_WINDOW_H", "48"))
+DETECT_TIMEOUT_S = 1800
+DETECT_DIR = os.environ.get("DETECT_DIR", "/app")       # holds detection/ (the compose mount)
 
 _stop = False
 _carry = {}     # sensor_id -> (dirty_from, dirty_since) taken by a refresh that failed
 _recording = True
 _expiry = True  # discard_close_expired() exists (schema 20)
+
+_notifier = notify.Notifier(None)   # set up in main()
 
 _RUN_COLS = ("refresh_from", "waited_s", "ap_hours", "sensor_hours", "gaps", "baselines", "next_in_s", "error")
 
@@ -105,6 +123,45 @@ def close_expired(conn):
     for r in rows:
         log.info("discard mode ended (expiry) sensor=%s window=%s until=%s", r["sensor"], r["window_id"],
                  r["until"].isoformat())
+
+
+def run_detector(name, sensor, frm, to, timeout=DETECT_TIMEOUT_S):
+    """One detector as its own process; returns (ok, seconds, summary lines).
+    Only the detector's summary lines are logged (its table names APs)."""
+    cmd = [sys.executable, "-m", "detection", name, "--sensor", sensor,
+           "--from", frm.isoformat(), "--to", to.isoformat()]
+    t = time.monotonic()
+    try:
+        r = subprocess.run(cmd, cwd=DETECT_DIR, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, time.monotonic() - t, [str(e)[:300]]
+    lines = [ln.strip() for ln in (r.stdout + r.stderr).splitlines()
+             if ln.strip().startswith(("scanned", "peak RSS", "eligibility"))]
+    if r.returncode != 0:
+        lines.append((r.stderr.strip().splitlines() or ["exit %d" % r.returncode])[-1][:300])
+    return r.returncode == 0, time.monotonic() - t, lines
+
+
+def detect_nightly(conn, detect_dates):
+    """Step 5: the detectors once a night per sensor (refresh_schedule.detectors_due)."""
+    if not DETECTORS:
+        return
+    sensors = conn.execute(
+        "SELECT s.id, s.name, a.tz FROM sensors s JOIN accounts a ON a.id = s.account_id "
+        "JOIN sensor_summary ss ON ss.sensor_id = s.id ORDER BY s.id", prepare=False).fetchall()
+    for s in sensors:
+        due, day = rs.detectors_due(rs.utc_now(), s["tz"], detect_dates.get(s["id"]))
+        if not due:
+            continue
+        detect_dates[s["id"]] = day
+        to = rs.utc_now()
+        frm = to - timedelta(hours=DETECT_WINDOW_H)
+        for name in DETECTORS:
+            if _stop:
+                return
+            ok, dur, lines = run_detector(name, s["name"], frm, to)
+            log.info("detector %s sensor=%s window=%.0fh ok=%s s=%.1f %s", name, s["name"], DETECT_WINDOW_H,
+                     ok, dur, " | ".join(lines))
 
 
 def _on_signal(signum, frame):
@@ -172,6 +229,7 @@ def round_once(conn, baseline_dates):
         dur, gaps = time.monotonic() - t, sum(c["gaps"] for c in contact)
         log.info("refresh_contact_periods sensors=%d gaps=%d s=%.2f", len(contact), gaps, dur)
         record(conn, "contact_periods", started, dur, gaps=gaps)
+    _notifier.check(conn)
     took = time.monotonic() - t0
     if BASELINES:
         # the last run's local day from the table itself (computed_at), so a
@@ -200,14 +258,24 @@ def main():
                         format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout)
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
-    log.info("refresher start: interval=%ss duty factor=%s baselines=%s", INTERVAL_S, rs.DUTY_FACTOR, BASELINES)
-    conn, baseline_dates = None, {}
+    global _notifier
+    try:
+        cfg = notify.config()
+    except ValueError as e:
+        log.warning("%s - notifications off", e)
+        cfg = None
+    _notifier = notify.Notifier(cfg)
+    log.info("refresher start: interval=%ss duty factor=%s baselines=%s detectors=%s notify=%s", INTERVAL_S,
+             rs.DUTY_FACTOR, BASELINES, ",".join(DETECTORS) or "off",
+             "off" if cfg is None else "on (%d recipient(s))" % len(cfg["to"]))
+    conn, baseline_dates, detect_dates = None, {}, {}
     while not _stop:
         try:
             if conn is None or conn.closed:
                 conn = connect()
             started = rs.utc_now()
             took = round_once(conn, baseline_dates)
+            detect_nightly(conn, detect_dates)
             delay = rs.next_delay(INTERVAL_S, took)
             if took > INTERVAL_S / rs.DUTY_FACTOR:
                 log.info("round took %.1f s: next in %.0f s (duty-cycle cap)", took, delay)

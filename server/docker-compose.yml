@@ -98,12 +98,26 @@ services:
   # dirty, the contact periods, and the RSSI baselines nightly; the next round
   # waits max(REFRESH_INTERVAL_S, 4 x the last round) - at most a fifth of the
   # core. Built with the api (`docker compose build api`).
+  # Since 2026-11-16 also the e-mail notifications (app/notify.py; off without
+  # NOTIFY_SMTP_HOST and NOTIFY_TO) and the nightly batch detectors (04:00-06:00
+  # local, REFRESH_DETECTORS; empty = off) - detection/ is mounted for them.
   refresher:
     image: wifi-audit-api
     restart: unless-stopped
     environment:
       DATABASE_URL: "${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}}"
       REFRESH_INTERVAL_S: "${REFRESH_INTERVAL_S:-60}"
+      REFRESH_DETECTORS: "${REFRESH_DETECTORS-deauth-flood,evil-twin}"
+      NOTIFY_SMTP_HOST: "${NOTIFY_SMTP_HOST:-}"
+      NOTIFY_SMTP_PORT: "${NOTIFY_SMTP_PORT:-587}"
+      NOTIFY_SMTP_USER: "${NOTIFY_SMTP_USER:-}"
+      NOTIFY_SMTP_PASSWORD: "${NOTIFY_SMTP_PASSWORD:-}"
+      NOTIFY_FROM: "${NOTIFY_FROM:-}"
+      NOTIFY_TO: "${NOTIFY_TO:-}"
+      NOTIFY_OFFLINE_MIN: "${NOTIFY_OFFLINE_MIN:-15}"
+      NOTIFY_DISK_MIN_GB: "${NOTIFY_DISK_MIN_GB:-2}"
+    volumes:
+      - ./detection:/app/detection:ro
     entrypoint: ["python", "-m", "app.refresher"]
     depends_on:
       db:

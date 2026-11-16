@@ -170,5 +170,37 @@ class Recording(unittest.TestCase):
                                       "error": None}])
 
 
+class Detectors(unittest.TestCase):
+    """Step 5: each detector its own process; only its summary lines are logged."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        os.mkdir(os.path.join(self.tmp.name, "detection"))
+        with open(os.path.join(self.tmp.name, "detection", "__init__.py"), "w"):
+            pass
+        with open(os.path.join(self.tmp.name, "detection", "__main__.py"), "w") as f:
+            f.write("import sys\n"
+                    "name = sys.argv[1]\n"
+                    "print('%s  sensor %s  window ...' % (name, sys.argv[3]))\n"
+                    "print('  scanned a .. b: 3 APs')\n"
+                    "print('  1  b  SomeSSID  02:00:00:00:00:01  ...')\n"
+                    "sys.exit(2 if name == 'broken' else 0)\n")
+        self._dir, refresher.DETECT_DIR = refresher.DETECT_DIR, self.tmp.name
+
+    def tearDown(self):
+        refresher.DETECT_DIR = self._dir
+        self.tmp.cleanup()
+
+    def test_summary_lines_only(self):
+        ok, dur, lines = refresher.run_detector("evil-twin", "pi-fri", T1, T2)
+        self.assertTrue(ok)
+        self.assertEqual(lines, ["scanned a .. b: 3 APs"])           # no table row with an SSID / BSSID
+
+    def test_a_failing_detector_is_reported_not_raised(self):
+        ok, dur, lines = refresher.run_detector("broken", "pi-fri", T1, T2)
+        self.assertFalse(ok)
+
+
 if __name__ == "__main__":
     unittest.main()

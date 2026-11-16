@@ -12,6 +12,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 KEEP="${KEEP:-7}"
+
+# A failed run sends an e-mail (api/app/notify.py, through the api image; it
+# sends nothing while NOTIFY_SMTP_HOST / NOTIFY_TO are empty in .env).
+notify_failure() {
+  local rc=$?
+  [[ $rc -eq 0 ]] && return 0
+  docker compose run --rm --no-deps -T --entrypoint python refresher -m app.notify \
+      --subject "nightly backup failed" \
+      --body "ops/backup_nightly.sh on $(hostname) exited with status $rc at $(date -u +%FT%TZ). The log: ~/backup-nightly.log." \
+      </dev/null >/dev/null 2>&1 || echo "backup_nightly: the failure mail was not sent either" >&2
+  return 0
+}
+trap notify_failure EXIT
 exec 9>"${TMPDIR:-/tmp}/wifi-audit-backup.lock"
 flock -n 9 || { echo "backup_nightly: another backup is running" >&2; exit 1; }
 
