@@ -76,7 +76,7 @@ section 6): the resume point never moved, so every restart met it again.
    hours older than `RETENTION_DAYS`, and the client data not seen for that
    long (since 2026-11-16, `store.prune_clients()`): client devices - never
    an AP - with their frequency histograms, `associations`, `client_bssids`,
-   `probes`; at most 10,000 rows a table per pass, so the first run's
+   `probes`; at most 5,000 rows a table per pass (~7-10 s on the Pi), so the first run's
    backlog (~370k devices) goes in slices, one after every poll.
 
 A failed poll (Kismet restarting, datasource error) is recorded in `polls`

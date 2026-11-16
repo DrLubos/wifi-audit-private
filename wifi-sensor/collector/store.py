@@ -122,7 +122,7 @@ SCHEMA_VERSION = 9
 # server schema.sql ap_evidence()): the client retention never deletes it.
 AP_EVIDENCE = "type = 'ap' OR ssid IS NOT NULL OR crypt IS NOT NULL OR adv_channel IS NOT NULL"
 # prune_clients(): rows per table per call (the first run had ~370k devices)
-CLIENT_PRUNE_LIMIT = 10000
+CLIENT_PRUNE_LIMIT = 5000      # a pass: 11-18 s at 10,000, 7-10 s at 5,000 on the Pi (2026-11-16)
 # The WAL file keeps its largest size for good unless it is limited: the fold
 # of nine days of pending AP load (2026-11-11) left 408 MB behind. SQLite
 # truncates it to this size whenever a checkpoint has emptied it.

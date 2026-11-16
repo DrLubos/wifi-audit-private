@@ -71,7 +71,7 @@ Status: Milestone 1 and Milestone 2 (collector) are DONE and deployed on the Pi.
 - **Client retention (2026-11-16):** the collector deletes the client data not
   seen for `RETENTION_DAYS` (14): client devices (never an AP) with their
   frequency histograms, `associations`, `client_bssids`, `probes`
-  (`store.prune_clients()`, at most 10,000 rows a table per pass). Until then
+  (`store.prune_clients()`, at most 5,000 rows a table per pass). Until then
   they were kept for the life of the sensor; everything up to the change was
   copied to the server first (a snapshot import with `--with-client-tables`).
   None of it is uploaded. A dated dataset change (findings section 7).
