@@ -4,10 +4,14 @@
   what server schema 6 changed, before/after measurements (thesis material).
 - `live-upload.md` - the live upload from the sensor (design, decisions, rollout record).
 - `config-delivery.md` - delivery of the desired capture configuration to the
-  sensor: **design only** (2026-10-24), decisions C1-C13 open.
+  sensor (schema 18): design, the staged tests, on since 2026-10-25.
 - `discard-mode.md` - discard mode (schema 20): a per-sensor window whose
   uploads are accepted and not stored, excluded from loss, outages and
   coverage; how to turn it on and off, what is excluded where, the limits.
+- `postgres-crashes.md` - the db container's crash-restarts: investigation,
+  the cause (an orphaned health probe adopted by PID 1) and the fix of 2026-11-14.
+- `disk-retention.md` - disk and raw-data retention on the box: the numbers of
+  2026-11-16, the options and the decision due before ~February 2027.
 
 Generated evaluation output and its inputs. This directory is the writable mount
 of the `evaluate` compose service (`../evaluation/`).

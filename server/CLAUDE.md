@@ -7,7 +7,7 @@ shape the sensor produces. Do not modify anything under ../wifi-sensor/ from her
 
 ## What this is
 
-The backend that receives, stores and (later) analyses data from the fixed passive
+The backend that receives, stores and analyses data from the fixed passive
 Wi-Fi sensor. Part of the wifi-audit monorepo. It is the "more than a dumb store"
 layer: it keeps the sensor's time series, learns each AP's baseline, and surfaces
 detections and a dashboard for the thesis demo/defense.
@@ -21,24 +21,29 @@ detections and a dashboard for the thesis demo/defense.
   from a local machine.
 - Runs as a **docker-compose stack**, one container per tier, modelled on the
   developer's VehicleLocalization layout.
-- Deplyment server is available via `ssh google` it is google instance.
+- The deployment server is a Google Compute Engine instance, reachable as `ssh google`.
 
 ## Containers (this is the target architecture)
 
-Three services for now (the set the developer asked for):
+The services:
 
 - **db** — `postgres:17` (plain Postgres, NOT PostGIS: this project has no
   coordinates; `location` is free text). `server/schema.sql` is mounted read-only
   into `/docker-entrypoint-initdb.d/` so it runs automatically on first init. A named
   volume holds the data. The DB port is NOT published to the host.
 - **api** — FastAPI (Python), one container serving both the sensor ingest endpoints
-  (`/api/ingest/*`, later) and the dashboard read endpoints (`/api/*`). Talks to db
+  (`/api/ingest/v1`, live since 2026-10-17) and the dashboard endpoints (`/api/v2`). Talks to db
   over the internal compose network. (VL split ingest and web into two FastAPI
   containers; keep it as ONE here unless auth cleanly separates them.)
 - **caddy + React (frontend tier)** — Caddy serves the built React `dist` directly
   and reverse-proxies `/api/*` to the api container; it also terminates TLS. This is
   the only container that publishes ports (80/443). "React + Caddy" = this one tier,
   so no separate static/apache container is needed.
+- **refresher** — the api image running `python -m app.refresher`: rollups after
+  ingest, contact periods, nightly baselines, the nightly detectors and the
+  e-mail notifications (below).
+- **detect**, **evaluate** — the api image behind the `tools` profile, never
+  started by `up`: `docker compose run --rm detect|evaluate ...`.
 
 Conventions for the stack:
 - Secrets (DB user/password/name, DATABASE_URL) come from a **gitignored `.env`** that
@@ -65,15 +70,15 @@ Conventions for the stack:
   `ops/sensor_token.sh` only. The box serves HTTPS as
   `34-42-184-97.sslip.io` (Let's Encrypt, HSTS) - the uploader depends on
   that name, so the external IP must not change.
-- Later still: detection. For the demo, at most ONE illustrative, honest detection
-  (unknown BSSID advertising a protected SSID, gated by an operator-approved
-  known-good whitelist). Rigorous detection + ROC vs staged attacks is thesis work
-  after the topic is approved — do not build it now.
-- **Prototype detectors exist in `server/detection/`** (batch, run on demand with
-  `docker compose run --rm detect <detector> --from .. --to ..`; never scheduled,
-  never part of ingest; read-only on every source table, writes only `detections`,
-  idempotent re-runs). One so far: `deauth-flood`. Read `detection/README.md`
-  before touching it. Hard-won fact: `observations.disconnects` (Kismet
+- **Batch detectors in `server/detection/`**: `deauth-flood`, `evil-twin` and the
+  read-only audit `fp-audit`. Since 2026-11-16 the refresher runs `deauth-flood`
+  and `evil-twin` every night (04:00-06:00 local, the last 48 h, each its own
+  process; `REFRESH_DETECTORS` in `.env`, empty = off); by hand with `docker
+  compose run --rm detect <detector> --from .. --to ..`. Never part of ingest;
+  read-only on every source table, writes only `detections`, idempotent
+  re-runs, never an operator's label. The evaluation against staged attacks
+  (ROC, RQ2, RQ3) is in `evaluation/`. Read `detection/README.md` before
+  touching it. Hard-won fact: `observations.disconnects` (Kismet
   `client_disconnects`) is NOT a cumulative counter but the size of the current
   burst (never > 11, resets to 1 after a pause and after every DEAUTHFLOOD alert),
   so never build on its deltas; only a change to a non-zero value carries
@@ -139,8 +144,8 @@ Conventions for the stack:
     (deduplicated like `associations`). Keying rule: **PRIMARY KEY (sensor_id,
     device_key, ts) INCLUDE (rssi, rssi_floor)** plus a **BRIN on ts** (rows are
     written in ts order); ts stays in the key, so TimescaleDB stays possible.
-    The pre-migration table is kept as `observations_v5` until the developer
-    drops it. Read-only check of the migration: `tests/sql/check_schema7.sql`.
+    The pre-migration table `observations_v5` is dropped; the 2026-10-03 dump
+    in `backups/keep/` is the only copy of some pre-v6 data. Read-only check of the migration: `tests/sql/check_schema7.sql`.
   - **AP queries must stay index-only scans** on the primary key
     `observations_pkey` (INCLUDE rssi, rssi_floor): a column outside the index
     makes every AP page read ~30k heap pages (7-9 s cold, measured 2026-09-28).
@@ -237,9 +242,26 @@ Conventions for the stack:
     off is the developer's: a write with the token (Claude never sends one).
   - **Backups:** `ops/backup_nightly.sh` runs `backup.sh` (KEEP 7) at 01:05 UTC
     from the box user's crontab (`ops/backup_cron.sh`) and writes
-    `<dump>.sha256` + `backups/LATEST`; the developer copies dumps off the box
-    by hand (`ops/fetch_backup.sh` on the Mac: newest dump to
-    `~/wifi-audit-backups/`, sha256 checked on both sides; README).
+    `<dump>.sha256` + `backups/LATEST`, and mails when it fails; the developer
+    copies dumps off the box by hand (`ops/fetch_backup.sh` on the Mac: newest
+    dump to `~/wifi-audit-backups/`, sha256 checked on both sides; README) -
+    not automated (the developer's decision, 2026-11-16). `ops/restore_check.sh`
+    restores a dump into the scratch database, compares it with the live one
+    and drops it (README "Restore test").
+  - **E-mail notifications (2026-11-16, `api/app/notify.py`):** the refresher
+    mails when a sensor has no contact or no capture for `NOTIFY_OFFLINE_MIN`
+    (15) minutes or a disk (box or sensor) has less than `NOTIFY_DISK_MIN_GB`
+    (2) free - one mail at the start, one at the end; the nightly backup mails
+    when it fails. SMTP settings are `NOTIFY_*` secrets in `.env` (the
+    developer's; off while empty). A message names the sensor, times and sizes
+    only - never an SSID or a MAC.
+  - **The sensor's Kismet release (2026-11-16):** uploader 1.5 reports the
+    installed version in the heartbeat (`kismet_version`, kept in
+    `sensor_status.heartbeat`, shown on the Sensors page); a change is a dated
+    `change` boundary in `sensor_annotations` (audited). The sensor pins it
+    (`../wifi-sensor/kismet/README.md`).
+  - **Disk:** the numbers and the retention decision due before ~February 2027
+    are in `docs/disk-retention.md`.
   - **Writes (phase 5):** every write endpoint needs `WRITE_TOKEN` (`.env`,
     passed by compose; empty = writes disabled) and runs in
     `deps.write_tx()` (audit_log rows, `accounts.write_version + 1`); the

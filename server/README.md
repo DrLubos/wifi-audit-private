@@ -1,22 +1,23 @@
 # wifi-audit server
 
-Backend of the passive Wi-Fi monitoring system: it will receive
-store-and-forward uploads from one or more `wifi-sensor` deployments, keep the
-long-term history that the sensors' 14-day buffers discard, and host the
-analysis and the dashboard. Everything runs on one small box as a
-docker-compose stack.
+Backend of the passive Wi-Fi monitoring system: it receives the live upload
+of one or more `wifi-sensor` deployments (every poll, since 2026-10-17), keeps
+the long-term history that the sensors' 14-day buffers discard, and hosts the
+detectors, the evaluation and the dashboard. Everything runs on one small box
+as a docker-compose stack.
 
 ## Status: live - the sensor uploads every poll, the dashboard reads it (since 2026-10-17)
 
 | Part | State |
 |---|---|
-| `schema.sql` | done - idempotent PostgreSQL schema: the collector's tables mirrored with a `sensor_id` on every row, plus `sensors`, `ap_baselines`, `detections`, `refresh_ap_baselines()` and the `ap_inventory` view. Schema 6: the dashboard read tables `ap_rssi_hourly`, `sensor_hourly`, `ap_summary`, `sensor_summary`, built by `refresh_rollups(sensor_id, from)` (the importer calls it), and `ap_config_changes` materialized. Schema 7 (`ops/migrate_schema7.sh`): `observations` slim and AP-only, keyed `(sensor_id, device_key, ts)` INCLUDE (rssi, rssi_floor) + BRIN on ts, `devices.cur_*`, `client_bssids`, `ap_baselines.band`. Schema 8 (`ops/migrate_schema8.sh`): `ap_load_hourly` (AP load per hour and advertised channel, from collector buffer v7 and the backfilled per-poll columns of buffers <= v5). Schema 9 (`ops/migrate_schema9.sh`): the dashboard v2 model - account, settings, networks, account-level APs, `detections` as the event table with operator statuses, security levels, sensor periods (`docs/dashboard-v2/`). Schema 10 (`ops/migrate_schema10.sh`): `devices.ever_ap` - an AP stays an AP when Kismet re-types it; Kismet events attributed to the account AP, old duplicates merged (`ops/merge_duplicate_events.sql`). Schemas 11-13 (`ops/migrate_schema13.sh`): a fixed reason with every event label (three outcomes), the adapter record per sensor, and the hand-entered `hardware_change` history entry that is a data boundary (RSSI baselines stay inside one hardware period; no antenna catalog). TimescaleDB-ready (ts in the key), not enabled. |
+| `schema.sql` | done - idempotent PostgreSQL schema: the collector's tables mirrored with a `sensor_id` on every row, plus `sensors`, `ap_baselines`, `detections`, `refresh_ap_baselines()` and the `ap_inventory` view. Schema 6: the dashboard read tables `ap_rssi_hourly`, `sensor_hourly`, `ap_summary`, `sensor_summary`, built by `refresh_rollups(sensor_id, from)` (the importer calls it), and `ap_config_changes` materialized. Schema 7 (`ops/migrate_schema7.sh`): `observations` slim and AP-only, keyed `(sensor_id, device_key, ts)` INCLUDE (rssi, rssi_floor) + BRIN on ts, `devices.cur_*`, `client_bssids`, `ap_baselines.band`. Schema 8 (`ops/migrate_schema8.sh`): `ap_load_hourly` (AP load per hour and advertised channel, from collector buffer v7 and the backfilled per-poll columns of buffers <= v5). Schema 9 (`ops/migrate_schema9.sh`): the dashboard v2 model - account, settings, networks, account-level APs, `detections` as the event table with operator statuses, security levels, sensor periods (`docs/dashboard-v2/`). Schema 10 (`ops/migrate_schema10.sh`): `devices.ever_ap` - an AP stays an AP when Kismet re-types it; Kismet events attributed to the account AP, old duplicates merged (`ops/merge_duplicate_events.sql`). Schemas 11-13 (`ops/migrate_schema13.sh`): a fixed reason with every event label (three outcomes), the adapter record per sensor, and the hand-entered `hardware_change` history entry that is a data boundary (RSSI baselines stay inside one hardware period; no antenna catalog). Schemas 14-20: the live upload (`ingest_merge()`, sensor tokens, the refresher's dirty marks, `sensor_status` / heartbeats, stall events), `refresh_runs`, `ap_config_changes` maintained incrementally, the label's cause, configuration delivery (`docs/config-delivery.md`) and discard mode (`docs/discard-mode.md`). TimescaleDB-ready (ts in the key), not enabled. |
 | `seed/` | done - `export_snapshot.py` (consistent copy of the Pi buffer) and `import_snapshot.py` (SQL + COPY stream piped into psql, idempotent merge). See `seed/README.md`. |
 | `docker-compose.yml`, `api/`, `frontend/` | done - the stack below |
 | dashboard | done - `/api/v2` (`api/app/v2/`, `docs/dashboard-v2/PLAN.md` section 7): the reads of Overview, Events, Networks, Access points (and the AP page with its RSSI, load and utilization), Spectrum, Sensors and Settings, all from the read tables (never raw observations, ETag from `sensor_summary.refreshed_at` and the account's write version, no client MAC in any response) and the writes behind the write token (event labels with a reason, the label export for RQ2, AP classification and note, networks, classification and detector settings, sensors, hardware changes; each audited); React pages for all of them. The first dashboard (`/api/overview`, `/aps`, `/alerts`, `/findings`, `/detections` and its pages) was removed in phase 5c. Measurements: `docs/performance.md` |
 | dashboard v2 frontend | done - `docs/dashboard-v2/PLAN.md` section 10: the shell (sidebar, top bar, filters in the URL) and the pages Overview `/`, Events `/events`, Networks `/networks`, Spectrum `/spectrum`, Access points `/aps` and `/aps/<bssid>`, Sensors `/sensors`, Settings `/settings`; writes behind the write token (unlocked once per tab). The first dashboard's pages were removed in phase 5c; `/detections` redirects to `/events`, `/legacy` to `/`, and `/aps/<Kismet device key>` links to the BSSID page. Logic tests (`frontend/src/**/*.test.js`) run with `node --test` in the image's build stage |
 | dashboard v2 API (read) | done, phase 3 of `docs/dashboard-v2/PLAN.md` - `/api/v2/...` (sensors, overview status and period, events feed with keyset cursors and event detail, networks + timeseries + clients heatmap, access points list / page / RSSI / load, spectrum + utilization, sensor coverage and outages, settings reads); period buckets in the account's time zone, weak ETag with the bucket epoch, no client MAC in any response (redacted, checked by `tests/perf/v2_smoke.py`). Code in `api/app/v2/`, its SQL in `api/app/v2/sql/*.sql` (run as is by `tests/perf/ep_v2.py`). The `/api/...` endpoints above stay until the frontend switch |
-| `detection/` | prototype - batch detectors run on demand over a time window, writing only `detections`; one detector so far, `deauth-flood` (Kismet DEAUTHFLOOD alerts + burst events of the polled `client_disconnects` counter, per-AP baseline, idempotent re-runs). See `detection/README.md` |
+| `detection/` | batch detectors over a time window, writing only `detections` (idempotent re-runs, an operator's label never touched): `deauth-flood` (Kismet DEAUTHFLOOD alerts + deauth/disassoc activity of the polled counters, per-AP baseline) and `evil-twin` (unknown BSSID with a protected SSID; RSSI deviation from the AP's baseline), plus the read-only `fp-audit`. Since 2026-11-16 the refresher runs `deauth-flood` and `evil-twin` every night over the last 48 h (04:00-06:00 local, `REFRESH_DETECTORS`); by hand: `docker compose run --rm detect ...`. See `detection/README.md` |
+| notifications, restore test | since 2026-11-16 - e-mails from the refresher (a sensor without contact or capture, a disk running low) and from the nightly backup when it fails (`api/app/notify.py`, `NOTIFY_*` in `.env`, off until filled); `ops/restore_check.sh` restores a dump into the scratch database, compares it with the live one and drops it |
 | live ingest | done, live since 2026-10-17 20:46:38 UTC (`docs/live-upload.md`, rollout record in its section 17): `/api/ingest/v1/batch` and `/heartbeat` with per-sensor tokens (`ops/sensor_token.sh`), `ingest_merge()` - the one merge of the live ingest and the snapshot import -, stall events, the `refresher` service; configuration delivery to the sensor (`docs/config-delivery.md`, schema 18) and discard mode (`docs/discard-mode.md`, schema 20) on top of it |
 
 ## Stack
@@ -139,7 +140,15 @@ sha256, and keeps the newest `KEEP` dumps (default 7).
 **Nightly on the box** (since 2026-10-25): `ops/backup_nightly.sh` at 01:05 UTC
 from the box user's crontab (`ops/backup_cron.sh install | remove | show`;
 log `~/backup-nightly.log`) runs `backup.sh` with KEEP 7 and writes
-`backups/<dump>.sha256` and `backups/LATEST`.
+`backups/<dump>.sha256` and `backups/LATEST`. A failed run sends an e-mail
+(`api/app/notify.py`; nothing while `NOTIFY_SMTP_HOST` / `NOTIFY_TO` are empty).
+
+**Restore test** (since 2026-11-16): `ops/restore_check.sh [backups/<dump>]`
+(default: `backups/LATEST`) checks the dump's sha256, restores it into
+`wifi_audit_scratch` (`ops/scratch_db.sh`, never the live database), compares
+the schema version and the row counts with the live database (as
+`claude_ro`) and drops the copy again; exit 0 = PASS. It needs ~1.5x the
+database size of free disk - run it after a refresher round.
 
 **Off the box, by hand** - from the Mac, copy the newest dump to
 `~/wifi-audit-backups/` with the sha256 checked on both sides:
