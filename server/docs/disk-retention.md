@@ -9,10 +9,10 @@ is the developer's; this file gives the numbers and a recommendation.
 | Item | Size | Note |
 |---|---|---|
 | Disk | 30.1 GB, **9.85 GB free** | 13.8 GB free on 2026-10-24: -3.95 GB in 23 days (~170 MB/day) |
-| Database (`pg_database_size`) | **2.78 GB** | 1.86 GB on 2026-10-24: **+40 MB/day** |
+| Database (`pg_database_size`) | **2.78 GB**, 2.94 GB after the client import below | 1.86 GB on 2026-10-24: **+40 MB/day** |
 | - `observations` | 2.15 GB | 9.08 M rows since 2026-09-15; ~149k rows/day (last 14 days) |
-| - `devices` | 147 MB | 222,866 rows, 221,355 of them clients (snapshot imports before D4) |
-| - client tables (`probes`, `client_bssids`, `associations`) | 90 MB | from the snapshot imports, the one of 2026-11-16 included |
+| - `devices` | 147 MB -> 198 MB | 222,866 rows (221,355 clients) -> 491,968 (490,453 clients): the Pi's whole client inventory, copied on 2026-11-16 before its client retention |
+| - client tables (`probes`, `client_bssids`, `associations`) | 90 MB -> 149 MB | probes 325k, client BSSIDs 267k, associations 31k (2026-09-15 .. 11-16), the same copy; no new client rows arrive (the live ingest takes none) |
 | - everything else | ~0.4 GB | rollups, load history, configuration history, polls, alerts, ... |
 | `server/backups/` | 1.1 GB | 7 dumps of ~143-150 MB (+~1 MB/day each) and `keep/` (104 MB) |
 | Container `twitch-drops-miner` (not this project) | **3.5 GB** writable layer | 990 MB image on 2026-10-17; most of the free space lost since 10-24 that is not the database |

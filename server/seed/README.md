@@ -41,6 +41,20 @@ a `git pull` - see the note in `../README.md`.)
 
 ## 3. Import
 
+> **Known hazard (found 2026-11-16): a snapshot of a sensor that ran on a
+> stale clock in a boot whose polls its retention has already pruned.** The
+> importer cannot place such rows: configuration-history rows whose poll is
+> gone go in at their raw (stale) time, and device `first_seen` values from
+> that boot widen the stored ones. The live upload had delivered them at
+> their true times, so the import of 2026-11-16 added 3,982 history copies
+> 6-8 h too early (boots of 2026-10-19..23) and moved 56 APs' `first_seen`
+> back. Repair: `ops/repair_stale_history.sql`, then
+> `ops/repair_first_seen.sql` (both dry runs by default), then
+> `refresh_rollups(sensor, '<first affected day>')`. Until the importer
+> skips rows of pruned polls and leaves such `first_seen` values out, import
+> only snapshots whose stale boots (`tests/sql/check_first_seen.sql`, 1.)
+> are still inside the snapshot, or check with that script right after.
+
 Copy the snapshot to the server box and pipe the stream into psql inside the
 `db` container (the DB port is not published; psql on the container's unix
 socket needs no password):
