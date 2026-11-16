@@ -40,6 +40,10 @@ design in `../../server/docs/live-upload.md` (sections 4, 5 and 8.3).
   again, at most 5,000 load rows a batch; the server keeps the row with
   more polls, so a second copy changes nothing. (A boot that never gets an
   NTP anchor keeps its pending load on the sensor: it is not uploaded.)
+- **The installed Kismet version** (uploader 1.5, `sensorinfo.kismet_version()`:
+  `kismet-core` from dpkg's status file, re-read when it changes) rides in
+  every heartbeat; the server records a change of it as a dated `change`
+  boundary (the version is pinned: `install_sensor.sh`, `KISMET_VERSION`).
 - **Only what the server keeps**: polls, AP devices, configuration history,
   AP observations, AP load, AP frequency histograms, alerts - never a client
   device, associations, client BSSIDs or probes.

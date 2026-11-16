@@ -1,7 +1,9 @@
 """What the heartbeat reports about the sensor (server/docs/live-upload.md 4.5):
 the capture adapter's identity from sysfs (USB VID:PID and MAC - the identity;
-driver, chipset, interface for display), disk, uptime. Nothing about any
-other device. Standard library only (tests/test_sensorinfo.py)."""
+driver, chipset, interface for display), the installed Kismet version
+(uploader 1.5: a version change is a dataset boundary on the server), disk,
+uptime. Nothing about any other device. Standard library only
+(tests/test_sensorinfo.py)."""
 
 import os
 
@@ -54,6 +56,51 @@ def disk_free(path="/"):
         return st.f_bavail * st.f_frsize
     except OSError:
         return None
+
+
+DPKG_STATUS = "/var/lib/dpkg/status"
+# The package of the Kismet server binary; `kismet` (the meta package) when
+# only that one is listed (all of them carry the same version).
+KISMET_PACKAGES = ("kismet-core", "kismet")
+_kismet_cache = {}
+
+
+def kismet_version(status_path=DPKG_STATUS):
+    """The installed Kismet version from dpkg's status file (e.g.
+    '2025-09-R1'), None when it is not installed or cannot be read. The file
+    is parsed again only when its mtime changes (the heartbeat asks every
+    poll). The installed package, not the running server: Kismet restarted
+    after an upgrade is what the version describes."""
+    try:
+        mtime = os.stat(status_path).st_mtime_ns
+    except OSError:
+        return None
+    hit = _kismet_cache.get(status_path)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    found = {}
+    try:
+        with open(status_path, encoding="utf-8", errors="replace") as f:
+            pkg = status = version = None
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    if pkg in KISMET_PACKAGES and status and status.endswith(" installed") and version:
+                        found[pkg] = version
+                    pkg = status = version = None
+                elif line.startswith("Package: "):
+                    pkg = line[9:].strip()
+                elif line.startswith("Status: "):
+                    status = line[8:].strip()
+                elif line.startswith("Version: "):
+                    version = line[9:].strip()
+            if pkg in KISMET_PACKAGES and status and status.endswith(" installed") and version:
+                found[pkg] = version
+    except OSError:
+        return None
+    v = next((found[p] for p in KISMET_PACKAGES if p in found), None)
+    _kismet_cache[status_path] = (mtime, v)
+    return v
 
 
 def buffer_bytes(db_path):

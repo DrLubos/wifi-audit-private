@@ -62,7 +62,7 @@ import sensorinfo  # noqa: E402
 import state as statemod  # noqa: E402
 from client import Client, Refused, describe_token  # noqa: E402
 
-VERSION = "1.4"
+VERSION = "1.5"
 log = logging.getLogger("uploader")
 
 DEFAULTS = {
@@ -223,6 +223,7 @@ class Uploader:
             "backlog_polls": nxt[0], "backlog_oldest_ts": nxt[1],
             "held_polls": batchmod.held_polls(db, self.boot), "unverified_polls": unverified,
             "disk_free_bytes": sensorinfo.disk_free(), "uploader_version": VERSION,
+            "kismet_version": sensorinfo.kismet_version(),
             "last_result": self.last_result, "adapter": sensorinfo.adapter(self.cfg["CAPTURE_IFACE"]),
             "config_state": configsync.config_state(self.accepting, self.config_state_dir, self.desired_path),
             "capabilities": self.capabilities_due(),
